@@ -6,9 +6,10 @@ import { t } from '../../../lib/i18n';
 
 const DOC_TYPES = [
   { value: 'prescription', label_en: 'Prescription', label_hi: 'प्रिस्क्रिप्शन', label_te: 'ప్రిస్క్రిప్షన్' },
-  { value: 'lab_report', label_en: 'Lab Report', label_hi: 'लैब रिपोर्ट', label_te: 'ల్యాబ్ రిపోర్ట్' },
+  { value: 'lab_report', label_en: 'Lab Report / Blood Report', label_hi: 'लैब / ब्लड रिपोर्ट', label_te: 'ల్యాబ్ / బ్లడ్ రిపోర్ట్' },
   { value: 'discharge_summary', label_en: 'Discharge Summary', label_hi: 'डिस्चार्ज समरी', label_te: 'డిశ్చార్జ్ సమ్మరీ' },
-  { value: 'diagnostic_report', label_en: 'ECG / Echo / X-ray', label_hi: 'ECG / Echo / X-ray', label_te: 'ECG / Echo / X-ray' },
+  { value: 'diagnostic_report', label_en: 'ECG / Echo / X-ray / CT / MRI', label_hi: 'ECG / Echo / X-ray / CT / MRI', label_te: 'ECG / Echo / X-ray / CT / MRI' },
+  { value: 'other', label_en: 'Other', label_hi: 'अन्य', label_te: 'ఇతర' },
 ];
 
 export default function Documents() {
@@ -18,6 +19,7 @@ export default function Documents() {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedType, setSelectedType] = useState('prescription');
+  const [skipWarning, setSkipWarning] = useState(false);
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
@@ -79,11 +81,10 @@ export default function Documents() {
 
         {/* Upload button */}
         <label className="btn btn-secondary" style={{ position: 'relative' }}>
-          {loading ? 'Processing...' : `📷 ${t('upload', lang)}`}
+          {loading ? 'Processing...' : `📎 ${t('upload', lang)}`}
           <input
             type="file"
-            accept="image/*"
-            capture="environment"
+            accept="image/*,application/pdf"
             onChange={handleUpload}
             disabled={loading}
             style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', top: 0, left: 0, cursor: 'pointer' }}
@@ -163,8 +164,19 @@ export default function Documents() {
         )}
 
         <div style={{ flex: 1 }} />
-        <button className="btn btn-primary" onClick={() => router.push('/patient/interview')}>
-          {docs.length > 0 ? t('next', lang) : t('skip', lang)}
+        {skipWarning && (
+          <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>
+            No documents uploaded. Click Next again to continue without uploading.
+          </p>
+        )}
+        <button className="btn btn-primary" onClick={() => {
+          if (docs.length === 0 && !skipWarning) { setSkipWarning(true); return; }
+          router.push('/patient/interview');
+        }}>
+          {t('next', lang)}
+        </button>
+        <button className="btn btn-outline" onClick={() => router.back()} style={{ fontSize: 13 }}>
+          ← Go Back
         </button>
       </div>
     </div>

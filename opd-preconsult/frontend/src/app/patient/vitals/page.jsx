@@ -103,6 +103,9 @@ export default function Vitals() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? 'Generating Report...' : t('submit', lang)}
         </button>
+        <button type="button" className="btn btn-outline" onClick={() => router.back()} disabled={loading} style={{ fontSize: 13 }}>
+          ← Go Back
+        </button>
       </form>
     </div>
   );

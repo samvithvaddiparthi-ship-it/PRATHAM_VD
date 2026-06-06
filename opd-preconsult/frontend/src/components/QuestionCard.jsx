@@ -1,19 +1,23 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import VoiceButton from './VoiceButton';
 import { api } from '../lib/api';
 
 // Questions that support contextual document uploads
 const UPLOAD_CONFIG = {
-  q_medications: { label: 'Upload Prescription', docType: 'prescription' },
-  q_gen_medications: { label: 'Upload Prescription', docType: 'prescription' },
   q_surgery_detail: { label: 'Upload Discharge Summary', docType: 'discharge_summary' },
 };
 
-export default function QuestionCard({ question, lang, onAnswer }) {
-  const [value, setValue] = useState('');
+export default function QuestionCard({ question, lang, onAnswer, initialValue = '' }) {
+  const [value, setValue] = useState(initialValue);
   const [uploading, setUploading] = useState(false);
   const [ocrResult, setOcrResult] = useState(null);
+  const [inputError, setInputError] = useState('');
+
+  useEffect(() => {
+    setValue(initialValue);
+    setInputError('');
+  }, [question?.id]);
 
   const text = question[`text_${lang}`] || question.text_en;
   const options = question.options_json || [];
@@ -22,7 +26,11 @@ export default function QuestionCard({ question, lang, onAnswer }) {
 
   function submit(val) {
     const answer = val || value;
-    if (!answer && question.required) return;
+    if (!answer && question.required) {
+      setInputError('Please enter your response before continuing.');
+      return;
+    }
+    setInputError('');
     onAnswer(answer);
     setValue('');
     setOcrResult(null);
@@ -157,9 +165,15 @@ export default function QuestionCard({ question, lang, onAnswer }) {
             </div>
           )}
 
-          <button className="btn btn-primary" onClick={() => submit()} disabled={!value}>
+          {/allerg|medication|drug|medicine/i.test(question.text_en) && (
+            <button className="btn btn-outline" style={{ width: '100%', fontSize: 13 }} onClick={() => submit('None')}>
+              {lang === 'hi' ? 'कोई नहीं' : lang === 'te' ? 'ఏదీ లేదు' : 'None'}
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => submit()}>
             {lang === 'hi' ? 'अगला' : lang === 'te' ? 'తదుపరి' : 'Next'}
           </button>
+          {inputError && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>{inputError}</p>}
         </div>
       )}
 

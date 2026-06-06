@@ -7,7 +7,13 @@ import { t } from '../../../lib/i18n';
 export default function Register() {
   const router = useRouter();
   const [lang, setLang] = useState('en');
-  const [form, setForm] = useState({ patient_name: '', patient_phone: '', patient_age: '', patient_gender: '' });
+  const [form, setForm] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('register_form');
+      if (saved) return JSON.parse(saved);
+    }
+    return { patient_name: '', patient_phone: '', patient_age: '', patient_gender: '' };
+  });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -18,18 +24,47 @@ export default function Register() {
     if (!token) router.push('/');
   }, []);
 
+  useEffect(() => {
+    sessionStorage.setItem('register_form', JSON.stringify(form));
+  }, [form]);
+
+  const [error, setError] = useState('');
+
   async function handleSubmit(e) {
     e.preventDefault();
+    setError('');
+
+    // Phone validation — must be 10 digits (Indian mobile number)
+    const phone = form.patient_phone.replace(/\s+/g, '');
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      setError('Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.');
+      return;
+    }
+
+    // Gender required
+    if (!form.patient_gender) {
+      setError('Please select a gender.');
+      return;
+    }
+
+    // Age cap
+    const age = form.patient_age ? parseInt(form.patient_age) : null;
+    if (age !== null && (age < 0 || age > 120)) {
+      setError('Age must be between 0 and 120.');
+      return;
+    }
+
     setLoading(true);
     try {
       await api.register({
         ...form,
-        patient_age: form.patient_age ? parseInt(form.patient_age) : null,
+        patient_phone: phone,
+        patient_age: age,
         language: lang,
       });
       router.push('/patient/consent');
     } catch (err) {
-      alert(err.message);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -54,7 +89,7 @@ export default function Register() {
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)}</label>
-            <input className="input" type="number" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
+            <input className="input" type="number" min="0" max="120" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
           </div>
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)}</label>
@@ -67,9 +102,13 @@ export default function Register() {
           </div>
         </div>
 
+        {error && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>{error}</p>}
         <div style={{ flex: 1 }} />
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? '...' : t('next', lang)}
+        </button>
+        <button type="button" className="btn btn-outline" onClick={() => router.back()} style={{ fontSize: 13 }}>
+          ← Go Back
         </button>
       </form>
     </div>

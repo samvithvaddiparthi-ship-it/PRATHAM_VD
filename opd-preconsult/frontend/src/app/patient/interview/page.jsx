@@ -10,6 +10,9 @@ export default function Interview() {
   const router = useRouter();
   const [lang, setLang] = useState('en');
   const [question, setQuestion] = useState(null);
+  const [history, setHistory] = useState([]);   // questions already seen (past)
+  const [future, setFuture] = useState([]);     // questions ahead (when navigating back)
+  const [answers, setAnswers] = useState({});   // saved answers keyed by question ID
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(true);
   const [triageAlert, setTriageAlert] = useState(null);
@@ -32,7 +35,11 @@ export default function Interview() {
       if (res.done) {
         setDone(true);
       } else {
-        setQuestion(res.question);
+        setQuestion(prev => {
+          if (prev) setHistory(h => [...h, prev]);
+          return res.question;
+        });
+        setFuture([]); // clear future when we get a fresh question from server
       }
     } catch (err) {
       console.error(err);
@@ -43,6 +50,21 @@ export default function Interview() {
 
   async function handleAnswer(answerRaw) {
     if (!question) return;
+
+    // Save the answer for this question
+    setAnswers(prev => ({ ...prev, [question.id]: answerRaw }));
+
+    // If we're navigating through already-answered questions (future exists),
+    // just move forward through the future stack — don't re-submit to server
+    if (future.length > 0) {
+      setHistory(h => [...h, question]);
+      const next = future[0];
+      setFuture(f => f.slice(1));
+      setQuestion(next);
+      return;
+    }
+
+    // Otherwise we're at the live question — submit to server
     setLoading(true);
     try {
       const result = await api.submitAnswer({
@@ -60,6 +82,20 @@ export default function Interview() {
     } catch (err) {
       console.error(err);
       setLoading(false);
+    }
+  }
+
+  function handleGoBack() {
+    if (history.length > 0) {
+      // Push current question to future so Next can navigate forward through it
+      setFuture(f => [question, ...f]);
+      const prev = history[history.length - 1];
+      setHistory(h => h.slice(0, -1));
+      setQuestion(prev);
+      setDone(false);
+    } else {
+      // No history — go back to documents page
+      router.back();
     }
   }
 
@@ -99,7 +135,10 @@ export default function Interview() {
         <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" />
       </div>
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
-      {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} />}
+      {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}
+      <button className="btn btn-outline" onClick={handleGoBack} style={{ fontSize: 13, marginTop: 12 }}>
+        ← Go Back
+      </button>
     </div>
   );
 }

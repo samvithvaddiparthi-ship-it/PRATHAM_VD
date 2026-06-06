@@ -32,6 +32,9 @@ export default function Consent() {
         <button className="btn btn-primary" onClick={handleConsent}>
           {t('consent_agree', lang)}
         </button>
+        <button className="btn btn-outline" onClick={() => router.back()} style={{ fontSize: 13 }}>
+          ← Go Back
+        </button>
       </div>
     </div>
   );

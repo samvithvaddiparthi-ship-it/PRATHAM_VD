@@ -14,6 +14,7 @@ export default function Done() {
     if (token) setToken(token);
     const sid = sessionStorage.getItem('session_id');
     if (sid) api.getSession(sid).then(setSession).catch(console.error);
+    sessionStorage.removeItem('register_form');
   }, []);
 
   return (

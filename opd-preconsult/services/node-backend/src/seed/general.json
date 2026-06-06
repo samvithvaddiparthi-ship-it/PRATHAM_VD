@@ -56,9 +56,9 @@
   {
     "id": "q_gen_allergies",
     "department": "GEN",
-    "text_en": "Any known drug allergies? If none, say none.",
-    "text_hi": "कोई ज्ञात दवा एलर्जी? अगर नहीं तो 'नहीं' कहें।",
-    "text_te": "ఏదైనా తెలిసిన మందు అలెర్జీలు? లేకపోతే 'లేదు' చెప్పండి.",
+    "text_en": "Any known drug allergies?",
+    "text_hi": "कोई ज्ञात दवा एलर्जी?",
+    "text_te": "ఏదైనా తెలిసిన మందు అలెర్జీలు?",
     "q_type": "FREE_TEXT",
     "next_default": "q_gen_done",
     "sort_order": 6
