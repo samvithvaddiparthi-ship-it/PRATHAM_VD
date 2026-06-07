@@ -50,27 +50,27 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
 def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str = "image/jpeg", max_tokens: int = 1500) -> str:
     """
     Send system prompt + image + text to a vision-capable model.
-    Priority: OpenAI GPT-4o → Gemini Vision → Anthropic Claude Vision
+    Priority: Gemini Vision (free) → OpenAI GPT-4o → Anthropic Claude Vision
     """
-    oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     gem_key = os.getenv("GEMINI_API_KEY", "").strip()
+    oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ant_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
-    # Try OpenAI first (most reliable, no free-tier quota issues)
-    if oai_key:
-        try:
-            return _openai_vision_complete(oai_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
-        except Exception as e:
-            logger.warning(f"OpenAI vision failed, trying Gemini: {e}")
-
-    # Try Gemini vision
+    # Try Gemini first (free tier)
     if gem_key:
         try:
             return _gemini_vision_complete(gem_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
         except Exception as e:
-            logger.warning(f"Gemini vision failed, trying Anthropic: {e}")
+            logger.warning(f"Gemini vision failed, trying OpenAI: {e}")
 
-    # Try Anthropic Claude vision
+    # Fall back to OpenAI GPT-4o
+    if oai_key:
+        try:
+            return _openai_vision_complete(oai_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
+        except Exception as e:
+            logger.warning(f"OpenAI vision failed, trying Anthropic: {e}")
+
+    # Fall back to Anthropic Claude vision
     if ant_key and ant_key != "your_key_here":
         try:
             return _anthropic_vision_complete(ant_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
@@ -82,21 +82,37 @@ def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, 
 
 # ── Text-only backends ────────────────────────────────────────────────────────
 
+def _gemini_config_kwargs(types_module, system_prompt: str, max_tokens: int, temperature: float) -> dict:
+    """
+    Build kwargs for GenerateContentConfig, disabling Gemini 2.5 'thinking' when
+    the installed SDK supports it. Thinking burns output tokens before the answer
+    is written; for structured extraction we don't need it, and disabling it is
+    faster, cheaper, and avoids truncating the JSON. Falls back gracefully on
+    older SDKs that don't support thinking_budget — the call still works.
+    """
+    kwargs = dict(
+        system_instruction=system_prompt,
+        max_output_tokens=max_tokens,
+        temperature=temperature,
+    )
+    try:
+        kwargs["thinking_config"] = types_module.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        pass  # SDK too old — leave thinking on; high max_tokens prevents truncation
+    return kwargs
+
+
 def _gemini_complete(api_key: str, system_prompt: str, user_content: str, max_tokens: int) -> str:
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     response = client.models.generate_content(
         model=model,
         contents=user_content,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=max_tokens,
-            temperature=0.3,
-        ),
+        config=types.GenerateContentConfig(**_gemini_config_kwargs(types, system_prompt, max_tokens, 0.3)),
     )
     return response.text or ""
 
@@ -163,7 +179,7 @@ def _gemini_vision_complete(api_key: str, system_prompt: str, user_text: str, im
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     response = client.models.generate_content(
         model=model,
@@ -171,11 +187,7 @@ def _gemini_vision_complete(api_key: str, system_prompt: str, user_text: str, im
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             types.Part.from_text(text=user_text),
         ],
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=max_tokens,
-            temperature=0.1,
-        ),
+        config=types.GenerateContentConfig(**_gemini_config_kwargs(types, system_prompt, max_tokens, 0.1)),
     )
     return response.text or ""
 

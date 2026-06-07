@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
-# Common Indian drug names for matching (expandable)
+# ── Regex fallback data (used only when no vision LLM is available) ───────────
+
 KNOWN_DRUGS = [
     "warfarin", "acenocoumarol", "rivaroxaban", "apixaban", "heparin",
     "metoprolol", "atenolol", "propranolol", "carvedilol", "bisoprolol",
@@ -36,13 +37,8 @@ KNOWN_DRUGS = [
     "montelukast", "salbutamol", "budesonide",
 ]
 
-# Dose patterns
-DOSE_PATTERN = re.compile(
-    r'(\d+(?:\.\d+)?)\s*(mg|mcg|µg|ml|iu|units?|gm?)\b',
-    re.IGNORECASE
-)
+DOSE_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(mg|mcg|µg|ml|iu|units?|gm?)\b', re.IGNORECASE)
 
-# Frequency patterns
 FREQ_PATTERNS = [
     (re.compile(r'\b(OD|o\.?d\.?|once\s+daily)\b', re.I), 'OD'),
     (re.compile(r'\b(BD|b\.?d\.?|BID|twice\s+daily)\b', re.I), 'BD'),
@@ -53,38 +49,98 @@ FREQ_PATTERNS = [
     (re.compile(r'\b(weekly)\b', re.I), 'Weekly'),
 ]
 
-# Lab test patterns
 LAB_PATTERNS = {
-    'PT_INR': re.compile(r'(?:PT[/-]?INR|INR)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
-    'HbA1c': re.compile(r'(?:HbA1c|A1C|glycated)\s*[:\-]?\s*(\d+\.?\d*)\s*%?', re.I),
-    'FBS': re.compile(r'(?:FBS|fasting\s+(?:blood\s+)?(?:sugar|glucose))\s*[:\-]?\s*(\d+\.?\d*)', re.I),
-    'creatinine': re.compile(r'(?:creatinine|creat)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
-    'hemoglobin': re.compile(r'(?:hemoglobin|haemoglobin|Hb|HGB)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
-    'WBC': re.compile(r'(?:WBC|white\s+blood|leucocyte)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
-    'platelet': re.compile(r'(?:platelet|PLT)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'PT_INR':      re.compile(r'(?:PT[/-]?INR|INR)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'HbA1c':       re.compile(r'(?:HbA1c|A1C|glycated)\s*[:\-]?\s*(\d+\.?\d*)\s*%?', re.I),
+    'FBS':         re.compile(r'(?:FBS|fasting\s+(?:blood\s+)?(?:sugar|glucose))\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'creatinine':  re.compile(r'(?:creatinine|creat)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'hemoglobin':  re.compile(r'(?:hemoglobin|haemoglobin|Hb|HGB)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'WBC':         re.compile(r'(?:WBC|white\s+blood|leucocyte)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
+    'platelet':    re.compile(r'(?:platelet|PLT)\s*[:\-]?\s*(\d+\.?\d*)', re.I),
 }
 
-# Normal reference ranges: (low, high) — values outside trigger is_abnormal
 REFERENCE_RANGES = {
-    'PT_INR': (0.8, 1.2),
-    'HbA1c': (4.0, 5.6),
-    'FBS': (70, 100),
+    'PT_INR':     (0.8, 1.2),
+    'HbA1c':      (4.0, 5.6),
+    'FBS':        (70, 100),
     'creatinine': (0.7, 1.3),
     'hemoglobin': (12.0, 17.5),
-    'WBC': (4.0, 11.0),
-    'platelet': (150, 400),
+    'WBC':        (4.0, 11.0),
+    'platelet':   (150, 400),
 }
 
+# ── Vision LLM prompt ─────────────────────────────────────────────────────────
+
+VISION_EXTRACTION_PROMPT = """You are a medical document extraction specialist for Indian hospitals.
+Carefully examine the medical document image and extract ALL information with high precision.
+
+First classify the document, then extract accordingly.
+
+Document types:
+- prescription: doctor's handwritten or printed Rx with medications
+- lab_report: pathology / blood test results with numerical values
+- discharge_summary: hospital discharge document with diagnosis and treatment
+- diagnostic_report: ECG, Echo, X-Ray, MRI, or similar imaging/cardiology report
+- unknown: cannot determine
+
+For PRESCRIPTION — extract EVERY medication including Indian brand names (Crocin, Dolo, Augmentin, Pan-D, Ecosprin, Atorfit, Telma, Stamlo, Metpure, Cardace, etc.):
+  name, generic name (if inferable), dose (e.g. 500mg), frequency (OD/BD/TDS/QID/HS/SOS), duration (e.g. 5 Days), route (oral/IV/topical/inhaled), instructions (before food / after food / with water).
+  Also capture: doctor name, date, diagnosis or chief complaint, investigations ordered (CBC, ECG, Echo, X-Ray, etc.).
+
+For LAB_REPORT — extract EVERY result row:
+  test name, exact numeric value, unit, reference range exactly as printed, abnormal flag (true if outside the printed range).
+  Also capture: lab name, report date, referring doctor name.
+
+For DISCHARGE_SUMMARY — extract:
+  primary diagnosis and all comorbidities, medications at discharge (same fields as prescription), key in-hospital investigation findings, follow-up date and instructions, any procedure or surgery performed.
+
+For DIAGNOSTIC_REPORT — extract:
+  report type (ECG/Echo/X-Ray/MRI/etc.), key findings with measurements, overall impression or conclusion.
+
+Handwriting rules:
+- Use medical context to resolve ambiguous characters: '1' vs 'l', '0' vs 'O', 'm' vs 'rn', 'cl' vs 'd'.
+- Do NOT skip partially legible entries — make your best medical interpretation and include them.
+- Indian prescription shorthand: T. = Tablet, Cap. = Capsule, Inj. = Injection, Syr. = Syrup, OD = once daily, BD = twice daily, TDS = three times daily, HS = at bedtime, SOS = as needed.
+
+Return ONLY a valid JSON object. No markdown fences, no explanation, nothing outside the JSON:
+{
+  "doc_type": "prescription|lab_report|discharge_summary|diagnostic_report|unknown",
+  "medications": [
+    {
+      "name": "brand or generic name as written",
+      "generic": "generic name if known, else null",
+      "dose": "e.g. 500mg or null",
+      "frequency": "OD|BD|TDS|QID|HS|SOS|Weekly or null",
+      "duration": "e.g. 5 Days or null",
+      "route": "oral|IV|topical|inhaled or null",
+      "instructions": "e.g. after food or null"
+    }
+  ],
+  "lab_values": [
+    {
+      "test": "test name",
+      "value": 7.2,
+      "unit": "unit string",
+      "reference_range": "as printed or null",
+      "is_abnormal": true
+    }
+  ],
+  "investigations_ordered": [],
+  "diagnosis": "diagnosis text or null",
+  "doctor_name": "name or null",
+  "lab_name": "lab or hospital name or null",
+  "report_date": "date string if visible or null",
+  "clinical_notes": "any other clinically relevant text not captured above or null"
+}"""
+
+
+# ── Image preprocessing ───────────────────────────────────────────────────────
 
 def preprocess_image(image: Image.Image) -> Image.Image:
-    """Enhance image for better OCR on phone-captured prescriptions."""
-    # Convert to grayscale
+    """Enhance image contrast and resolution for Tesseract on phone-captured docs."""
     img = image.convert('L')
-    # Increase contrast
     img = ImageEnhance.Contrast(img).enhance(2.0)
-    # Sharpen
     img = img.filter(ImageFilter.SHARPEN)
-    # Resize if too small
     w, h = img.size
     if w < 1000:
         scale = 1000 / w
@@ -92,50 +148,36 @@ def preprocess_image(image: Image.Image) -> Image.Image:
     return img
 
 
-def extract_medications(text: str) -> list:
-    """Extract medication names, doses, and frequencies from OCR text."""
-    medications = []
-    lines = text.split('\n')
+# ── Regex fallback helpers (no LLM) ──────────────────────────────────────────
 
-    for line in lines:
+def extract_medications(text: str) -> list:
+    medications = []
+    for line in text.split('\n'):
         line_lower = line.lower().strip()
         if not line_lower:
             continue
-
         for drug in KNOWN_DRUGS:
             if drug in line_lower:
                 med = {'name': drug.capitalize()}
-
-                # Look for dose in same line
                 dose_match = DOSE_PATTERN.search(line)
                 if dose_match:
                     med['dose'] = dose_match.group(0).strip()
-
-                # Look for frequency
                 for pattern, freq_label in FREQ_PATTERNS:
                     if pattern.search(line):
                         med['frequency'] = freq_label
                         break
-
-                # Avoid duplicates
                 if not any(m['name'].lower() == med['name'].lower() for m in medications):
                     medications.append(med)
-
     return medications
 
 
 def extract_lab_values(text: str) -> list:
-    """Extract lab test results from OCR text with abnormal flagging."""
     results = []
     for test_name, pattern in LAB_PATTERNS.items():
         match = pattern.search(text)
         if match:
             value = float(match.group(1))
-            entry = {
-                'test': test_name,
-                'value': value,
-                'raw_match': match.group(0),
-            }
+            entry = {'test': test_name, 'value': value, 'raw_match': match.group(0)}
             ref = REFERENCE_RANGES.get(test_name)
             if ref:
                 low, high = ref
@@ -146,7 +188,6 @@ def extract_lab_values(text: str) -> list:
 
 
 def classify_document(text: str) -> str:
-    """Classify document type from OCR text."""
     text_lower = text.lower()
     if any(w in text_lower for w in ['prescription', 'rx', 'tab ', 'cap ', 'inj ', 'syp ']):
         return 'prescription'
@@ -159,67 +200,52 @@ def classify_document(text: str) -> str:
     return 'unknown'
 
 
-LLM_EXTRACTION_SYSTEM_PROMPT = """You are a medical document extraction assistant for Indian hospitals.
-Given an image of a medical document and its OCR text, extract all structured information and return ONLY valid JSON.
+# ── Vision LLM extraction ─────────────────────────────────────────────────────
 
-Return this exact JSON structure with no extra text, no markdown, no code fences:
-{
-  "doc_type": "prescription|lab_report|discharge_summary|diagnostic_report|unknown",
-  "medications": [
-    {
-      "name": "drug brand or generic name",
-      "generic": "generic name if known",
-      "dose": "e.g. 500mg",
-      "frequency": "e.g. BD, TDS, OD",
-      "duration": "e.g. 5 Days",
-      "instructions": "e.g. after food"
-    }
-  ],
-  "lab_values": [
-    {
-      "test": "test name",
-      "value": 7.2,
-      "unit": "unit string",
-      "reference_range": "normal range string",
-      "is_abnormal": true
-    }
-  ],
-  "investigations_ordered": ["test1", "test2"],
-  "diagnosis": "diagnosis if present",
-  "doctor_name": "doctor name if present"
-}
-
-Rules:
-- Extract ALL medications visible — including brand names like Augmentin, Crocin, Dolo, Pan-D, etc.
-- For Indian brand names, include both brand and generic where known
-- Extract all lab values with their units and flag abnormals based on standard Indian reference ranges
-- Extract investigations ordered (e.g. CBC, ECG, X-Ray)
-- If a field has no data, use null for strings and [] for arrays
-- Return ONLY the JSON object, nothing else"""
+def _parse_llm_json(raw: str) -> Optional[dict]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        parts = raw.split("```", 2)
+        raw = parts[1] if len(parts) > 1 else raw
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip().rstrip("`").strip()
+    return json.loads(raw)
 
 
-def extract_with_gemini(image_bytes: bytes, mime_type: str, ocr_text: str) -> Optional[dict]:
-    """Use Gemini Vision to extract structured data from a medical document image."""
+def extract_with_vision(image_bytes: bytes, mime_type: str, ocr_text: str, ocr_confidence: float) -> Optional[dict]:
+    """
+    Send image (+ optional Tesseract hint) to the vision LLM.
+    Tesseract text is only included when confidence >= 0.4 (printed docs).
+    For handwriting (low confidence), the LLM reads the image directly.
+    """
     try:
-        user_text = f"OCR text extracted from this document (may have errors):\n\n{ocr_text}\n\nPlease extract all medical information from the image above."
-        raw = complete_with_image(LLM_EXTRACTION_SYSTEM_PROMPT, user_text, image_bytes, mime_type, max_tokens=1500)
+        if ocr_confidence >= 0.4 and ocr_text.strip():
+            user_text = (
+                f"OCR pre-scan of this document (may contain errors):\n\n{ocr_text}\n\n"
+                "Extract all medical information from the image. "
+                "Use the OCR text above as a hint only — trust the image where they disagree."
+            )
+        else:
+            user_text = (
+                "This appears to be a handwritten document. "
+                "Extract all medical information directly from the image."
+            )
 
-        # Strip any accidental markdown code fences
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip().rstrip("`").strip()
+        # gemini-2.5-flash spends output tokens on internal "thinking" before
+        # writing the answer; a generous ceiling ensures the JSON isn't truncated.
+        raw = complete_with_image(VISION_EXTRACTION_PROMPT, user_text, image_bytes, mime_type, max_tokens=8000)
+        return _parse_llm_json(raw)
 
-        return json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning(f"[ocr] Gemini returned non-JSON: {e}")
+        logger.warning(f"[ocr] Vision LLM returned non-JSON: {e}")
         return None
     except Exception as e:
-        logger.warning(f"[ocr] Gemini Vision extraction failed: {e}")
+        logger.warning(f"[ocr] Vision extraction failed: {e}")
         return None
 
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/process")
 async def process_document(
@@ -228,35 +254,33 @@ async def process_document(
     lang: Optional[str] = Form(default="eng"),
     doc_label: Optional[str] = Form(default=None),
 ):
-    """Process an uploaded document image or PDF with Tesseract OCR and store in DB."""
+    """Process an uploaded document image or PDF with AI vision + Tesseract fallback."""
     contents = await file.read()
 
-    # Handle PDF — convert first page to image
+    # PDF → first page image
     filename = (file.filename or "").lower()
     is_pdf = filename.endswith(".pdf") or (file.content_type or "").lower() == "application/pdf"
     if is_pdf:
         try:
-            import fitz  # PyMuPDF
+            import fitz
             pdf = fitz.open(stream=contents, filetype="pdf")
-            page = pdf[0]
-            mat = fitz.Matrix(2, 2)  # 2x zoom for better resolution
-            pix = page.get_pixmap(matrix=mat)
+            pix = pdf[0].get_pixmap(matrix=fitz.Matrix(2, 2))
             img_bytes = pix.tobytes("png")
             image = Image.open(io.BytesIO(img_bytes))
             mime_type = "image/png"
         except ImportError:
-            # PyMuPDF not installed — return error
-            return {"doc_id": None, "raw_text": "", "structured": {"doc_type": "unknown", "medications": [], "lab_values": [], "extraction_source": "error"}, "confidence": 0.0, "error": "PDF support not available"}
+            return {
+                "doc_id": None, "raw_text": "", "confidence": 0.0,
+                "structured": {"doc_type": "unknown", "medications": [], "lab_values": [], "extraction_source": "error"},
+                "error": "PDF support not available (PyMuPDF not installed)",
+            }
     else:
         image = Image.open(io.BytesIO(contents))
         fmt = (image.format or "JPEG").upper()
-        mime_map = {"JPEG": "image/jpeg", "JPG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
-        mime_type = mime_map.get(fmt, "image/jpeg")
+        mime_type = {"JPEG": "image/jpeg", "JPG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(fmt, "image/jpeg")
 
-    # Preprocess for Tesseract
+    # Tesseract — for confidence score and printed-doc hint
     processed = preprocess_image(image)
-
-    # OCR with Tesseract — use English + Hindi/Telugu based on lang param
     lang_map = {'en': 'eng', 'hi': 'eng+hin', 'te': 'eng+tel', 'eng': 'eng'}
     tess_lang = lang_map.get(lang, 'eng')
 
@@ -265,7 +289,6 @@ async def process_document(
     except Exception:
         raw_text = pytesseract.image_to_string(processed, lang='eng')
 
-    # Get Tesseract confidence
     try:
         data = pytesseract.image_to_data(processed, lang=tess_lang, output_type=pytesseract.Output.DICT)
         confidences = [int(c) for c in data['conf'] if int(c) > 0]
@@ -273,40 +296,40 @@ async def process_document(
     except Exception:
         avg_confidence = 0.5
 
-    # --- Gemini Vision extraction (primary) ---
+    # Vision LLM extraction (primary path)
     llm_result = None
-    extraction_source = "regex"
+    extraction_source = "regex_fallback"
+
     if has_vision():
-        llm_result = extract_with_gemini(contents, mime_type, raw_text)
+        llm_result = extract_with_vision(contents, mime_type, raw_text, avg_confidence)
         if llm_result:
-            extraction_source = "gemini_vision"
+            extraction_source = "vision_llm"
 
     if llm_result:
-        medications = llm_result.get("medications") or []
-        lab_values = llm_result.get("lab_values") or []
         doc_type = llm_result.get("doc_type") or classify_document(raw_text)
         structured = {
             "doc_type": doc_type,
-            "medications": medications,
-            "lab_values": lab_values,
+            "medications":            llm_result.get("medications") or [],
+            "lab_values":             llm_result.get("lab_values") or [],
             "investigations_ordered": llm_result.get("investigations_ordered") or [],
-            "diagnosis": llm_result.get("diagnosis"),
-            "doctor_name": llm_result.get("doctor_name"),
-            "extraction_source": extraction_source,
+            "diagnosis":              llm_result.get("diagnosis"),
+            "doctor_name":            llm_result.get("doctor_name"),
+            "lab_name":               llm_result.get("lab_name"),
+            "report_date":            llm_result.get("report_date"),
+            "clinical_notes":         llm_result.get("clinical_notes"),
+            "extraction_source":      extraction_source,
         }
     else:
-        # --- Regex fallback ---
-        medications = extract_medications(raw_text)
-        lab_values = extract_lab_values(raw_text)
+        # Regex fallback — no vision LLM configured
         doc_type = classify_document(raw_text)
         structured = {
-            "doc_type": doc_type,
-            "medications": medications,
-            "lab_values": lab_values,
+            "doc_type":          doc_type,
+            "medications":       extract_medications(raw_text),
+            "lab_values":        extract_lab_values(raw_text),
             "extraction_source": "regex_fallback",
         }
 
-    # Store in session_documents if session_id provided
+    # Persist to DB
     doc_id = None
     if session_id:
         rows = execute(
@@ -318,8 +341,8 @@ async def process_document(
             doc_id = str(rows[0]['id'])
 
     return {
-        'doc_id': doc_id,
-        'raw_text': raw_text.strip(),
+        'doc_id':     doc_id,
+        'raw_text':   raw_text.strip(),
         'structured': structured,
         'confidence': round(avg_confidence, 3),
     }
@@ -329,18 +352,14 @@ async def process_document(
 async def confirm_document(doc_id: str, body: dict = {}):
     """Patient confirms or rejects OCR output."""
     confirmed = body.get('confirmed', True)
-    execute(
-        "UPDATE session_documents SET patient_confirmed = %s WHERE id = %s",
-        (confirmed, doc_id),
-    )
+    execute("UPDATE session_documents SET patient_confirmed = %s WHERE id = %s", (confirmed, doc_id))
     return {'confirmed': confirmed}
 
 
 @router.get("/documents/{session_id}")
 async def get_documents(session_id: str):
     """Get all documents for a session."""
-    rows = query(
+    return query(
         "SELECT * FROM session_documents WHERE session_id = %s ORDER BY created_at",
         (session_id,),
     )
-    return rows

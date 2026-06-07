@@ -112,12 +112,25 @@ export default function Documents() {
                   {doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ Confirmed</span>}
                 </div>
 
+                {/* Warn when AI extraction was unavailable and we fell back to basic text scan */}
+                {doc.structured?.extraction_source === 'regex_fallback' && (
+                  <div style={{ background: '#FFF4E5', border: '1px solid #FFB74D', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+                    <p style={{ fontSize: 12, color: '#E65100', fontWeight: 600 }}>⚠ AI extraction unavailable</p>
+                    <p style={{ fontSize: 11, color: '#E65100' }}>
+                      Only a basic text scan was used — some medications or values may be missing or wrong. Please check carefully.
+                    </p>
+                  </div>
+                )}
+
                 {/* Medications */}
                 {doc.structured?.medications?.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
                     <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Medications:</p>
                     {doc.structured.medications.map((m, i) => (
-                      <p key={i} style={{ fontSize: 13, marginLeft: 8 }}>• {m.name} {m.dose || ''} {m.frequency || ''}</p>
+                      <p key={i} style={{ fontSize: 13, marginLeft: 8 }}>
+                        • {m.name}{m.dose ? ` ${m.dose}` : ''}{m.frequency ? ` · ${m.frequency}` : ''}{m.duration ? ` · ${m.duration}` : ''}
+                        {m.instructions ? <span style={{ color: 'var(--text-light)' }}> ({m.instructions})</span> : null}
+                      </p>
                     ))}
                   </div>
                 )}
@@ -127,7 +140,10 @@ export default function Documents() {
                   <div style={{ marginBottom: 8 }}>
                     <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Lab Results:</p>
                     {doc.structured.lab_values.map((l, i) => (
-                      <p key={i} style={{ fontSize: 13, marginLeft: 8 }}>• {l.test}: {l.value} {l.raw_match ? `(${l.raw_match})` : ''}</p>
+                      <p key={i} style={{ fontSize: 13, marginLeft: 8, color: l.is_abnormal ? 'var(--red)' : 'inherit' }}>
+                        • {l.test}: {l.value} {l.unit || ''}{l.is_abnormal ? ' ⚠' : ''}
+                        {l.reference_range ? <span style={{ fontSize: 11, color: 'var(--text-light)' }}> (ref: {l.reference_range})</span> : null}
+                      </p>
                     ))}
                   </div>
                 )}

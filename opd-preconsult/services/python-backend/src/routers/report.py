@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import uuid
 import traceback
@@ -195,7 +196,7 @@ def _fallback_report(session_json):
     if not any("🚨" in l or "⚠" in l for l in lines[1:]):
         lines.append("- Routine presentation, no critical flags")
 
-    lines.append(f"\n## Chief Complaint\n{answers.get('q_chief_complaint', 'Not recorded')}")
+    lines.append(f"\n## Chief Complaint & History\n{answers.get('q_chief_complaint', 'Not recorded')}")
     lines.append(f"\n## Vitals")
     if vitals:
         if bp_sys:
@@ -209,20 +210,35 @@ def _fallback_report(session_json):
     else:
         lines.append("- Not recorded")
 
-    # Medications: merge patient-reported + document-extracted
+    # Medications: document-extracted (grouped by source), patient-reported only if it adds info
     lines.append("\n## Current Medications")
     doc_meds = session_json.get("medications_from_documents", [])
     patient_meds = answers.get("q_medications", "")
     if doc_meds:
-        lines.append("**From uploaded documents:**")
+        # Group drugs by their source prescription so the date appears once per group
+        groups = {}
         for m in doc_meds:
-            line = f"- {m['name']}"
-            if m.get('dose'): line += f" {m['dose']}"
-            if m.get('frequency'): line += f" {m['frequency']}"
-            if m.get('source_date'): line += f" *(from {m.get('source_doc_type', 'document')} uploaded {m['source_date']})*"
-            lines.append(line)
+            key = (m.get('source_doc_type', 'document'), m.get('source_date', ''))
+            groups.setdefault(key, []).append(m)
+        for (src_type, src_date), meds in groups.items():
+            header = f"**From {src_type.replace('_', ' ')}"
+            if src_date: header += f" dated {src_date}"
+            header += ":**"
+            lines.append(header)
+            for m in meds:
+                line = f"- {m['name']}"
+                if m.get('dose'): line += f" {m['dose']}"
+                if m.get('frequency'): line += f" — {m['frequency']}"
+                if m.get('duration'): line += f", for {m['duration']}"
+                if m.get('instructions'): line += f" ({m['instructions']})"
+                lines.append(line)
+    # Only show patient-reported meds that are not already covered by the documents
     if patient_meds and patient_meds.lower() not in ('none', 'nil', 'no', ''):
-        lines.append(f"\n**Patient reported:** {patient_meds}")
+        doc_names = " ".join(m.get('name', '').lower() for m in doc_meds)
+        reported = [t.strip() for t in re.split(r'[,;\n]', patient_meds) if t.strip()]
+        new_terms = [t for t in reported if t.lower() not in doc_names]
+        if new_terms:
+            lines.append(f"\n**Patient also reported:** {', '.join(new_terms)}")
     elif not doc_meds:
         lines.append("Not recorded")
 
@@ -345,13 +361,20 @@ def _build_fhir_bundle(session, answers, vitals, doc_meds=None, doc_labs=None):
 
     # MedicationStatements from documents
     for med in (doc_meds or []):
+        dosage_parts = [
+            med.get("dose"),
+            med.get("frequency"),
+            f"for {med['duration']}" if med.get("duration") else None,
+            f"({med['instructions']})" if med.get("instructions") else None,
+        ]
+        dosage_text = " ".join(p for p in dosage_parts if p).strip()
         entries.append({
             "resource": {
                 "resourceType": "MedicationStatement",
                 "status": "active",
                 "medicationCodeableConcept": {"text": med.get("name", "")},
                 "subject": {"reference": f"Patient/{patient_id}"},
-                "dosage": [{"text": f"{med.get('dose', '')} {med.get('frequency', '')}".strip()}] if med.get("dose") else [],
+                "dosage": [{"text": dosage_text}] if dosage_text else [],
             }
         })
 

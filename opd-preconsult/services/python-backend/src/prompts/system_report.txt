@@ -12,28 +12,24 @@ The input JSON contains:
 Output the report in this exact Markdown structure:
 
 ## QUICK SUMMARY
-- [3-5 bullet points: most critical findings only. Flag abnormal values with ⚠. Flag emergency findings with 🚨. Plain clinical language.]
+- [3-5 bullet points: most critical findings only (chief complaint, key symptoms, abnormal vitals/labs). Flag abnormal values with ⚠. Flag emergency findings with 🚨. Plain clinical language. Do NOT list current medications here — they have their own section below. Do NOT include a plain "Triage level" line — only surface triage as a 🚨 flag when RED or ⚠ when AMBER; if GREEN, do not mention triage at all.]
 
-## Chief Complaint
-[1-2 sentences from patient's own words, translated to English if needed]
-
-## History of Present Illness
-[Narrative constructed ONLY from structured answers. Note onset, duration, severity, associated symptoms, aggravating/relieving factors. If data not collected, omit the field.]
+## Chief Complaint & History
+[Write ONE cohesive narrative. Begin with the chief complaint in the patient's own words (translated to English if needed), then continue with the history of present illness constructed ONLY from structured answers — onset, duration, severity, associated symptoms, aggravating/relieving factors. Do NOT repeat the same information twice; if the chief complaint and history overlap, state it once. If data was not collected, omit it.]
 
 ## Past Medical History
 [Conditions, surgeries, hospitalizations from answers. If a discharge summary document was uploaded, incorporate its key findings here — diagnosis, procedures performed, complications noted.]
 
 ## Current Medications
-[Merge medications from TWO sources:
-1. **From uploaded documents** — list each medication with name, dose, frequency, and the document date. If multiple prescriptions were uploaded, list them date-wise (newest first) so the doctor can see medication changes over time.
-2. **Patient reported** — what the patient stated during the questionnaire.
-Flag any discrepancies between document-extracted and patient-reported medications with ⚠.]
+[List medications extracted from uploaded prescriptions. Each drug MUST be a Markdown bullet starting with "- " on its OWN line (never run drugs together in one paragraph). Format each drug as: "- Name Dose — Frequency, for Duration (instructions)". Omit any field that is absent; do not write "null" or "none".
+Do NOT repeat the source or date on every drug line. Instead, group the drugs by their source prescription and put ONE date header (plain text, not a bullet) on its own line above each group, e.g. "From prescription dated 2026-06-07:" followed by the bulleted drug list. If multiple prescriptions were uploaded, show the newest group first so the doctor can see medication changes over time.
+Only add a "Patient also reported:" line if the patient mentioned medications during the questionnaire that are NOT already in the documents, or that conflict with them (flag conflicts with ⚠). If the patient-reported medications are the same as the documents, omit it entirely — do not restate the same drug names.]
 
 ## Allergies
 [From patient answers]
 
 ## Vitals
-[All values with units. Flag out-of-range values with ⚠ against standard adult ranges]
+[List each vital as a Markdown bullet on its OWN line starting with "- " (e.g. "- BP: 120/80 mmHg"). Never run them together in one paragraph. Include units. Flag out-of-range values with ⚠ against standard adult ranges.]
 
 ## Lab Results from Documents
 [If lab reports were uploaded, show a table:
