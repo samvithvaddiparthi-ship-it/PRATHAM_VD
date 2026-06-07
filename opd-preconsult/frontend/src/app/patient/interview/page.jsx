@@ -25,8 +25,30 @@ export default function Interview() {
     if (token) setToken(token);
     const sid = sessionStorage.getItem('session_id');
     setSessionId(sid);
-    if (sid) loadNext(sid);
+    if (sid) init(sid);
   }, []);
+
+  // Rebuild `history` and `answers` from the server's DAG-walk history
+  // before loading the current question. Without this, every remount (e.g.
+  // returning from the documents/vitals pages) starts with an empty in-memory
+  // history, so "Go Back" can only fall through to the browser's previous
+  // route instead of stepping back through previously-answered questions.
+  //
+  // We use /api/q/history (a structural DAG walk) rather than the raw
+  // /api/q/answers log — the raw log is ordered by created_at, which gets
+  // scrambled by rewind+resubmit cycles and was the source of the "random"
+  // page-interchanging bug. The walk always returns questions in actual
+  // path order, regardless of when each answer was (re)recorded.
+  async function init(sid) {
+    try {
+      const { history: pastEntries } = await api.getInterviewHistory(sid);
+      setHistory(pastEntries.map(e => e.question));
+      setAnswers(Object.fromEntries(pastEntries.map(e => [e.question.id, e.answer_raw])));
+    } catch (err) {
+      console.error('failed to rebuild interview history:', err);
+    }
+    await loadNext(sid);
+  }
 
   async function loadNext(sid) {
     setLoading(true);
@@ -51,20 +73,26 @@ export default function Interview() {
   async function handleAnswer(answerRaw) {
     if (!question) return;
 
+    // Detect whether the user actually modified the answer for this question
+    // (vs. just clicking Next to confirm what was already there). If they
+    // changed it, the DAG branch leaving this node may now differ — so the
+    // queued `future` stack (which holds the OLD branch's downstream
+    // questions) is stale and must be discarded; we re-ask the server for
+    // the next question along the NEW branch instead.
+    const prevAnswer = answers[question.id];
+    const answerChanged = prevAnswer !== undefined && prevAnswer !== answerRaw;
+
     // Save the answer for this question
     setAnswers(prev => ({ ...prev, [question.id]: answerRaw }));
 
-    // If we're navigating through already-answered questions (future exists),
-    // just move forward through the future stack — don't re-submit to server
-    if (future.length > 0) {
-      setHistory(h => [...h, question]);
-      const next = future[0];
-      setFuture(f => f.slice(1));
-      setQuestion(next);
-      return;
-    }
+    const usingFuture = future.length > 0 && !answerChanged;
+    if (answerChanged) setFuture([]);
 
-    // Otherwise we're at the live question — submit to server
+    // Always persist to the server — including when re-confirming an
+    // already-answered question via the future stack — so the server's
+    // permanent record stays in sync with what the user is shown. This
+    // matters because going back rewinds (deletes) the stored answer for
+    // the current question, and it must be re-saved if the user proceeds.
     setLoading(true);
     try {
       const result = await api.submitAnswer({
@@ -78,23 +106,73 @@ export default function Interview() {
         setTriageAlert('RED');
       }
 
-      await loadNext(sessionId);
+      if (usingFuture) {
+        setHistory(h => [...h, question]);
+        const next = future[0];
+        setFuture(f => f.slice(1));
+        setQuestion(next);
+        setLoading(false);
+      } else if (question.id === 'q_visit_type') {
+        // Documents are collected right after the "first visit or follow-up"
+        // question, then the rest of the health questions resume.
+        router.push('/patient/documents');
+      } else {
+        await loadNext(sessionId);
+      }
     } catch (err) {
       console.error(err);
       setLoading(false);
     }
   }
 
-  function handleGoBack() {
+  async function handleGoBack() {
+    // The Documents page is a client-side interstitial inserted right after
+    // q_visit_type — it's not a DAG node, so it does not appear in `history`.
+    // When the question we'd step back TO is q_visit_type, that means the
+    // documents step sits between here and there: navigate to /patient/documents
+    // instead of popping straight back to q_visit_type (which would visibly
+    // skip documents). Documents handles its own Go Back correctly from there.
+    // This is department-independent — it keys off q_visit_type, not the id of
+    // whichever question happens to follow documents in this department's DAG.
+    const prevQuestion = history[history.length - 1];
+    if (prevQuestion && prevQuestion.id === 'q_visit_type') {
+      router.push('/patient/documents');
+      return;
+    }
+
+    // The very first questionnaire question (q_visit_type) has no in-DAG
+    // predecessor — it's always preceded by the Consent page. Navigate there
+    // explicitly rather than via router.back(): the browser's previous URL is
+    // unreliable here (it's Consent on the fresh path, but Documents after a
+    // Documents→Go Back round-trip lands us back on q_visit_type).
+    if (question && question.id === 'q_visit_type') {
+      router.push('/patient/consent');
+      return;
+    }
+
     if (history.length > 0) {
+      const prev = history[history.length - 1];
+      setLoading(true);
+      try {
+        // Forget the server-side answer for the question we're returning to,
+        // so the DAG resume walk stops there instead of skipping past it.
+        // This MUST be awaited before we update local state/navigate — firing
+        // it without waiting let rapid repeated "Go Back" clicks race with
+        // re-submission, leaving the server's record out of sync with what
+        // was shown on screen (the "random page interchange" symptom).
+        await api.rewindAnswer(prev.id);
+      } catch (err) {
+        console.error('rewind failed:', err);
+      }
       // Push current question to future so Next can navigate forward through it
       setFuture(f => [question, ...f]);
-      const prev = history[history.length - 1];
       setHistory(h => h.slice(0, -1));
       setQuestion(prev);
       setDone(false);
+      setLoading(false);
     } else {
-      // No history — go back to documents page
+      // No in-DAG history — fall back to whichever screen led here
+      // (consent on first entry, or documents when re-asking q_visit_type)
       router.back();
     }
   }
@@ -132,7 +210,7 @@ export default function Interview() {
   return (
     <div className="screen">
       <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" />
+        <span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" /><span className="dot" />
       </div>
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}

@@ -107,7 +107,7 @@ export default function Register() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? '...' : t('next', lang)}
         </button>
-        <button type="button" className="btn btn-outline" onClick={() => router.back()} style={{ fontSize: 13 }}>
+        <button type="button" className="btn btn-outline" onClick={() => router.push('/')} style={{ fontSize: 13 }}>
           ← Go Back
         </button>
       </form>

@@ -28,8 +28,11 @@ export const api = {
 
   // Questionnaire
   nextQuestion: (sessionId) => apiFetch(`/api/q/next/${sessionId}`),
+  getQuestionnaireSchema: (department) => apiFetch(`/api/q/schema/${department}`),
   submitAnswer: (data) => apiFetch('/api/q/answer', { method: 'POST', body: JSON.stringify(data) }),
   getAnswers: (sessionId) => apiFetch(`/api/q/answers/${sessionId}`),
+  getInterviewHistory: (sessionId) => apiFetch(`/api/q/history/${sessionId}`),
+  rewindAnswer: (questionId) => apiFetch('/api/q/rewind', { method: 'POST', body: JSON.stringify({ question_id: questionId }) }),
 
   // Admin — Departments
   getDepartments: () => apiFetch('/api/admin/departments'),

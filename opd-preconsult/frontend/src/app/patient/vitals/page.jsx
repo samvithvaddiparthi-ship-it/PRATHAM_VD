@@ -103,7 +103,27 @@ export default function Vitals() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? 'Generating Report...' : t('submit', lang)}
         </button>
-        <button type="button" className="btn btn-outline" onClick={() => router.back()} disabled={loading} style={{ fontSize: 13 }}>
+        <button type="button" className="btn btn-outline" onClick={async () => {
+          // The interview is fully answered at this point, so simply
+          // navigating back to it would immediately redirect forward again
+          // (it auto-pushes to vitals once "done"). Forget the last question
+          // along the actual DAG path first so the questionnaire resumes
+          // there instead. We use the structural history walk (not the raw,
+          // created_at-ordered answer log) — that log's order can be scrambled
+          // by earlier rewind/resubmit cycles and would pick the wrong
+          // "last" question.
+          try {
+            const sessionId = sessionStorage.getItem('session_id');
+            const { history } = await api.getInterviewHistory(sessionId);
+            if (history.length > 0) {
+              const last = history[history.length - 1];
+              await api.rewindAnswer(last.question.id);
+            }
+          } catch (err) {
+            console.error('rewind failed:', err);
+          }
+          router.push('/patient/interview');
+        }} disabled={loading} style={{ fontSize: 13 }}>
           ← Go Back
         </button>
       </form>
