@@ -1,75 +1,92 @@
 [
-  {
-    "id": "q_visit_type",
-    "department": "GEN",
-    "text_en": "Is this your first visit or a follow-up?",
-    "text_hi": "क्या यह आपकी पहली विजिट है या फॉलो-अप?",
-    "text_te": "ఇది మీ మొదటి సందర్శన లేదా ఫాలో-అప్?",
-    "q_type": "SINGLE_SELECT",
-    "options_json": [
-      {"value": "first", "label_en": "First visit", "label_hi": "पहली विजिट", "label_te": "మొదటి సందర్శన"},
-      {"value": "followup", "label_en": "Follow-up", "label_hi": "फॉलो-अप", "label_te": "ఫాలో-అప్"}
-    ],
-    "next_default": "q_gen_chief_complaint",
-    "sort_order": 1
-  },
-  {
-    "id": "q_gen_chief_complaint",
-    "department": "GEN",
-    "text_en": "What is your main concern today?",
-    "text_hi": "आज आपकी मुख्य समस्या क्या है?",
-    "text_te": "ఈరోజు మీ ప్రధాన సమస్య ఏమిటి?",
-    "q_type": "FREE_TEXT",
-    "next_default": "q_gen_duration",
-    "sort_order": 2
-  },
-  {
-    "id": "q_gen_duration",
-    "department": "GEN",
-    "text_en": "How long have you had this problem?",
-    "text_hi": "यह समस्या कब से है?",
-    "text_te": "ఈ సమస్య ఎంత కాలంగా ఉంది?",
-    "q_type": "FREE_TEXT",
-    "next_default": "q_gen_fever",
-    "sort_order": 3
-  },
-  {
-    "id": "q_gen_fever",
-    "department": "GEN",
-    "text_en": "Do you have fever?",
-    "text_hi": "क्या आपको बुखार है?",
-    "text_te": "మీకు జ్వరం ఉందా?",
-    "q_type": "BOOLEAN",
-    "next_default": "q_gen_medications",
-    "sort_order": 4
-  },
-  {
-    "id": "q_gen_medications",
-    "department": "GEN",
-    "text_en": "List your current medicines (name and dose)",
-    "text_hi": "अपनी वर्तमान दवाइयाँ बताएं (नाम और खुराक)",
-    "text_te": "మీ ప్రస్తుత మందులను తెలపండి (పేరు మరియు మోతాదు)",
-    "q_type": "FREE_TEXT",
-    "next_default": "q_gen_allergies",
-    "sort_order": 5
-  },
-  {
-    "id": "q_gen_allergies",
-    "department": "GEN",
-    "text_en": "Any known drug allergies?",
-    "text_hi": "कोई ज्ञात दवा एलर्जी?",
-    "text_te": "ఏదైనా తెలిసిన మందు అలెర్జీలు?",
-    "q_type": "FREE_TEXT",
-    "next_default": "q_gen_done",
-    "sort_order": 6
-  },
-  {
-    "id": "q_gen_done",
-    "department": "GEN",
-    "text_en": "Thank you. Your responses have been recorded.",
-    "text_hi": "धन्यवाद। आपके जवाब दर्ज हो गए हैं।",
-    "text_te": "ధన్యవాదాలు. మీ సమాధానాలు నమోదు చేయబడ్డాయి.",
-    "q_type": "TERMINAL",
-    "sort_order": 99
-  }
+    {
+        "id": "q_gen_chief_complaint",
+        "department": "GEN",
+        "text_en": "What is your main concern today?",
+        "text_hi": "\u0906\u091c \u0906\u092a\u0915\u0940 \u092e\u0941\u0916\u094d\u092f \u0938\u092e\u0938\u094d\u092f\u093e \u0915\u094d\u092f\u093e \u0939\u0948?",
+        "text_te": "\u0c08\u0c30\u0c4b\u0c1c\u0c41 \u0c2e\u0c40 \u0c2a\u0c4d\u0c30\u0c27\u0c3e\u0c28 \u0c38\u0c2e\u0c38\u0c4d\u0c2f \u0c0f\u0c2e\u0c3f\u0c1f\u0c3f?",
+        "q_type": "FREE_TEXT",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": "q_gen_medications",
+        "next_rules": null,
+        "sort_order": 2
+    },
+    {
+        "id": "q_gen_duration",
+        "department": "GEN",
+        "text_en": "How long have you had this problem?",
+        "text_hi": "\u092f\u0939 \u0938\u092e\u0938\u094d\u092f\u093e \u0915\u092c \u0938\u0947 \u0939\u0948?",
+        "text_te": "\u0c08 \u0c38\u0c2e\u0c38\u0c4d\u0c2f \u0c0e\u0c02\u0c24 \u0c15\u0c3e\u0c32\u0c02\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f?",
+        "q_type": "FREE_TEXT",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": "q_gen_fever",
+        "next_rules": null,
+        "sort_order": 3
+    },
+    {
+        "id": "q_gen_fever",
+        "department": "GEN",
+        "text_en": "Do you have fever?",
+        "text_hi": "\u0915\u094d\u092f\u093e \u0906\u092a\u0915\u094b \u092c\u0941\u0916\u093e\u0930 \u0939\u0948?",
+        "text_te": "\u0c2e\u0c40\u0c15\u0c41 \u0c1c\u0c4d\u0c35\u0c30\u0c02 \u0c09\u0c02\u0c26\u0c3e?",
+        "q_type": "BOOLEAN",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": "q_gen_done",
+        "next_rules": null,
+        "sort_order": 4
+    },
+    {
+        "id": "q_gen_medications",
+        "department": "GEN",
+        "text_en": "List your current medicines (name and dose)",
+        "text_hi": "\u0905\u092a\u0928\u0940 \u0935\u0930\u094d\u0924\u092e\u093e\u0928 \u0926\u0935\u093e\u0907\u092f\u093e\u0901 \u092c\u0924\u093e\u090f\u0902 (\u0928\u093e\u092e \u0914\u0930 \u0916\u0941\u0930\u093e\u0915)",
+        "text_te": "\u0c2e\u0c40 \u0c2a\u0c4d\u0c30\u0c38\u0c4d\u0c24\u0c41\u0c24 \u0c2e\u0c02\u0c26\u0c41\u0c32\u0c28\u0c41 \u0c24\u0c46\u0c32\u0c2a\u0c02\u0c21\u0c3f (\u0c2a\u0c47\u0c30\u0c41 \u0c2e\u0c30\u0c3f\u0c2f\u0c41 \u0c2e\u0c4b\u0c24\u0c3e\u0c26\u0c41)",
+        "q_type": "FREE_TEXT",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": "q_gen_allergies",
+        "next_rules": null,
+        "sort_order": 5
+    },
+    {
+        "id": "q_gen_allergies",
+        "department": "GEN",
+        "text_en": "Any known drug allergies?",
+        "text_hi": "\u0915\u094b\u0908 \u091c\u094d\u091e\u093e\u0924 \u0926\u0935\u093e \u090f\u0932\u0930\u094d\u091c\u0940?",
+        "text_te": "\u0c0f\u0c26\u0c48\u0c28\u0c3e \u0c24\u0c46\u0c32\u0c3f\u0c38\u0c3f\u0c28 \u0c2e\u0c02\u0c26\u0c41 \u0c05\u0c32\u0c46\u0c30\u0c4d\u0c1c\u0c40\u0c32\u0c41?",
+        "q_type": "FREE_TEXT",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": "q_gen_duration",
+        "next_rules": null,
+        "sort_order": 6
+    },
+    {
+        "id": "q_gen_done",
+        "department": "GEN",
+        "text_en": "Thank you. Your responses have been recorded.",
+        "text_hi": "\u0927\u0928\u094d\u092f\u0935\u093e\u0926\u0964 \u0906\u092a\u0915\u0947 \u091c\u0935\u093e\u092c \u0926\u0930\u094d\u091c \u0939\u094b \u0917\u090f \u0939\u0948\u0902\u0964",
+        "text_te": "\u0c27\u0c28\u0c4d\u0c2f\u0c35\u0c3e\u0c26\u0c3e\u0c32\u0c41. \u0c2e\u0c40 \u0c38\u0c2e\u0c3e\u0c27\u0c3e\u0c28\u0c3e\u0c32\u0c41 \u0c28\u0c2e\u0c4b\u0c26\u0c41 \u0c1a\u0c47\u0c2f\u0c2c\u0c21\u0c4d\u0c21\u0c3e\u0c2f\u0c3f.",
+        "q_type": "TERMINAL",
+        "options_json": null,
+        "required": true,
+        "triage_flag": null,
+        "triage_answer": null,
+        "next_default": null,
+        "next_rules": null,
+        "sort_order": 99
+    }
 ]
