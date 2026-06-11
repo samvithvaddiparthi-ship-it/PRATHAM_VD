@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OCR Test Lab</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .sub { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: #1e293b; border-radius: 14px; padding: 20px; }
+    label.fld { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+    select, input[type=file] {
+      width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155;
+      background: #0f172a; color: #e2e8f0; font-size: 14px; margin-bottom: 14px;
+    }
+    button {
+      border: none; border-radius: 10px; padding: 13px 24px; font-size: 15px;
+      font-weight: 600; cursor: pointer; width: 100%; background: #2563eb; color: #fff;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .preview { width: 100%; border-radius: 8px; margin-bottom: 14px; border: 1px solid #334155; max-height: 360px; object-fit: contain; background: #0b1220; }
+    .status { margin: 14px 0 8px; font-size: 13px; color: #94a3b8; min-height: 18px; }
+    .meta { display: flex; gap: 16px; font-size: 12px; color: #64748b; margin-bottom: 12px; flex-wrap: wrap; }
+    .meta b { color: #cbd5e1; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 600; }
+    .abn { color: #f87171; font-weight: 600; }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; background: #334155; font-size: 12px; margin-bottom: 12px; }
+    pre { background: #0b1220; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 360px; }
+    h3 { font-size: 14px; color: #cbd5e1; margin: 4px 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>📄 OCR Test Lab</h1>
+    <div class="sub">Upload a printed prescription or lab report. Compare local VLM (Ollama) vs cloud Gemini — same prompt, structured JSON out.</div>
+
+    <div class="grid">
+      <!-- Left: input -->
+      <div class="card">
+        <label class="fld" for="engine">Engine</label>
+        <select id="engine"><option>Loading engines…</option></select>
+
+        <label class="fld" for="file">Document image</label>
+        <input type="file" id="file" accept="image/*" />
+
+        <img id="preview" class="preview" style="display:none;" alt="preview" />
+
+        <button id="extractBtn" disabled>Extract</button>
+        <div class="status" id="status">Pick an engine and choose an image.</div>
+      </div>
+
+      <!-- Right: results -->
+      <div class="card">
+        <div class="meta" id="meta" style="display:none;">
+          <span>Engine: <b id="mEngine">—</b></span>
+          <span>Model: <b id="mModel">—</b></span>
+          <span>Latency: <b id="mMs">—</b></span>
+        </div>
+        <div id="rendered"></div>
+        <h3 id="rawHeading" style="display:none;">Raw JSON</h3>
+        <pre id="raw" style="display:none;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const engineSel = document.getElementById('engine');
+    const fileInput = document.getElementById('file');
+    const preview = document.getElementById('preview');
+    const extractBtn = document.getElementById('extractBtn');
+    const statusEl = document.getElementById('status');
+    const metaEl = document.getElementById('meta');
+    const rendered = document.getElementById('rendered');
+    const rawEl = document.getElementById('raw');
+    const rawHeading = document.getElementById('rawHeading');
+
+    let selectedFile = null;
+
+    (async function loadEngines() {
+      try {
+        const { engines } = await (await fetch('/engines')).json();
+        engineSel.innerHTML = '';
+        engines.forEach(e => {
+          const opt = document.createElement('option');
+          opt.value = e.id;
+          opt.textContent = e.available ? e.label : e.label + ' (unavailable)';
+          opt.disabled = !e.available;
+          engineSel.appendChild(opt);
+        });
+        const firstAvail = engines.find(e => e.available);
+        if (firstAvail) engineSel.value = firstAvail.id;
+      } catch {
+        engineSel.innerHTML = '<option>Failed to load engines</option>';
+      }
+    })();
+
+    fileInput.addEventListener('change', e => {
+      selectedFile = e.target.files[0] || null;
+      if (selectedFile) {
+        preview.src = URL.createObjectURL(selectedFile);
+        preview.style.display = 'block';
+        extractBtn.disabled = false;
+        statusEl.textContent = 'Ready to extract.';
+      }
+    });
+
+    extractBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      const engine = engineSel.value;
+      extractBtn.disabled = true;
+      engineSel.disabled = true;
+      statusEl.textContent = 'Extracting with ' + engine + '… (first local run loads the model — can take a while)';
+      rendered.innerHTML = '';
+      rawEl.style.display = 'none';
+      rawHeading.style.display = 'none';
+      metaEl.style.display = 'none';
+
+      const form = new FormData();
+      form.append('file', selectedFile);
+      form.append('engine', engine);
+
+      try {
+        const res = await fetch('/extract', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+
+        document.getElementById('mEngine').textContent = data.engine;
+        document.getElementById('mModel').textContent = data.model;
+        document.getElementById('mMs').textContent = data.ms + ' ms';
+        metaEl.style.display = 'flex';
+
+        renderStructured(data.structured);
+        rawEl.textContent = data.raw || '(empty)';
+        rawEl.style.display = 'block';
+        rawHeading.style.display = 'block';
+        statusEl.textContent = 'Done.';
+      } catch (err) {
+        statusEl.textContent = 'Extraction failed: ' + err.message;
+      } finally {
+        extractBtn.disabled = false;
+        engineSel.disabled = false;
+      }
+    });
+
+    function esc(v) { return (v === null || v === undefined) ? '—' : String(v); }
+
+    function renderStructured(s) {
+      if (!s) { rendered.innerHTML = '<p style="color:#f87171">Model did not return valid JSON — see raw output below.</p>'; return; }
+      let html = '';
+      if (s.doc_type) html += `<span class="pill">${esc(s.doc_type)}</span>`;
+
+      if (Array.isArray(s.medications) && s.medications.length) {
+        html += '<h3>Medications</h3><table><tr><th>Name</th><th>Dose</th><th>Freq</th><th>Duration</th><th>Instructions</th></tr>';
+        s.medications.forEach(m => {
+          html += `<tr><td>${esc(m.name)}</td><td>${esc(m.dose)}</td><td>${esc(m.frequency)}</td><td>${esc(m.duration)}</td><td>${esc(m.instructions)}</td></tr>`;
+        });
+        html += '</table>';
+      }
+
+      if (Array.isArray(s.lab_values) && s.lab_values.length) {
+        html += '<h3>Lab values</h3><table><tr><th>Test</th><th>Value</th><th>Unit</th><th>Range</th><th>Flag</th></tr>';
+        s.lab_values.forEach(l => {
+          const flag = l.is_abnormal ? '<span class="abn">⚠ abnormal</span>' : 'normal';
+          html += `<tr><td>${esc(l.test)}</td><td>${esc(l.value)}</td><td>${esc(l.unit)}</td><td>${esc(l.reference_range)}</td><td>${flag}</td></tr>`;
+        });
+        html += '</table>';
+      }
+
+      const extras = [];
+      if (s.diagnosis) extras.push(['Diagnosis', s.diagnosis]);
+      if (s.doctor_name) extras.push(['Doctor', s.doctor_name]);
+      if (s.lab_name) extras.push(['Lab / Hospital', s.lab_name]);
+      if (s.report_date) extras.push(['Date', s.report_date]);
+      if (Array.isArray(s.investigations_ordered) && s.investigations_ordered.length)
+        extras.push(['Investigations', s.investigations_ordered.join(', ')]);
+      if (s.clinical_notes) extras.push(['Notes', s.clinical_notes]);
+      if (extras.length) {
+        html += '<h3>Other</h3><table>';
+        extras.forEach(([k, v]) => { html += `<tr><th>${k}</th><td>${esc(v)}</td></tr>`; });
+        html += '</table>';
+      }
+
+      rendered.innerHTML = html || '<p style="color:#94a3b8">No structured fields extracted.</p>';
+    }
+  </script>
+</body>
+</html>
