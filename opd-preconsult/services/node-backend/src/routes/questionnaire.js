@@ -57,20 +57,40 @@ router.get('/next/:session_id', authMiddleware, async (req, res) => {
   try {
     const { session_id } = req.params;
 
-    const sessResult = await pool.query('SELECT department FROM sessions WHERE id = $1', [session_id]);
+    const sessResult = await pool.query('SELECT department, patient_phone FROM sessions WHERE id = $1', [session_id]);
     if (!sessResult.rows.length) return res.status(404).json({ error: 'Session not found' });
-    const department = sessResult.rows[0].department;
+    const { department, patient_phone } = sessResult.rows[0];
 
-    const { path, current, total } = await walkDag(session_id, department);
+    let walk = await walkDag(session_id, department);
 
-    if (!current) {
+    // The "first visit or follow-up?" question (q_visit_type) is never shown to
+    // the patient — we resolve it automatically and authoritatively from their
+    // history: if this phone has ANY prior COMPLETED visit it's a follow-up,
+    // otherwise a first visit. Determining it here (server-side, from live data)
+    // rather than from a client flag avoids stale/cross-patient classification.
+    if (walk.current && walk.current.id === 'q_visit_type') {
+      const prior = await pool.query(
+        `SELECT 1 FROM sessions WHERE patient_phone = $1 AND id <> $2 AND state = 'COMPLETE' LIMIT 1`,
+        [patient_phone, session_id]
+      );
+      const answer = prior.rows.length ? 'followup' : 'first';
+      await pool.query(
+        `INSERT INTO session_answers (session_id, question_id, answer_raw, answer_structured, input_mode)
+         VALUES ($1, 'q_visit_type', $2, $3, 'auto')
+         ON CONFLICT DO NOTHING`,
+        [session_id, answer, JSON.stringify({ value: answer })]
+      );
+      walk = await walkDag(session_id, department);
+    }
+
+    if (!walk.current) {
       return res.json({ done: true, question: null });
     }
 
     res.json({
       done: false,
-      question: current,
-      progress: { answered: path.length, total }
+      question: walk.current,
+      progress: { answered: walk.path.length, total: walk.total }
     });
   } catch (err) {
     console.error('next question error:', err);

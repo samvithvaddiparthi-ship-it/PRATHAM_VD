@@ -16,7 +16,7 @@ export default function Consent() {
 
   async function handleConsent() {
     await api.consent();
-    router.push('/patient/interview');
+    router.push('/patient/documents');
   }
 
   return (

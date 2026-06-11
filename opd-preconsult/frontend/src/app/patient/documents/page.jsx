@@ -63,7 +63,7 @@ export default function Documents() {
   return (
     <div className="screen">
       <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" />
+        <span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" /><span className="dot" />
       </div>
       <div className="card" style={{ gap: 16 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('documents_title', lang)}</h2>
@@ -187,19 +187,12 @@ export default function Documents() {
         )}
         <button className="btn btn-primary" onClick={() => {
           if (docs.length === 0 && !skipWarning) { setSkipWarning(true); return; }
-          // Resume the health questionnaire — it picks up right after
-          // "Is this your first visit or a follow-up?" automatically.
+          // Continue to the health questionnaire.
           router.push('/patient/interview');
         }}>
           {t('next', lang)}
         </button>
-        <button className="btn btn-outline" onClick={async () => {
-          // Documents are inserted right after the "first visit" question, so
-          // going back means re-asking that question — forget its stored
-          // answer so the questionnaire re-displays it instead of skipping it.
-          try { await api.rewindAnswer('q_visit_type'); } catch (err) { console.error('rewind failed:', err); }
-          router.push('/patient/interview');
-        }} style={{ fontSize: 13 }}>
+        <button className="btn btn-outline" onClick={() => router.push('/patient/consent')} style={{ fontSize: 13 }}>
           ← Go Back
         </button>
       </div>

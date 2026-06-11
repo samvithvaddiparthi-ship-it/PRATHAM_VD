@@ -56,7 +56,37 @@ router.post('/register', authMiddleware, async (req, res) => {
     );
 
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
-    res.json(result.rows[0]);
+
+    // Look up this patient's prior visits (same phone number) so the UI can
+    // greet returning patients with their login history. We identify a patient
+    // by phone and count only COMPLETED visits (state = 'COMPLETE'), i.e. those
+    // where the patient finished the whole pre-consult and submitted — matching
+    // the rule that a visit only "counts" once submitted. The current session
+    // is excluded (it isn't complete yet anyway).
+    const history = await pool.query(
+      `SELECT created_at, department
+         FROM sessions
+        WHERE patient_phone = $1
+          AND id <> $2
+          AND state = 'COMPLETE'
+        ORDER BY created_at DESC
+        LIMIT 5`,
+      [patient_phone, session_id]
+    );
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS count
+         FROM sessions
+        WHERE patient_phone = $1
+          AND id <> $2
+          AND state = 'COMPLETE'`,
+      [patient_phone, session_id]
+    );
+
+    res.json({
+      ...result.rows[0],
+      previous_login_count: countResult.rows[0].count,
+      previous_logins: history.rows,
+    });
   } catch (err) {
     console.error('register error:', err);
     res.status(500).json({ error: 'Internal server error' });

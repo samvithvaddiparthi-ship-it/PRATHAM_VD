@@ -35,29 +35,38 @@ export default function Vitals() {
     }
   }, []);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  // Complete the pre-consult: save whatever vitals we have (possibly none),
+  // run triage, generate the report (which marks the session COMPLETE so it
+  // reaches the doctor's queue), then finish. Used by both "Submit" and
+  // "Skip vitals for now" — skipping just sends an empty vitals payload, so a
+  // nurse can record the values later without the patient waiting here.
+  async function finish(data) {
     setLoading(true);
     const sessionId = sessionStorage.getItem('session_id');
     try {
-      const data = {};
-      for (const [k, v] of Object.entries(form)) {
-        if (v) data[k] = parseFloat(v);
-      }
       await api.submitVitals(sessionId, data);
-
-      // Trigger triage evaluation
-      await api.evaluate(sessionId);
-
-      // Generate report
-      await api.generateReport(sessionId);
-
+      await api.evaluate(sessionId);        // triage evaluation
+      await api.generateReport(sessionId);  // also sets state = COMPLETE
       router.push('/patient/done');
     } catch (err) {
       alert(err.message);
-    } finally {
       setLoading(false);
     }
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    const data = {};
+    for (const [k, v] of Object.entries(form)) {
+      if (v) data[k] = parseFloat(v);
+    }
+    finish(data);
+  }
+
+  function handleSkip() {
+    // No vitals entered now — nurse records them later. Still completes the
+    // pre-consult so the patient isn't stuck waiting on this page.
+    finish({});
   }
 
   const fields = [
@@ -103,6 +112,12 @@ export default function Vitals() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? 'Generating Report...' : t('submit', lang)}
         </button>
+        <button type="button" className="btn btn-secondary" onClick={handleSkip} disabled={loading} style={{ fontSize: 14 }}>
+          Skip vitals for now
+        </button>
+        <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', margin: 0 }}>
+          A nurse can record your vitals later — you won't lose your place.
+        </p>
         <button type="button" className="btn btn-outline" onClick={async () => {
           // The interview is fully answered at this point, so simply
           // navigating back to it would immediately redirect forward again

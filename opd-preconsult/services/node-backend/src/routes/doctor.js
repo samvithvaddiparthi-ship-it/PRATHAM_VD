@@ -122,6 +122,7 @@ router.get('/queue', async (req, res) => {
        LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
        WHERE s.department = $1
          AND (s.assigned_doctor_id = $2 OR s.assigned_doctor_id IS NULL)
+         AND s.state = 'COMPLETE'
          AND s.created_at > NOW() - INTERVAL '24 hours'
        ORDER BY
          CASE s.triage_level WHEN 'RED' THEN 0 WHEN 'AMBER' THEN 1 ELSE 2 END,

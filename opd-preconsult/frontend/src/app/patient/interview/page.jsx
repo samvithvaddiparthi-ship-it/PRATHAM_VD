@@ -42,7 +42,10 @@ export default function Interview() {
   async function init(sid) {
     try {
       const { history: pastEntries } = await api.getInterviewHistory(sid);
-      setHistory(pastEntries.map(e => e.question));
+      // q_visit_type is auto-answered behind the scenes (the patient never sees
+      // that question), so keep it out of the visible Go Back history.
+      const visible = pastEntries.filter(e => e.question.id !== 'q_visit_type');
+      setHistory(visible.map(e => e.question));
       setAnswers(Object.fromEntries(pastEntries.map(e => [e.question.id, e.answer_raw])));
     } catch (err) {
       console.error('failed to rebuild interview history:', err);
@@ -57,8 +60,10 @@ export default function Interview() {
       if (res.done) {
         setDone(true);
       } else {
+        // q_visit_type is resolved server-side and never returned here, but keep
+        // the guard so it can never slip into the visible Go Back history.
         setQuestion(prev => {
-          if (prev) setHistory(h => [...h, prev]);
+          if (prev && prev.id !== 'q_visit_type') setHistory(h => [...h, prev]);
           return res.question;
         });
         setFuture([]); // clear future when we get a fresh question from server
@@ -112,10 +117,6 @@ export default function Interview() {
         setFuture(f => f.slice(1));
         setQuestion(next);
         setLoading(false);
-      } else if (question.id === 'q_visit_type') {
-        // Documents are collected right after the "first visit or follow-up"
-        // question, then the rest of the health questions resume.
-        router.push('/patient/documents');
       } else {
         await loadNext(sessionId);
       }
@@ -126,30 +127,6 @@ export default function Interview() {
   }
 
   async function handleGoBack() {
-    // The Documents page is a client-side interstitial inserted right after
-    // q_visit_type — it's not a DAG node, so it does not appear in `history`.
-    // When the question we'd step back TO is q_visit_type, that means the
-    // documents step sits between here and there: navigate to /patient/documents
-    // instead of popping straight back to q_visit_type (which would visibly
-    // skip documents). Documents handles its own Go Back correctly from there.
-    // This is department-independent — it keys off q_visit_type, not the id of
-    // whichever question happens to follow documents in this department's DAG.
-    const prevQuestion = history[history.length - 1];
-    if (prevQuestion && prevQuestion.id === 'q_visit_type') {
-      router.push('/patient/documents');
-      return;
-    }
-
-    // The very first questionnaire question (q_visit_type) has no in-DAG
-    // predecessor — it's always preceded by the Consent page. Navigate there
-    // explicitly rather than via router.back(): the browser's previous URL is
-    // unreliable here (it's Consent on the fresh path, but Documents after a
-    // Documents→Go Back round-trip lands us back on q_visit_type).
-    if (question && question.id === 'q_visit_type') {
-      router.push('/patient/consent');
-      return;
-    }
-
     if (history.length > 0) {
       const prev = history[history.length - 1];
       setLoading(true);
@@ -171,9 +148,9 @@ export default function Interview() {
       setDone(false);
       setLoading(false);
     } else {
-      // No in-DAG history — fall back to whichever screen led here
-      // (consent on first entry, or documents when re-asking q_visit_type)
-      router.back();
+      // No earlier real question — the page before the interview is Documents
+      // (flow: consent → documents → interview). Navigate there explicitly.
+      router.push('/patient/documents');
     }
   }
 
@@ -210,7 +187,7 @@ export default function Interview() {
   return (
     <div className="screen">
       <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" /><span className="dot" />
+        <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" />
       </div>
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}

@@ -15,13 +15,34 @@ export default function Register() {
     return { patient_name: '', patient_phone: '', patient_age: '', patient_gender: '' };
   });
   const [loading, setLoading] = useState(false);
+  // Login history shown to returning patients after they submit credentials.
+  const [welcomeBack, setWelcomeBack] = useState(null); // { count, logins: [{created_at, department}] }
 
   useEffect(() => {
     const saved = sessionStorage.getItem('lang') || 'en';
     setLang(saved);
     const token = sessionStorage.getItem('token');
     if (token) setToken(token);
-    if (!token) router.push('/');
+    if (!token) { router.push('/'); return; }
+
+    // Re-show the welcome-back card if we're returning to this page within the
+    // SAME session (e.g. Go Back from the consent page). We tie the saved card
+    // to the session_id so a different patient scanning a fresh QR never
+    // inherits a stale card from a previous patient.
+    const sid = sessionStorage.getItem('session_id');
+    const savedWb = sessionStorage.getItem('welcome_back');
+    if (savedWb && sid) {
+      try {
+        const parsed = JSON.parse(savedWb);
+        if (parsed.session_id === sid) {
+          setWelcomeBack({ count: parsed.count, logins: parsed.logins });
+        } else {
+          sessionStorage.removeItem('welcome_back');
+        }
+      } catch {
+        sessionStorage.removeItem('welcome_back');
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -56,18 +77,87 @@ export default function Register() {
 
     setLoading(true);
     try {
-      await api.register({
+      const res = await api.register({
         ...form,
         patient_phone: phone,
         patient_age: age,
         language: lang,
       });
-      router.push('/patient/consent');
+      // Show a welcome card for everyone after they submit credentials:
+      // "Welcome back" (with visit history) for returning patients, or a
+      // first-time greeting otherwise. Persist it (scoped to this session) so
+      // navigating back from consent re-shows it, and record whether the
+      // patient is returning so the interview can auto-resolve first/follow-up
+      // without ever showing the "first visit or follow-up?" question.
+      const wb = { count: (res && res.previous_login_count) || 0, logins: (res && res.previous_logins) || [] };
+      setWelcomeBack(wb);
+      sessionStorage.setItem('welcome_back', JSON.stringify({ session_id: sessionStorage.getItem('session_id'), ...wb }));
+      setLoading(false);
+      return;
     } catch (err) {
       setError(err.message);
-    } finally {
       setLoading(false);
     }
+  }
+
+  function formatVisit(ts) {
+    try {
+      return new Date(ts).toLocaleString(undefined, {
+        day: 'numeric', month: 'short', year: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+    } catch {
+      return ts;
+    }
+  }
+
+  if (welcomeBack) {
+    const isReturning = welcomeBack.count > 0;
+    const last = welcomeBack.logins[0];
+    return (
+      <div className="screen" style={{ justifyContent: 'center' }}>
+        <div className="card" style={{ gap: 18, textAlign: 'center' }}>
+          <div style={{ fontSize: 48 }}>{isReturning ? '👋' : '🎉'}</div>
+          <h2 style={{ color: 'var(--primary)' }}>
+            {isReturning ? `Welcome back, ${form.patient_name}!` : `Welcome, ${form.patient_name}!`}
+          </h2>
+          <p style={{ color: 'var(--text-light)', lineHeight: 1.5 }}>
+            {isReturning ? (
+              <>
+                We found <strong>{welcomeBack.count}</strong> previous {welcomeBack.count === 1 ? 'visit' : 'visits'} linked to this mobile number.
+                {last && <> Your last visit was on <strong>{formatVisit(last.created_at)}</strong>.</>}
+              </>
+            ) : (
+              <>This looks like your first visit with us — or a new mobile number. We'll guide you through a few quick steps to prepare your details for the doctor. <span style={{ display: 'block', marginTop: 8, fontSize: 13 }}>If you've visited before, please double-check your mobile number.</span></>
+            )}
+          </p>
+
+          {isReturning && welcomeBack.logins.length > 0 && (
+            <div style={{ background: '#F8F9FA', borderRadius: 12, padding: 14, textAlign: 'left' }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)', marginBottom: 8 }}>Recent visits</p>
+              {welcomeBack.logins.map((v, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0', borderTop: i ? '1px solid #ECECEC' : 'none' }}>
+                  <span>{formatVisit(v.created_at)}</span>
+                  <span style={{ color: 'var(--text-light)', textTransform: 'uppercase' }}>{v.department}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-primary" onClick={() => router.push('/patient/consent')}>
+            {t('next', lang)}
+          </button>
+          {/* Go Back just dismisses this card and returns to the credentials
+              form (same page, local state only) — no router navigation, so it
+              cannot reorder pages no matter how many times it's clicked. The
+              entered form data is preserved. */}
+          <button className="btn btn-outline" onClick={() => { setWelcomeBack(null); sessionStorage.removeItem('welcome_back'); }} style={{ fontSize: 13 }}>
+            ← Go Back
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
