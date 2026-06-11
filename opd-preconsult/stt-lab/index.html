@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STT Test Lab</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; margin: 0;
+      display: flex; min-height: 100vh; align-items: center; justify-content: center;
+    }
+    .card {
+      background: #1e293b; border-radius: 16px; padding: 32px;
+      width: 100%; max-width: 560px; box-shadow: 0 10px 40px rgba(0,0,0,.4);
+    }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .sub { color: #94a3b8; font-size: 13px; margin-bottom: 24px; }
+    label.fld { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+    select {
+      width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #334155;
+      background: #0f172a; color: #e2e8f0; font-size: 15px; margin-bottom: 18px;
+    }
+    button {
+      border: none; border-radius: 10px; padding: 14px 24px; font-size: 16px;
+      font-weight: 600; cursor: pointer; transition: .15s; width: 100%;
+    }
+    .rec { background: #2563eb; color: #fff; }
+    .rec:hover { background: #1d4ed8; }
+    .recording { background: #dc2626; color: #fff; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .65; } }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .status { margin: 18px 0 8px; font-size: 13px; color: #94a3b8; min-height: 18px; }
+    .result {
+      background: #0f172a; border: 1px solid #334155; border-radius: 10px;
+      padding: 16px; margin-top: 12px; min-height: 80px; font-size: 16px; line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .meta {
+      display: flex; gap: 16px; margin-top: 12px; font-size: 12px; color: #64748b;
+      flex-wrap: wrap;
+    }
+    .meta b { color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎤 STT Test Lab</h1>
+    <div class="sub">Pick an engine, record a clip, compare transcript quality &amp; latency.</div>
+
+    <label class="fld" for="engine">Engine</label>
+    <select id="engine"><option>Loading engines…</option></select>
+
+    <button id="recBtn" class="rec">● Start recording</button>
+
+    <div class="status" id="status">Ready.</div>
+
+    <div class="result" id="result">Your transcript will appear here.</div>
+
+    <div class="meta" id="meta" style="display:none;">
+      <span>Engine: <b id="mEngine">—</b></span>
+      <span>Detail: <b id="mDetail">—</b></span>
+      <span>Latency: <b id="mMs">—</b></span>
+    </div>
+  </div>
+
+  <script>
+    const engineSel = document.getElementById('engine');
+    const recBtn = document.getElementById('recBtn');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    const metaEl = document.getElementById('meta');
+
+    let mediaRecorder = null;
+    let chunks = [];
+    let recording = false;
+
+    // Populate the engine dropdown from the backend.
+    (async function loadEngines() {
+      try {
+        const res = await fetch('/engines');
+        const { engines } = await res.json();
+        engineSel.innerHTML = '';
+        engines.forEach(e => {
+          const opt = document.createElement('option');
+          opt.value = e.id;
+          opt.textContent = e.available ? e.label : e.label + ' (no key)';
+          opt.disabled = !e.available;
+          engineSel.appendChild(opt);
+        });
+        // Default to the first available engine.
+        const firstAvail = engines.find(e => e.available);
+        if (firstAvail) engineSel.value = firstAvail.id;
+      } catch (err) {
+        engineSel.innerHTML = '<option>Failed to load engines</option>';
+      }
+    })();
+
+    recBtn.addEventListener('click', async () => {
+      if (!recording) { await startRecording(); }
+      else { stopRecording(); }
+    });
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        chunks = [];
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = onStop;
+        mediaRecorder.start();
+        recording = true;
+        recBtn.textContent = '■ Stop recording';
+        recBtn.classList.remove('rec');
+        recBtn.classList.add('recording');
+        statusEl.textContent = 'Recording… speak now.';
+      } catch (err) {
+        statusEl.textContent = 'Microphone access denied or unavailable: ' + err.message;
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+      recording = false;
+      recBtn.textContent = '● Start recording';
+      recBtn.classList.remove('recording');
+      recBtn.classList.add('rec');
+    }
+
+    async function onStop() {
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const engine = engineSel.value;
+
+      recBtn.disabled = true;
+      engineSel.disabled = true;
+      statusEl.textContent = 'Transcribing with ' + engine + '… (first run of a local model can take longer)';
+      resultEl.textContent = '…';
+      metaEl.style.display = 'none';
+
+      const form = new FormData();
+      form.append('file', new File([blob], 'recording.webm', { type: 'audio/webm' }));
+      form.append('engine', engine);
+
+      try {
+        const res = await fetch('/transcribe', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+
+        resultEl.textContent = data.transcript || '(empty — try speaking louder/longer)';
+        document.getElementById('mEngine').textContent = data.engine;
+        document.getElementById('mDetail').textContent = data.detail;
+        document.getElementById('mMs').textContent = data.ms + ' ms';
+        metaEl.style.display = 'flex';
+        statusEl.textContent = 'Done.';
+      } catch (err) {
+        resultEl.textContent = '';
+        statusEl.textContent = 'Transcription failed: ' + err.message;
+      } finally {
+        recBtn.disabled = false;
+        engineSel.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

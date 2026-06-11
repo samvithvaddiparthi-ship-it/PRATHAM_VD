@@ -1,0 +1,16 @@
+faster-whisper==1.1.0
+fastapi==0.115.0
+uvicorn==0.30.6
+python-multipart==0.0.12
+requests==2.32.3
+
+# Cloud STT engines + key loading
+openai==1.57.0
+google-genai>=1.10,<2.0
+httpx==0.28.1
+python-dotenv==1.0.1
+
+# CUDA 12 runtime DLLs for GPU inference (cublas64_12.dll, cudnn). Needed on
+# Windows so CTranslate2 can run faster-whisper on the GPU.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
