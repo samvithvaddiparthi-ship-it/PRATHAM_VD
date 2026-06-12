@@ -24,6 +24,12 @@ router.post('/', authMiddleware, async (req, res) => {
     const patientPhone = session.rows[0].patient_phone;
     const patientName = session.rows[0].patient_name;
 
+    // Prescribing doctor — included in the signed payload so the digital Rx can
+    // show who authorised it (kept in sync with the printed slip).
+    const docRow = await pool.query('SELECT name, department FROM doctors WHERE id = $1', [doctorId]);
+    const doctorName = docRow.rows[0]?.name || null;
+    const doctorDept = docRow.rows[0]?.department || null;
+
     // Create prescription
     const rxResult = await pool.query(
       `INSERT INTO prescriptions (session_id, doctor_id, patient_phone, notes)
@@ -46,16 +52,22 @@ router.post('/', authMiddleware, async (req, res) => {
     }
 
     // Generate QR payload
+    const issuedAt = new Date().toISOString();
     const qrData = {
       rx_id: rx.id,
       patient: patientName,
+      doctor: doctorName,
+      department: doctorDept,
       items: items.map(i => ({
         drug: i.drug_name,
         dose: i.dose,
         freq: i.frequency,
         duration: i.duration,
+        instructions: i.instructions || null,
       })),
-      date: new Date().toISOString().slice(0, 10),
+      notes: notes || null,
+      date: issuedAt.slice(0, 10),
+      issued_at: issuedAt,
     };
     const payload = JSON.stringify(qrData);
     const signature = crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex').slice(0, 16);
@@ -63,7 +75,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     await pool.query('UPDATE prescriptions SET qr_payload = $1 WHERE id = $2', [qrPayload, rx.id]);
 
-    res.json({ prescription: { ...rx, qr_payload: qrPayload }, items: insertedItems });
+    res.json({ prescription: { ...rx, qr_payload: qrPayload }, items: insertedItems, issued_at: issuedAt });
   } catch (err) {
     console.error('create prescription error:', err);
     res.status(500).json({ error: err.message });

@@ -39,8 +39,13 @@ async def _generate_report_impl(req: ReportRequest):
     session = session[0]
 
     answers = query(
-        "SELECT question_id, answer_raw FROM session_answers WHERE session_id = %s ORDER BY created_at",
-        (req.session_id,),
+        """SELECT sa.question_id, sa.answer_raw, qn.text_en AS question_text
+           FROM session_answers sa
+           LEFT JOIN questionnaire_nodes qn
+             ON qn.id = sa.question_id AND qn.department = %s
+           WHERE sa.session_id = %s
+           ORDER BY sa.created_at""",
+        (session.get("department"), req.session_id),
     )
 
     vitals = query(
@@ -66,7 +71,7 @@ async def _generate_report_impl(req: ReportRequest):
 
         doc_entry = {
             "type": doc.get("doc_type", "unknown"),
-            "uploaded_at": str(doc.get("created_at", "")),
+            "uploaded_at": str(doc.get("created_at", ""))[:10],  # date only (YYYY-MM-DD), no time
             "confidence": doc.get("ocr_confidence"),
             "raw_text_excerpt": (doc.get("ocr_raw") or "")[:500],
         }
@@ -98,6 +103,10 @@ async def _generate_report_impl(req: ReportRequest):
             "department": session.get("department"),
         },
         "answers": {a["question_id"]: a["answer_raw"] for a in answers},
+        "qa": [
+            {"question": a.get("question_text") or a["question_id"], "answer": a["answer_raw"]}
+            for a in answers
+        ],
         "vitals": {k: v for k, v in vitals.items() if k not in ("id", "session_id", "recorded_at", "source")} if vitals else {},
         "triage_level": session.get("triage_level"),
         "documents": documents_data,

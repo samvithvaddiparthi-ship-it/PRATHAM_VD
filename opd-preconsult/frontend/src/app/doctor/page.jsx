@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import { api, setToken } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
@@ -550,12 +551,129 @@ function PrescriptionPanel({ session, doctor }) {
   const [items, setItems] = useState([{ drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' }]);
   const [allergies, setAllergies] = useState([]);
   const [warnings, setWarnings] = useState([]);
+  const [interactionChecked, setInteractionChecked] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+
+  const EMPTY_ITEM = { drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' };
+  const draftKey = session?.id ? `rx_draft_${session.id}` : null;
+
+  // Persist the in-progress prescription for this patient so it survives tab
+  // switches / navigation. Cleared automatically once the Rx is saved.
+  function persistDraft(nextItems, nextNotes) {
+    if (!draftKey) return;
+    const hasContent = nextItems.some(i => i.drug_name?.trim()) || (nextNotes || '').trim();
+    try {
+      if (hasContent) localStorage.setItem(draftKey, JSON.stringify({ items: nextItems, notes: nextNotes }));
+      else localStorage.removeItem(draftKey);
+    } catch {}
+  }
+
+  function clearDraft() {
+    if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
+    setItems([{ ...EMPTY_ITEM }]);
+    setNotes('');
+    setWarnings([]);
+    setInteractionChecked(false);
+    setDraftRestored(false);
+    setSaveError('');
+    setShowItemErrors(false);
+  }
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
   const [notes, setNotes] = useState('');
   const [drugFilter, setDrugFilter] = useState('');
   const [existingRx, setExistingRx] = useState([]);
   const [currentMeds, setCurrentMeds] = useState([]);
+  const [qrUrl, setQrUrl] = useState('');
+  const [qrError, setQrError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [showItemErrors, setShowItemErrors] = useState(false);
+
+  // Build the QR as a link to the digital prescription page (so scanning opens a
+  // verified, human-readable prescription). We use the SAME origin the doctor is
+  // browsing from, so opening the dashboard via a LAN IP makes the QR point at
+  // that IP automatically — letting a phone on the same network open it.
+  useEffect(() => {
+    const payload = saved?.prescription?.qr_payload;
+    if (!payload) { setQrUrl(''); setQrError(''); return; }
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const link = `${origin}/rx/verify?d=${encodeURIComponent(payload)}`;
+    QRCode.toDataURL(link, { errorCorrectionLevel: 'M', margin: 2, width: 240 })
+      .then(url => { setQrUrl(url); setQrError(''); })
+      .catch(() => {
+        QRCode.toDataURL(link, { errorCorrectionLevel: 'L', margin: 2, width: 280 })
+          .then(url => { setQrUrl(url); setQrError(''); })
+          .catch(() => { setQrUrl(''); setQrError('Prescription too large to fit in one QR code.'); });
+      });
+  }, [saved]);
+
+  // Open a clean, letterhead-style prescription in a new window and print it
+  // (browser print → paper or Save as PDF). The same QR is embedded on the slip.
+  function printPrescription() {
+    if (!saved) return;
+    const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const items = saved.items || [];
+    const pname = esc(session?.patient_name || saved.prescription?.patient_name || 'Patient');
+    const age = session?.patient_age ? `${session.patient_age}y ` : '';
+    const gender = esc(session?.patient_gender || '');
+    const phone = esc(session?.patient_phone || '');
+    const issued = saved.issued_at ? new Date(saved.issued_at) : new Date();
+    const date = issued.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const time = issued.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const rxId = esc(saved.prescription?.id || '');
+    const docName = esc(doctor?.name || 'Doctor');
+    const dept = esc(doctor?.department || '');
+    const notes = saved.prescription?.notes ? esc(saved.prescription.notes) : '';
+    const rows = items.map(it =>
+      `<tr><td>${esc(it.drug_name)}</td><td>${esc(it.dose)}</td><td>${esc(it.frequency)}</td><td>${esc(it.duration)}</td><td>${esc(it.instructions)}</td></tr>`
+    ).join('');
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Prescription ${rxId}</title>
+<style>
+  @page { size: A4; margin: 16mm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; }
+  .hdr { border-bottom: 2px solid #1c5d8c; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .doc h1 { margin: 0; font-size: 20px; color: #1c5d8c; }
+  .doc p { margin: 2px 0; font-size: 12px; color: #555; }
+  .hosp { text-align: right; font-size: 12px; color: #555; }
+  .pt { display: flex; justify-content: space-between; margin: 16px 0; font-size: 13px; }
+  .rx { font-size: 34px; color: #1c5d8c; font-weight: bold; margin: 4px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #ddd; vertical-align: top; }
+  th { color: #1c5d8c; }
+  .notes { margin-top: 20px; font-size: 13px; border-top: 1px solid #e5e5e5; padding-top: 12px; }
+  .notes .lbl { font-weight: bold; color: #1c5d8c; display: block; margin-bottom: 4px; }
+  .foot { margin-top: 48px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .qr { text-align: center; font-size: 10px; color: #777; }
+  .qr img { width: 110px; height: 110px; }
+  .sign { text-align: center; font-size: 12px; }
+  .sign .line { border-top: 1px solid #333; width: 200px; margin-bottom: 4px; }
+  .disc { margin-top: 28px; font-size: 10px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 8px; }
+</style></head>
+<body onload="window.print()">
+  <div class="hdr">
+    <div class="doc"><h1>${docName}</h1><p>${dept} Department</p><p>Demo City Hospital</p></div>
+    <div class="hosp">Date: ${date}<br>Time: ${time}<br>Rx ID: ${rxId}</div>
+  </div>
+  <div class="pt"><div><strong>${pname}</strong> &nbsp; ${age}${gender}</div><div>${phone ? 'Ph: ' + phone : ''}</div></div>
+  <div class="rx">&#8478;</div>
+  <table>
+    <thead><tr><th>Medication</th><th>Dose</th><th>Frequency</th><th>Duration</th><th>Instructions</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="5">No medications</td></tr>'}</tbody>
+  </table>
+  ${notes ? `<div class="notes"><span class="lbl">Doctor's Advice &amp; Instructions</span>${notes}</div>` : ''}
+  <div class="foot">
+    <div class="qr">${qrUrl ? `<img src="${qrUrl}"/><br>Scan to verify digital Rx` : ''}</div>
+    <div class="sign"><div class="line"></div>${docName}<br>Signature</div>
+  </div>
+  <div class="disc">Digitally generated via OPD Pre-Consultation system. Scan the QR code to verify authenticity.</div>
+</body></html>`;
+
+    const w = window.open('', '_blank', 'width=840,height=1060');
+    if (!w) { alert('Please allow pop-ups to print the prescription.'); return; }
+    w.document.write(html);
+    w.document.close();
+  }
 
   useEffect(() => {
     if (session?.patient_phone) {
@@ -588,20 +706,68 @@ function PrescriptionPanel({ session, doctor }) {
     }
     setSaved(null);
     setWarnings([]);
+    setInteractionChecked(false);
+    setSaveError('');
+    setShowItemErrors(false);
+
+    // Restore a saved draft for this patient (or reset to an empty form).
+    let restored = false;
+    try {
+      const raw = session?.id ? localStorage.getItem(`rx_draft_${session.id}`) : null;
+      if (raw) {
+        const draft = JSON.parse(raw);
+        setItems(draft.items?.length ? draft.items : [{ ...EMPTY_ITEM }]);
+        setNotes(draft.notes || '');
+        restored = !!(draft.items?.some(i => i.drug_name?.trim()) || (draft.notes || '').trim());
+      } else {
+        setItems([{ ...EMPTY_ITEM }]);
+        setNotes('');
+      }
+    } catch {
+      setItems([{ ...EMPTY_ITEM }]);
+      setNotes('');
+    }
+    setDraftRestored(restored);
   }, [session?.id]);
 
   function addItem() {
-    setItems([...items, { drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' }]);
+    const updated = [...items, { ...EMPTY_ITEM }];
+    setItems(updated);
+    persistDraft(updated, notes);
   }
 
   function removeItem(idx) {
-    setItems(items.filter((_, i) => i !== idx));
+    const updated = items.filter((_, i) => i !== idx);
+    setItems(updated);
+    setInteractionChecked(false);
+    persistDraft(updated, notes);
   }
 
   function updateItem(idx, field, val) {
     const updated = [...items];
     updated[idx] = { ...updated[idx], [field]: val };
     setItems(updated);
+    if (field === 'drug_name') setInteractionChecked(false);
+    persistDraft(updated, notes);
+  }
+
+  // Load a previously-saved prescription's drugs into the New Prescription form
+  // (appended to whatever's already there) for quick re-prescribing. Skips any
+  // drug already in the form so repeated clicks don't create duplicates.
+  function reusePrescription(rx) {
+    const existing = items.filter(i => i.drug_name);
+    const existingNames = new Set(existing.map(i => i.drug_name.trim().toLowerCase()));
+    const toAdd = (rx.items || [])
+      .filter(it => it.drug_name && !existingNames.has(it.drug_name.trim().toLowerCase()))
+      .map(it => ({
+        drug_name: it.drug_name, dose: it.dose || '', frequency: it.frequency || 'OD',
+        duration: it.duration || '', instructions: it.instructions || '',
+      }));
+    if (!toAdd.length) return;
+    const updated = [...existing, ...toAdd, { ...EMPTY_ITEM }];
+    setItems(updated);
+    persistDraft(updated, notes);
+    setInteractionChecked(false);
   }
 
   async function checkInteractions() {
@@ -612,14 +778,27 @@ function PrescriptionPanel({ session, doctor }) {
     try {
       const result = await api.checkBulkInteractions({ drugs, patient_allergies: allergenList });
       setWarnings(result.warnings || []);
+      setInteractionChecked(true);
     } catch {
       setWarnings([]);
+      setInteractionChecked(false);
     }
   }
 
   async function handleSave() {
     const validItems = items.filter(i => i.drug_name);
     if (!validItems.length) return;
+
+    // Require dose AND duration for every prescribed drug before saving.
+    const incomplete = validItems.filter(i => !String(i.dose || '').trim() || !String(i.duration || '').trim());
+    if (incomplete.length > 0) {
+      const names = incomplete.map(i => i.drug_name).join(', ');
+      setSaveError(`Enter both dose and duration before prescribing: ${names}`);
+      setShowItemErrors(true);
+      return;
+    }
+    setSaveError('');
+    setShowItemErrors(false);
 
     // Check for blocks
     const blocks = warnings.filter(w => w.severity === 'block');
@@ -636,12 +815,20 @@ function PrescriptionPanel({ session, doctor }) {
       });
       setSaved(result);
       setExistingRx(prev => [{ ...result.prescription, items: result.items }, ...prev]);
+      if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
+      setDraftRestored(false);
     } catch (err) {
       alert('Failed: ' + err.message);
     } finally {
       setSaving(false);
     }
   }
+
+  // Which current meds are already in the New Prescription (case-insensitive),
+  // used to dedupe "Continue all" and to disable it once everything is added.
+  const rxDrugNames = new Set(items.filter(i => i.drug_name).map(i => i.drug_name.trim().toLowerCase()));
+  const namedCurrentMeds = currentMeds.filter(m => m.drug_name);
+  const allCurrentAdded = namedCurrentMeds.length > 0 && namedCurrentMeds.every(m => rxDrugNames.has(m.drug_name.trim().toLowerCase()));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -689,36 +876,71 @@ function PrescriptionPanel({ session, doctor }) {
                 style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 16 }}>✕</button>
             </div>
           ))}
-          <button type="button" onClick={() => {
-            // Carry all current meds into new prescription items
-            const toAdd = currentMeds.filter(m => m.drug_name).map(m => ({
-              drug_name: m.drug_name, dose: m.dose, frequency: m.frequency || 'OD', duration: '', instructions: '',
-            }));
-            if (toAdd.length) setItems(prev => {
-              const existing = prev.filter(i => i.drug_name);
-              return [...existing, ...toAdd, { drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' }];
-            });
-          }} style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 12, marginTop: 8 }}>
-            Continue all in prescription
+          <button type="button" disabled={allCurrentAdded} onClick={() => {
+            // Carry current meds into the prescription, skipping any already added.
+            const existing = items.filter(i => i.drug_name);
+            const toAdd = namedCurrentMeds
+              .filter(m => !rxDrugNames.has(m.drug_name.trim().toLowerCase()))
+              .map(m => ({ drug_name: m.drug_name, dose: m.dose, frequency: m.frequency || 'OD', duration: '', instructions: '' }));
+            if (!toAdd.length) return;
+            const updated = [...existing, ...toAdd, { ...EMPTY_ITEM }];
+            setItems(updated);
+            persistDraft(updated, notes);
+            setInteractionChecked(false);
+          }} style={{
+            background: allCurrentAdded ? '#BDC3C7' : 'var(--secondary)', color: '#fff', border: 'none',
+            borderRadius: 6, padding: '6px 14px', cursor: allCurrentAdded ? 'default' : 'pointer',
+            fontSize: 12, marginTop: 8,
+          }}>
+            {allCurrentAdded ? '✓ Added to prescription' : 'Continue all in prescription'}
           </button>
         </div>
       )}
 
-      {/* Existing prescriptions from this session */}
+      {/* Existing prescriptions from this session — click Reuse to load into the form */}
       {existingRx.length > 0 && (
         <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 10, fontSize: 12 }}>
           <strong>Previous Rx ({existingRx.length}):</strong>
-          {existingRx.map((rx, i) => (
-            <div key={i} style={{ marginTop: 4 }}>
-              {(rx.items || []).map(it => it.drug_name).join(', ')} — {new Date(rx.created_at).toLocaleDateString()}
-            </div>
-          ))}
+          <p style={{ fontSize: 10, color: 'var(--text-light)', margin: '2px 0 6px' }}>
+            Tap “Reuse” to load a past prescription's drugs into the new one.
+          </p>
+          {existingRx.map((rx, i) => {
+            const rxNamed = (rx.items || []).filter(it => it.drug_name);
+            const allAdded = rxNamed.length > 0 && rxNamed.every(it => rxDrugNames.has(it.drug_name.trim().toLowerCase()));
+            return (
+              <div key={i} style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1 }}>
+                  {(rx.items || []).map(it => it.drug_name).join(', ')} — {new Date(rx.created_at).toLocaleDateString()}
+                </span>
+                <button type="button" disabled={allAdded} onClick={() => reusePrescription(rx)}
+                  style={{
+                    background: allAdded ? '#BDC3C7' : '#fff',
+                    border: allAdded ? 'none' : '1px solid var(--secondary)',
+                    color: allAdded ? '#fff' : 'var(--secondary)',
+                    borderRadius: 6, padding: '3px 10px',
+                    cursor: allAdded ? 'default' : 'pointer', fontSize: 11, whiteSpace: 'nowrap',
+                  }}>
+                  {allAdded ? '✓ Added' : '↺ Reuse'}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* New Prescription items */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, border: '1px solid #E0E0E0' }}>
         <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>New Prescription</h3>
+
+        {draftRestored && (
+          <div style={{ background: '#FEF9E7', border: '1px solid #F4D03F', borderRadius: 8, padding: '8px 10px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: '#7D6608' }}>📝 Restored an unsaved prescription draft for this patient.</span>
+            <button type="button" onClick={clearDraft}
+              style={{ background: '#fff', border: '1px solid #F4D03F', color: '#7D6608', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>
+              Clear
+            </button>
+          </div>
+        )}
 
         {items.map((item, idx) => (
           <div key={idx} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -732,7 +954,8 @@ function PrescriptionPanel({ session, doctor }) {
               {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
               <input className="input" value={item.dose}
                 onChange={e => updateItem(idx, 'dose', e.target.value)}
-                placeholder="e.g. 5mg" style={{ minHeight: 34, fontSize: 13 }} />
+                placeholder="e.g. 5mg"
+                style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.dose || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
             </div>
             <div style={{ width: 80 }}>
               {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Freq</label>}
@@ -746,7 +969,8 @@ function PrescriptionPanel({ session, doctor }) {
               {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Duration</label>}
               <input className="input" value={item.duration}
                 onChange={e => updateItem(idx, 'duration', e.target.value)}
-                placeholder="e.g. 7 days" style={{ minHeight: 34, fontSize: 13 }} />
+                placeholder="e.g. 7 days"
+                style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.duration || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
             </div>
             <button type="button" onClick={() => removeItem(idx)}
               style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 18, minHeight: 34 }}>
@@ -790,25 +1014,85 @@ function PrescriptionPanel({ session, doctor }) {
         </div>
       )}
 
-      {/* Notes + Save */}
+      {/* No-interaction confirmation */}
+      {interactionChecked && warnings.length === 0 && (
+        <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449', fontWeight: 600 }}>
+          ✓ No negative interactions found.
+        </div>
+      )}
+
+      {/* Doctor's Advice & Instructions + Save */}
       <div>
-        <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Notes (optional)</label>
-        <textarea className="input" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
-          placeholder="Additional instructions..." />
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>Doctor's Advice &amp; Instructions</label>
+        <p style={{ fontSize: 11, color: 'var(--text-light)', margin: '2px 0 6px' }}>
+          Clinical guidance for the patient — printed on the prescription and shown in the digital Rx.
+        </p>
+        <textarea className="input" rows={4} value={notes}
+          onChange={e => { setNotes(e.target.value); persistDraft(items, e.target.value); }}
+          placeholder="e.g. Complete the full antibiotic course. Avoid driving while on this medication. Return immediately if chest pain or breathlessness recurs." />
       </div>
 
       <button className="btn btn-primary" onClick={handleSave} disabled={saving || !items.some(i => i.drug_name)}>
         {saving ? 'Saving...' : 'Save & Generate QR'}
       </button>
+      {saveError && (
+        <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', fontWeight: 600 }}>⚠ {saveError}</p>
+      )}
 
       {/* QR Result */}
       {saved && (
         <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 16, textAlign: 'center' }}>
-          <p style={{ fontWeight: 600, color: '#1E8449', marginBottom: 8 }}>Prescription saved!</p>
-          <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>QR payload for pharmacy scanning:</p>
-          <textarea className="input" readOnly value={saved.prescription?.qr_payload || ''}
-            style={{ fontSize: 10, height: 60, fontFamily: 'monospace' }} onClick={e => e.target.select()} />
-          <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>Copy and encode as QR code for pharmacy.</p>
+          <p style={{ fontWeight: 600, color: '#1E8449', marginBottom: 12 }}>✓ Prescription saved!</p>
+
+          {/* Actual scannable QR code */}
+          {qrUrl && (
+            <div style={{ background: '#fff', display: 'inline-block', padding: 12, borderRadius: 8, marginBottom: 8 }}>
+              <img src={qrUrl} alt="Prescription QR code" style={{ display: 'block', width: 220, height: 220 }} />
+            </div>
+          )}
+          {qrError && (
+            <p style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{qrError}</p>
+          )}
+          <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 12 }}>
+            Scan to open the verified digital prescription.
+          </p>
+
+          {/* Print / Save PDF */}
+          <button className="btn btn-primary" onClick={printPrescription}
+            style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            🖨 Print / Save PDF
+          </button>
+
+          {/* Human-readable summary of what the QR contains */}
+          <div style={{ background: '#fff', borderRadius: 8, padding: 12, textAlign: 'left', marginBottom: 8 }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)', marginBottom: 6 }}>
+              {saved.prescription?.patient_name || session?.patient_name || 'Patient'} ·{' '}
+              {new Date().toISOString().slice(0, 10)}
+            </p>
+            {(saved.items || []).map((it, i) => (
+              <p key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: 2 }}>
+                • <strong>{it.drug_name}</strong>
+                {it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` — ${it.frequency}` : ''}
+                {it.duration ? `, ${it.duration}` : ''}
+                {it.instructions ? ` (${it.instructions})` : ''}
+              </p>
+            ))}
+            {saved.prescription?.notes && (
+              <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 6, fontStyle: 'italic' }}>
+                Note: {saved.prescription.notes}
+              </p>
+            )}
+          </div>
+
+          {/* Raw payload tucked away for debugging / manual encoding */}
+          <details style={{ textAlign: 'left' }}>
+            <summary style={{ fontSize: 11, color: 'var(--text-light)', cursor: 'pointer' }}>
+              Show raw signed payload
+            </summary>
+            <textarea className="input" readOnly value={saved.prescription?.qr_payload || ''}
+              style={{ fontSize: 10, height: 60, fontFamily: 'monospace', marginTop: 6 }}
+              onClick={e => e.target.select()} />
+          </details>
         </div>
       )}
     </div>
