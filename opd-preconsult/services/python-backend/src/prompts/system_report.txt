@@ -20,10 +20,10 @@ Output the report in this exact Markdown structure:
 ## Past Medical History
 [Conditions, surgeries, hospitalizations from answers. If a discharge summary document was uploaded, incorporate its key findings here — diagnosis, procedures performed, complications noted.]
 
-## Current Medications
+## Current/Prior Medications
 [List medications extracted from uploaded prescriptions. Each drug MUST be a Markdown bullet starting with "- " on its OWN line (never run drugs together in one paragraph). Format each drug as: "- Name Dose — Frequency, for Duration (instructions)". Omit any field that is absent; do not write "null" or "none".
 Do NOT repeat the source or date on every drug line. Instead, group the drugs by their source prescription and put ONE date header (plain text, not a bullet) on its own line above each group, e.g. "From prescription dated 2026-06-07:" followed by the bulleted drug list. If multiple prescriptions were uploaded, show the newest group first so the doctor can see medication changes over time.
-Only add a "Patient also reported:" line if the patient mentioned medications during the questionnaire that are NOT already in the documents, or that conflict with them (flag conflicts with ⚠). If the patient-reported medications are the same as the documents, omit it entirely — do not restate the same drug names.]
+Also include any medications the patient mentioned during the questionnaire that are NOT already in the documents, as additional bullets in the same list (flag conflicts with ⚠). Do NOT restate drugs already listed from documents, and do NOT add a "Patient also reported:" label or any similar prefix — just list the drugs as bullets. If there are no medications from documents or the questionnaire, write exactly "None" and nothing else.]
 
 ## Allergies
 [From patient answers]

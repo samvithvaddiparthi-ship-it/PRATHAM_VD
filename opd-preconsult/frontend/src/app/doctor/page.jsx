@@ -4,6 +4,57 @@ import { api, setToken } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
 
+const TRIAGE_COLORS = { RED: '#E74C3C', AMBER: '#F39C12', GREEN: '#27AE60' };
+const TRIAGE_SEVERITY = { RED: 0, AMBER: 1, GREEN: 2 };
+
+function fmtVisitDate(ts) {
+  try {
+    return new Date(ts).toLocaleString(undefined, {
+      day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+  } catch { return ts; }
+}
+
+// Group a flat list of completed sessions into a patient directory keyed by
+// phone. Each patient's visits are sorted newest-first; the newest visit is the
+// "latest", and if it was completed within the active window (is_recent) the
+// patient is treated as "filled now" — which drives the highlight and the
+// triage colour on the patient heading. Patients with a filled-now visit float
+// to the top (ordered by triage severity), the rest follow by recency.
+function groupByPatient(list) {
+  const map = new Map();
+  for (const s of list) {
+    const key = s.patient_phone || s.id;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(s);
+  }
+  const patients = [];
+  for (const [phone, visits] of map) {
+    visits.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const latest = visits[0];
+    const filledNow = !!latest.is_recent;
+    patients.push({
+      phone,
+      name: latest.patient_name || 'Unregistered',
+      age: latest.patient_age,
+      gender: latest.patient_gender,
+      visits,
+      latest,
+      filledNow,
+      triage: filledNow ? latest.triage_level : null,
+    });
+  }
+  patients.sort((a, b) => {
+    if (a.filledNow !== b.filledNow) return a.filledNow ? -1 : 1;
+    if (a.filledNow && b.filledNow) {
+      const d = (TRIAGE_SEVERITY[a.triage] ?? 3) - (TRIAGE_SEVERITY[b.triage] ?? 3);
+      if (d !== 0) return d;
+    }
+    return new Date(b.latest.created_at) - new Date(a.latest.created_at);
+  });
+  return patients;
+}
+
 function PinLogin({ onLogin }) {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
@@ -64,6 +115,13 @@ function DoctorDashboard({ doctor }) {
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
   const [rightTab, setRightTab] = useState('report'); // report | prescribe | scribe
+  const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
+  const [confirmDelete, setConfirmDelete] = useState(false); // delete confirmation modal
+  const [deleteAck, setDeleteAck] = useState(false);     // "I understand" checkbox
+  const [deleting, setDeleting] = useState(false);
+  const [expanded, setExpanded] = useState({}); // patient phone -> open/closed in the tree
+  const [seenNew, setSeenNew] = useState({});   // visit id -> doctor has opened it (clears the NEW badge, like WhatsApp unread)
+  const [pinned, setPinned] = useState({});     // phones that showed up with a recent fill — kept visible even after that visit is deleted
 
   useEffect(() => {
     loadQueue();
@@ -74,6 +132,38 @@ function DoctorDashboard({ doctor }) {
 
   async function loadQueue() {
     try { setSessions(await api.doctorQueue()); } catch {}
+  }
+
+  // Load the set of already-opened "NEW" visits so the badge stays cleared
+  // across refreshes (like a read receipt). Keyed by visit id, so a genuinely
+  // new fill (a new session) shows NEW again.
+  useEffect(() => {
+    try { setSeenNew(JSON.parse(localStorage.getItem('seen_new_visits') || '{}')); } catch {}
+  }, []);
+
+  // Remember every patient who has shown up with a recent ("filled now") visit.
+  // They stay in the Queue tree even if that recent visit is later deleted, so
+  // deleting one entry doesn't make the whole patient (and their older visits)
+  // vanish. Patients who never had a recent fill are never pinned, so they stay
+  // hidden. Resets on a full page reload (then the recent-only rule applies).
+  useEffect(() => {
+    const recent = groupByPatient(sessions).filter(p => p.filledNow).map(p => p.phone);
+    if (!recent.length) return;
+    setPinned(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const ph of recent) if (!next[ph]) { next[ph] = true; changed = true; }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
+
+  function markSeen(visitId) {
+    setSeenNew(prev => {
+      if (prev[visitId]) return prev;
+      const next = { ...prev, [visitId]: true };
+      try { localStorage.setItem('seen_new_visits', JSON.stringify(next)); } catch {}
+      return next;
+    });
   }
 
   async function loadConsulted() {
@@ -117,6 +207,26 @@ function DoctorDashboard({ doctor }) {
     loadQueue();
   }
 
+  // Permanently delete the selected patient entry (guarded by the checkbox
+  // confirmation modal). Removes the session and all its associated data.
+  async function handleDelete() {
+    if (!selected || !deleteAck) return;
+    setDeleting(true);
+    try {
+      await api.doctorDeleteSession(selected.id);
+      setConfirmDelete(false);
+      setDeleteAck(false);
+      setSelected(null);
+      setReport(null);
+      loadQueue();
+      loadConsulted();
+    } catch (err) {
+      alert('Delete failed: ' + (err.message || 'unknown error'));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleFeedback(val) {
     if (!selected) return;
     await api.submitFeedback(selected.id, val);
@@ -132,6 +242,32 @@ function DoctorDashboard({ doctor }) {
 
   const otherDoctors = doctors.filter(d => d.id !== doctor.id);
   const currentList = tab === 'queue' ? sessions : consulted;
+  // Queue tree: show patients with a "filled now" visit (completed in the last
+  // 24h) — i.e. patients who are actually here now — plus any patient already
+  // pinned this session (they appeared with a recent fill, so they stay visible
+  // even after that visit is deleted). A patient with ONLY old visits and no
+  // recent fill (never pinned) does not show up.
+  const patients = groupByPatient(sessions).filter(p => p.filledNow || pinned[p.phone]);
+  // Consulted: one row per patient — their single latest consulted visit. Opening
+  // an older visit from the tree also marks it consulted, so without this the
+  // same patient would appear multiple times here. Order is FIXED by when the
+  // doctor FIRST consulted each patient (consulted_at, stamped once), so
+  // re-opening a patient never reshuffles the list.
+  const consultedLatest = (() => {
+    const byPhone = {};
+    for (const s of consulted) {
+      const key = s.patient_phone || s.id;
+      (byPhone[key] = byPhone[key] || []).push(s);
+    }
+    return Object.values(byPhone).map(visits => {
+      const latest = visits.reduce((a, b) => new Date(b.created_at) > new Date(a.created_at) ? b : a);
+      const firstConsult = visits.reduce((min, s) => {
+        const t = s.consulted_at || s.updated_at;
+        return (!min || new Date(t) < new Date(min)) ? t : min;
+      }, null);
+      return { ...latest, _firstConsult: firstConsult };
+    }).sort((a, b) => new Date(b._firstConsult) - new Date(a._firstConsult));
+  })();
 
   return (
     <div className="doctor-layout" style={{ display: 'flex', gap: 16, minHeight: '100vh' }}>
@@ -149,7 +285,7 @@ function DoctorDashboard({ doctor }) {
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
           <button className={`btn ${tab === 'queue' ? 'btn-primary' : 'btn-outline'}`}
             style={{ flex: 1, fontSize: 13, minHeight: 36 }} onClick={() => switchTab('queue')}>
-            Queue ({sessions.length})
+            Queue ({patients.length})
           </button>
           <button className={`btn ${tab === 'consulted' ? 'btn-primary' : 'btn-outline'}`}
             style={{ flex: 1, fontSize: 13, minHeight: 36 }} onClick={() => switchTab('consulted')}>
@@ -161,19 +297,87 @@ function DoctorDashboard({ doctor }) {
           <button className="btn btn-outline" style={{ fontSize: 13, marginBottom: 8 }} onClick={loadQueue}>Refresh</button>
         )}
 
-        {currentList.map(s => (
+        {/* QUEUE tab → patient directory tree (grouped by phone). Each patient
+            heading is coloured by the triage of their latest visit, but only if
+            that visit was "filled now" (completed within the active window). */}
+        {tab === 'queue' && patients.map(p => {
+          const isOpen = !!expanded[p.phone]; // collapsed until clicked, so "NEW" shows first
+          const headColor = p.triage ? TRIAGE_COLORS[p.triage] : null;
+          return (
+            <div key={p.phone} style={{ marginBottom: 8 }}>
+              {/* Patient heading */}
+              <div onClick={() => { markSeen(p.latest.id); setExpanded(e => ({ ...e, [p.phone]: !isOpen })); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '8px 10px', borderRadius: 8, background: '#fff', borderLeft: `4px solid ${headColor || 'transparent'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontWeight: 700, fontSize: 14, color: headColor || 'var(--text)' }}>{p.name}</p>
+                  <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{p.phone} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
+                </div>
+                {/* Right indicator: a filled-now patient shows "NEW" until the
+                    doctor opens them once (like an unread badge). After that it's
+                    permanently a chevron — even when collapsed again — hinting the
+                    previous consultations can be expanded. */}
+                {(p.filledNow && !seenNew[p.latest.id]) ? (
+                  <span style={{ fontSize: 9, background: headColor || '#888', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
+                ) : (
+                  <span style={{ fontSize: 14, color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
+                )}
+              </div>
+              {/* Visits (newest first) */}
+              {isOpen && (
+                <div style={{ marginLeft: 14, marginTop: 4, borderLeft: '1px solid #E0E0E0', paddingLeft: 10 }}>
+                  {p.visits.map((v, vi) => {
+                    const isFilledNow = vi === 0 && p.filledNow;
+                    const isSel = selected?.id === v.id;
+                    const meds = v.prescription_items || [];
+                    return (
+                      <div key={v.id} onClick={() => selectSession(v)}
+                        style={{ padding: '6px 8px', borderRadius: 6, cursor: 'pointer', marginBottom: 4,
+                          background: isSel ? '#EAF2F8' : (isFilledNow ? '#FEF9E7' : 'transparent'),
+                          border: isSel ? '2px solid var(--secondary)' : (isFilledNow ? `1px solid ${TRIAGE_COLORS[v.triage_level] || '#ccc'}` : '1px solid transparent') }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {v.triage_level && <TriageBadge level={v.triage_level} />}
+                          <div style={{ flex: 1 }}>
+                            <p style={{ fontSize: 12, fontWeight: 600 }}>
+                              {isFilledNow ? '★ Filled now' : fmtVisitDate(v.created_at)}
+                            </p>
+                            {isFilledNow && <p style={{ fontSize: 10, color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
+                          </div>
+                        </div>
+                        {/* Prescriptions for this particular visit */}
+                        {meds.length > 0 ? (
+                          <div style={{ marginTop: 4, marginLeft: 2 }}>
+                            {meds.map((it, ii) => (
+                              <p key={ii} style={{ fontSize: 10, color: 'var(--text-light)' }}>
+                                💊 {it.drug_name}{it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` · ${it.frequency}` : ''}
+                              </p>
+                            ))}
+                          </div>
+                        ) : (
+                          <p style={{ fontSize: 10, color: '#bbb', marginTop: 2, marginLeft: 2 }}>No prescription</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {tab === 'queue' && patients.length === 0 && (
+          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>No patients yet</p>
+        )}
+
+        {/* CONSULTED tab → one row per patient (their latest consulted visit) */}
+        {tab === 'consulted' && consultedLatest.map(s => (
           <div key={s.id} className="queue-item" onClick={() => selectSession(s)}
             style={{ border: selected?.id === s.id ? '2px solid var(--secondary)' : 'none' }}>
-            <TriageBadge level={s.triage_level} />
+            {s.triage_level && <TriageBadge level={s.triage_level} />}
             <div style={{ flex: 1 }}>
               <p style={{ fontWeight: 600, fontSize: 14 }}>{s.patient_name || 'Unregistered'}</p>
               <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
                 {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · {s.state} · #{s.queue_slot || '-'}
               </p>
-              {tab === 'queue' && !s.assigned_doctor_id && (
-                <span style={{ fontSize: 10, background: '#FFF3CD', color: '#856404', padding: '2px 6px', borderRadius: 4 }}>Unassigned</span>
-              )}
-              {tab === 'consulted' && s.doctor_feedback && (
+              {s.doctor_feedback && (
                 <span style={{ fontSize: 10, background: s.doctor_feedback === 'accurate' ? '#D5F5E3' : '#FADBD8',
                   color: s.doctor_feedback === 'accurate' ? '#1E8449' : '#C0392B', padding: '2px 6px', borderRadius: 4 }}>
                   {s.doctor_feedback === 'accurate' ? '✓ Accurate' : '✗ Inaccurate'}
@@ -182,9 +386,9 @@ function DoctorDashboard({ doctor }) {
             </div>
           </div>
         ))}
-        {currentList.length === 0 && <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
-          {tab === 'queue' ? 'No patients in queue' : 'No consulted patients yet'}
-        </p>}
+        {tab === 'consulted' && consultedLatest.length === 0 && (
+          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>No consulted patients yet</p>
+        )}
       </div>
 
       {/* Right Panel */}
@@ -199,22 +403,71 @@ function DoctorDashboard({ doctor }) {
               <span style={{ color: 'var(--text-light)', fontSize: 14 }}>
                 {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department}
               </span>
-              {tab === 'queue' && selected.assigned_doctor_id && (
-                <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-                  <button onClick={handleUnassign}
-                    style={{ background: 'none', border: '1px solid #E74C3C', color: '#E74C3C', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
-                    Release
-                  </button>
-                  {otherDoctors.length > 0 && (
-                    <select onChange={e => { if (e.target.value) handleReassign(e.target.value); e.target.value = ''; }}
-                      style={{ border: '1px solid #ccc', borderRadius: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>
-                      <option value="">Reassign to...</option>
-                      {otherDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </select>
-                  )}
-                </div>
-              )}
+              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', alignItems: 'center', position: 'relative' }}>
+                {tab === 'queue' && selected.assigned_doctor_id && (
+                  <>
+                    <button onClick={handleUnassign}
+                      style={{ background: 'none', border: '1px solid #E74C3C', color: '#E74C3C', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                      Release
+                    </button>
+                    {otherDoctors.length > 0 && (
+                      <select onChange={e => { if (e.target.value) handleReassign(e.target.value); e.target.value = ''; }}
+                        style={{ border: '1px solid #ccc', borderRadius: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>
+                        <option value="">Reassign to...</option>
+                        {otherDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    )}
+                  </>
+                )}
+
+                {/* Discrete kebab (⋯) menu — holds destructive actions out of the way */}
+                <button onClick={() => setMenuOpen(o => !o)} title="More options"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 8px', color: 'var(--text-light)', borderRadius: 6 }}>
+                  ⋯
+                </button>
+                {menuOpen && (
+                  <>
+                    {/* click-away overlay */}
+                    <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+                    <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.14)', zIndex: 10, minWidth: 190, overflow: 'hidden' }}>
+                      <button onClick={() => { setMenuOpen(false); setDeleteAck(false); setConfirmDelete(true); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '11px 14px', cursor: 'pointer', fontSize: 13, color: '#E74C3C' }}>
+                        🗑 Delete patient entry
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
+
+            {/* Delete confirmation modal — requires an explicit acknowledgement */}
+            {confirmDelete && (
+              <div onClick={() => { setConfirmDelete(false); setDeleteAck(false); }}
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 440, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}>
+                  <h3 style={{ color: '#E74C3C', marginBottom: 12, fontSize: 18 }}>Delete patient entry?</h3>
+                  <p style={{ fontSize: 14, lineHeight: 1.55, marginBottom: 16, color: 'var(--text)' }}>
+                    This permanently deletes <strong>{selected.patient_name}</strong>'s entry and all associated
+                    data — answers, vitals, uploaded documents, and the generated report. <strong>This cannot be undone.</strong>
+                  </p>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, marginBottom: 18, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={deleteAck} onChange={e => setDeleteAck(e.target.checked)} style={{ marginTop: 2 }} />
+                    <span>I understand this permanently deletes all data for this patient.</span>
+                  </label>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button className="btn btn-outline" style={{ fontSize: 13, padding: '8px 16px' }}
+                      onClick={() => { setConfirmDelete(false); setDeleteAck(false); }} disabled={deleting}>
+                      Cancel
+                    </button>
+                    <button onClick={handleDelete} disabled={!deleteAck || deleting}
+                      style={{ background: deleteAck ? '#E74C3C' : '#ccc', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: deleteAck && !deleting ? 'pointer' : 'not-allowed' }}>
+                      {deleting ? 'Deleting…' : 'Delete Permanently'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Report / Prescribe tabs */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>

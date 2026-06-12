@@ -211,7 +211,7 @@ def _fallback_report(session_json):
         lines.append("- Not recorded")
 
     # Medications: document-extracted (grouped by source), patient-reported only if it adds info
-    lines.append("\n## Current Medications")
+    lines.append("\n## Current/Prior Medications")
     doc_meds = session_json.get("medications_from_documents", [])
     patient_meds = answers.get("q_medications", "")
     if doc_meds:
@@ -232,15 +232,16 @@ def _fallback_report(session_json):
                 if m.get('duration'): line += f", for {m['duration']}"
                 if m.get('instructions'): line += f" ({m['instructions']})"
                 lines.append(line)
-    # Only show patient-reported meds that are not already covered by the documents
+    # Include any patient-reported meds not already covered by the documents,
+    # listed plainly as bullets (no "patient also reported" prefix).
     if patient_meds and patient_meds.lower() not in ('none', 'nil', 'no', ''):
         doc_names = " ".join(m.get('name', '').lower() for m in doc_meds)
         reported = [t.strip() for t in re.split(r'[,;\n]', patient_meds) if t.strip()]
         new_terms = [t for t in reported if t.lower() not in doc_names]
-        if new_terms:
-            lines.append(f"\n**Patient also reported:** {', '.join(new_terms)}")
+        for term in new_terms:
+            lines.append(f"- {term}")
     elif not doc_meds:
-        lines.append("Not recorded")
+        lines.append("None")
 
     lines.append(f"\n## Allergies\n{answers.get('q_allergies', 'Not recorded')}")
 

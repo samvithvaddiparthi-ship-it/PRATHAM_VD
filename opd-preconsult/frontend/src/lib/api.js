@@ -81,6 +81,7 @@ export const api = {
   doctorUnassign: (sessionId) => apiFetch(`/api/doctor/unassign/${sessionId}`, { method: 'POST' }),
   doctorReassign: (sessionId, targetDoctorId) => apiFetch(`/api/doctor/reassign/${sessionId}`, { method: 'POST', body: JSON.stringify({ target_doctor_id: targetDoctorId }) }),
   doctorConsulted: () => apiFetch('/api/doctor/consulted'),
+  doctorDeleteSession: (sessionId) => apiFetch(`/api/doctor/session/${sessionId}`, { method: 'DELETE' }),
   doctorChangePin: (old_pin, new_pin) => apiFetch('/api/doctor/change-pin', { method: 'POST', body: JSON.stringify({ old_pin, new_pin }) }),
   listDoctors: (department) => apiFetch(`/api/doctor${department ? '?department=' + department : ''}`),
   createDoctor: (data) => apiFetch('/api/doctor', { method: 'POST', body: JSON.stringify(data) }),

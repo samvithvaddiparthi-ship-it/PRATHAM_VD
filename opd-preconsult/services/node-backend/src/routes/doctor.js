@@ -117,18 +117,30 @@ router.get('/queue', async (req, res) => {
 
     const { doctor_id, department } = decoded;
 
+    // Patient directory: ALL completed visits in this department (full history,
+    // not just the last 24h), so each patient's previous visits can be grouped
+    // under them. `is_recent` (within 24h) marks a "filled now" visit — the
+    // frontend uses it to highlight the latest entry and colour the patient
+    // heading by that visit's triage. Each visit also carries its prescriptions.
     const result = await pool.query(
-      `SELECT s.*, d.name as doctor_name FROM sessions s
+      `SELECT s.*, d.name as doctor_name,
+         (s.created_at > NOW() - INTERVAL '24 hours') AS is_recent,
+         COALESCE((
+           SELECT json_agg(json_build_object(
+             'drug_name', pi.drug_name, 'dose', pi.dose,
+             'frequency', pi.frequency, 'duration', pi.duration,
+             'instructions', pi.instructions) ORDER BY pi.created_at)
+           FROM prescriptions p
+           JOIN prescription_items pi ON pi.prescription_id = p.id
+           WHERE p.session_id = s.id
+         ), '[]'::json) AS prescription_items
+       FROM sessions s
        LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
        WHERE s.department = $1
-         AND (s.assigned_doctor_id = $2 OR s.assigned_doctor_id IS NULL)
          AND s.state = 'COMPLETE'
-         AND s.created_at > NOW() - INTERVAL '24 hours'
-       ORDER BY
-         CASE s.triage_level WHEN 'RED' THEN 0 WHEN 'AMBER' THEN 1 ELSE 2 END,
-         s.created_at DESC
-       LIMIT 50`,
-      [department, doctor_id]
+       ORDER BY s.created_at DESC
+       LIMIT 200`,
+      [department]
     );
     res.json(result.rows);
   } catch (err) {
@@ -147,8 +159,12 @@ router.post('/assign/:session_id', async (req, res) => {
     const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
+    // consulted_at is stamped ONCE (first open) and never overwritten, so the
+    // Consulted list keeps a fixed order even when a patient is re-opened.
     const result = await pool.query(
-      `UPDATE sessions SET assigned_doctor_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      `UPDATE sessions SET assigned_doctor_id = $1, updated_at = NOW(),
+              consulted_at = COALESCE(consulted_at, NOW())
+       WHERE id = $2 RETURNING *`,
       [decoded.doctor_id, req.params.session_id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
@@ -282,6 +298,53 @@ router.get('/all-sessions', async (req, res) => {
   } catch (err) {
     console.error('all-sessions error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Permanently delete a patient entry (session) and ALL associated data.
+// Guarded behind doctor auth. Child tables don't cascade on delete, so we
+// remove their rows first, inside a transaction, then the session itself.
+router.delete('/session/:session_id', async (req, res) => {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: 'No token' });
+
+  const jwt = require('jsonwebtoken');
+  let decoded;
+  try {
+    decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+  if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+
+  const { session_id } = req.params;
+  const childTables = [
+    'session_documents', 'session_answers', 'session_vitals', 'session_reports',
+    'protocol_sessions', 'prescriptions', 'scheduled_followups', 'audit_log',
+  ];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const tbl of childTables) {
+      await client.query(`DELETE FROM ${tbl} WHERE session_id = $1`, [session_id]);
+    }
+    const result = await client.query(
+      'DELETE FROM sessions WHERE id = $1 RETURNING id, patient_name',
+      [session_id]
+    );
+    if (!result.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    await client.query('COMMIT');
+    res.json({ deleted: true, id: session_id, patient_name: result.rows[0].patient_name });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('delete session error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
   }
 });
 
