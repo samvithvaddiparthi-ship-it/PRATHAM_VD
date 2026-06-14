@@ -138,6 +138,7 @@ router.get('/queue', async (req, res) => {
        LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
        WHERE s.department = $1
          AND s.state = 'COMPLETE'
+         AND s.removed_at IS NULL
        ORDER BY s.created_at DESC
        LIMIT 200`,
       [department]
@@ -301,9 +302,10 @@ router.get('/all-sessions', async (req, res) => {
   }
 });
 
-// Permanently delete a patient entry (session) and ALL associated data.
-// Guarded behind doctor auth. Child tables don't cascade on delete, so we
-// remove their rows first, inside a transaction, then the session itself.
+// "Delete" a patient entry — a SOFT remove. The session is stamped removed_at
+// (not erased), so it drops out of the active Queue and the patient's
+// previous-logins, but all its data is retained and it STAYS in the doctor's
+// Consulted history if it was consulted. Guarded behind doctor auth.
 router.delete('/session/:session_id', async (req, res) => {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'No token' });
@@ -318,33 +320,16 @@ router.delete('/session/:session_id', async (req, res) => {
   if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
   const { session_id } = req.params;
-  const childTables = [
-    'session_documents', 'session_answers', 'session_vitals', 'session_reports',
-    'protocol_sessions', 'prescriptions', 'scheduled_followups', 'audit_log',
-  ];
-
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    for (const tbl of childTables) {
-      await client.query(`DELETE FROM ${tbl} WHERE session_id = $1`, [session_id]);
-    }
-    const result = await client.query(
-      'DELETE FROM sessions WHERE id = $1 RETURNING id, patient_name',
+    const result = await pool.query(
+      'UPDATE sessions SET removed_at = NOW() WHERE id = $1 RETURNING id, patient_name',
       [session_id]
     );
-    if (!result.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    await client.query('COMMIT');
-    res.json({ deleted: true, id: session_id, patient_name: result.rows[0].patient_name });
+    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+    res.json({ removed: true, id: session_id, patient_name: result.rows[0].patient_name });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('delete session error:', err);
+    console.error('remove session error:', err);
     res.status(500).json({ error: 'Internal server error' });
-  } finally {
-    client.release();
   }
 });
 

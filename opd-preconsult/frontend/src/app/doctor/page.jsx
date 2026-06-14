@@ -51,9 +51,26 @@ function groupByPatient(list) {
       const d = (TRIAGE_SEVERITY[a.triage] ?? 3) - (TRIAGE_SEVERITY[b.triage] ?? 3);
       if (d !== 0) return d;
     }
-    return new Date(b.latest.created_at) - new Date(a.latest.created_at);
+    // Within the same triage level: first-come-first-served. The patient who
+    // completed their pre-consult EARLIEST (waiting longest) comes first (FIFO).
+    // Ascending arrival time — not newest-first, which would be unfair LIFO.
+    return new Date(a.latest.created_at) - new Date(b.latest.created_at);
   });
   return patients;
+}
+
+// Loading placeholder rows (shown until the first queue/consulted fetch lands).
+function SkeletonRows({ n = 4 }) {
+  return (
+    <div>
+      {Array.from({ length: n }).map((_, i) => (
+        <div key={i} style={{ background: '#fff', borderRadius: 8, padding: 12, marginBottom: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+          <div style={{ height: 12, width: '55%', background: '#e6ebf1', borderRadius: 6, marginBottom: 8, animation: 'skpulse 1.2s ease-in-out infinite' }} />
+          <div style={{ height: 10, width: '35%', background: '#eef2f6', borderRadius: 6, animation: 'skpulse 1.2s ease-in-out infinite' }} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function PinLogin({ onLogin }) {
@@ -123,6 +140,10 @@ function DoctorDashboard({ doctor }) {
   const [expanded, setExpanded] = useState({}); // patient phone -> open/closed in the tree
   const [seenNew, setSeenNew] = useState({});   // visit id -> doctor has opened it (clears the NEW badge, like WhatsApp unread)
   const [pinned, setPinned] = useState({});     // phones that showed up with a recent fill — kept visible even after that visit is deleted
+  const [search, setSearch] = useState('');     // search (name or phone) — used on both tabs
+  const [now, setNow] = useState(() => new Date()); // live clock
+  const [queueLoaded, setQueueLoaded] = useState(false);       // first queue fetch done? (for skeletons)
+  const [consultedLoaded, setConsultedLoaded] = useState(false);
 
   useEffect(() => {
     loadQueue();
@@ -131,8 +152,14 @@ function DoctorDashboard({ doctor }) {
     return () => clearInterval(interval);
   }, []);
 
+  // Live clock — ticks every second for the header date/time.
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   async function loadQueue() {
-    try { setSessions(await api.doctorQueue()); } catch {}
+    try { setSessions(await api.doctorQueue()); } catch {} finally { setQueueLoaded(true); }
   }
 
   // Load the set of already-opened "NEW" visits so the badge stays cleared
@@ -168,13 +195,14 @@ function DoctorDashboard({ doctor }) {
   }
 
   async function loadConsulted() {
-    try { setConsulted(await api.doctorConsulted()); } catch {}
+    try { setConsulted(await api.doctorConsulted()); } catch {} finally { setConsultedLoaded(true); }
   }
 
   function switchTab(t) {
     setTab(t);
     setSelected(null);
     setReport(null);
+    setSearch('');
     if (t === 'consulted') loadConsulted();
     if (t === 'queue') loadQueue();
   }
@@ -249,41 +277,83 @@ function DoctorDashboard({ doctor }) {
   // even after that visit is deleted). A patient with ONLY old visits and no
   // recent fill (never pinned) does not show up.
   const patients = groupByPatient(sessions).filter(p => p.filledNow || pinned[p.phone]);
-  // Consulted: one row per patient — their single latest consulted visit. Opening
-  // an older visit from the tree also marks it consulted, so without this the
-  // same patient would appear multiple times here. Order is FIXED by when the
-  // doctor FIRST consulted each patient (consulted_at, stamped once), so
-  // re-opening a patient never reshuffles the list.
-  const consultedLatest = (() => {
-    const byPhone = {};
-    for (const s of consulted) {
-      const key = s.patient_phone || s.id;
-      (byPhone[key] = byPhone[key] || []).push(s);
-    }
-    return Object.values(byPhone).map(visits => {
-      const latest = visits.reduce((a, b) => new Date(b.created_at) > new Date(a.created_at) ? b : a);
-      const firstConsult = visits.reduce((min, s) => {
-        const t = s.consulted_at || s.updated_at;
-        return (!min || new Date(t) < new Date(min)) ? t : min;
-      }, null);
-      return { ...latest, _firstConsult: firstConsult };
-    }).sort((a, b) => new Date(b._firstConsult) - new Date(a._firstConsult));
+  // Consulted: a flat list of INDIVIDUAL consulted visits (NOT grouped per
+  // patient). Every form a patient filled and the doctor consulted is its own
+  // entry — so a returning patient who fills the form again appears as a new,
+  // separate row, with that visit's OWN triage colour (a past RED visit stays
+  // red; a later YELLOW visit shows yellow, independently). Order is FIXED by
+  // when each visit was first consulted (consulted_at, stamped once), newest
+  // consult first, so re-opening a visit never reshuffles the list.
+  const consultedList = [...consulted].sort((a, b) => {
+    const ta = a.consulted_at || a.updated_at;
+    const tb = b.consulted_at || b.updated_at;
+    return new Date(tb) - new Date(ta);
+  });
+
+  // Search (name OR phone, case-insensitive), applied to whichever tab is active.
+  const q = search.trim().toLowerCase();
+  const filteredConsulted = !q ? consultedList : consultedList.filter(s =>
+    (s.patient_name || '').toLowerCase().includes(q) || (s.patient_phone || '').includes(search.trim())
+  );
+  const filteredPatients = !q ? patients : patients.filter(p =>
+    (p.name || '').toLowerCase().includes(q) || (p.phone || '').includes(search.trim())
+  );
+
+  // Shadow (ghost) prediction: complete the search with the best match from the
+  // active tab's list — name first, then phone — whose value STARTS WITH input.
+  const searchSource = tab === 'queue'
+    ? patients.map(p => ({ name: p.name, phone: p.phone }))
+    : consultedList.map(s => ({ name: s.patient_name || '', phone: s.patient_phone || '' }));
+  const suggestion = (() => {
+    if (!q) return '';
+    for (const e of searchSource) if ((e.name || '').toLowerCase().startsWith(q)) return e.name;
+    for (const e of searchSource) if ((e.phone || '').startsWith(search.trim())) return e.phone;
+    return '';
   })();
+  const shadowRemainder = suggestion && suggestion.length > search.length ? suggestion.slice(search.length) : '';
+
+  // Triage counts among current queue patients (legend + summary bar).
+  const triageCounts = patients.reduce((acc, p) => {
+    if (p.triage) acc[p.triage] = (acc[p.triage] || 0) + 1;
+    return acc;
+  }, { RED: 0, AMBER: 0, GREEN: 0 });
+
+  // "Waiting" = queue patients the doctor hasn't opened/consulted yet. Once a
+  // patient's current visit is consulted (it has consulted_at / a doctor), they
+  // still appear in the tree for reference but count as "seen", not "waiting".
+  const isConsulted = p => !!(p.latest && (p.latest.consulted_at || p.latest.assigned_doctor_id));
+  const waitingCount = patients.filter(p => !isConsulted(p)).length;
+  const seenInQueueCount = patients.length - waitingCount;
+
+  // "Consulted today" count.
+  const todayStr = now.toDateString();
+  const consultedTodayCount = consultedList.filter(s => {
+    const t = s.consulted_at || s.updated_at;
+    return t && new Date(t).toDateString() === todayStr;
+  }).length;
+
+  // Header date/time + time-of-day greeting.
+  const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
+  const dateStr = now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
 
   return (
     <div className="doctor-layout" style={{ display: 'flex', gap: 16, minHeight: '100vh' }}>
       {/* Left Panel */}
       <div style={{ width: 340, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }`}</style>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
-            <h2 style={{ fontSize: 16, color: 'var(--primary)' }}>{doctor.name}</h2>
-            <p style={{ fontSize: 12, color: 'var(--text-light)' }}>{doctor.department} Department</p>
+            <p style={{ fontSize: 11, color: 'var(--text-light)', margin: 0 }}>{greeting},</p>
+            <h2 style={{ fontSize: 16, color: 'var(--primary)', margin: '1px 0' }}>{doctor.name}</h2>
+            <p style={{ fontSize: 12, color: 'var(--text-light)', margin: 0 }}>{doctor.department} Department</p>
+            <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 5 }}>🗓️ {dateStr} · {timeStr}</p>
           </div>
           <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>Logout</button>
         </div>
 
         {/* Tabs */}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
           <button className={`btn ${tab === 'queue' ? 'btn-primary' : 'btn-outline'}`}
             style={{ flex: 1, fontSize: 13, minHeight: 36 }} onClick={() => switchTab('queue')}>
             Queue ({patients.length})
@@ -298,16 +368,57 @@ function DoctorDashboard({ doctor }) {
           <button className="btn btn-outline" style={{ fontSize: 13, marginBottom: 8 }} onClick={loadQueue}>Refresh</button>
         )}
 
+        {/* Search box (both tabs) — filters by name or phone, with inline ghost prediction */}
+        <div style={{ position: 'relative', marginBottom: 10 }}>
+          <div aria-hidden style={{ position: 'absolute', inset: 0, padding: '8px 10px', border: '1px solid transparent', fontSize: 13, fontFamily: 'inherit', whiteSpace: 'pre', overflow: 'hidden', pointerEvents: 'none', color: '#b0b8c1', boxSizing: 'border-box' }}>
+            <span style={{ visibility: 'hidden' }}>{search}</span>{shadowRemainder}
+          </div>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => {
+              if ((e.key === 'Tab' || e.key === 'ArrowRight') && shadowRemainder) { e.preventDefault(); setSearch(suggestion); }
+              else if (e.key === 'Escape') setSearch('');
+            }}
+            placeholder="🔍 Search name or phone…"
+            style={{ position: 'relative', background: 'transparent', width: '100%', padding: '8px 10px', border: '1px solid #ccc', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+          />
+        </div>
+
         {/* QUEUE tab → patient directory tree (grouped by phone). Each patient
             heading is coloured by the triage of their latest visit, but only if
             that visit was "filled now" (completed within the active window). */}
-        {tab === 'queue' && patients.map(p => {
+        {/* List header — the count for the active tab on the left, and (queue
+            only) the triage breakdown for non-zero levels on the right. Sits
+            directly above the list it describes, with a divider, instead of
+            floating in the middle of the panel. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px 7px', borderBottom: '1px solid #e6ebf1', marginBottom: 10 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+            {tab === 'queue'
+              ? <>{waitingCount} waiting{seenInQueueCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {seenInQueueCount} seen</span>}</>
+              : <>{filteredConsulted.length} consulted{consultedTodayCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {consultedTodayCount} today</span>}</>}
+          </span>
+          {tab === 'queue' && ['RED', 'AMBER', 'GREEN'].some(l => triageCounts[l] > 0) && (
+            <span style={{ display: 'inline-flex', gap: 9, fontSize: 12, flexShrink: 0 }}>
+              {['RED', 'AMBER', 'GREEN'].filter(l => triageCounts[l] > 0).map(l => (
+                <span key={l} title={l === 'RED' ? 'Emergency' : l === 'AMBER' ? 'Priority' : 'Routine'}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: TRIAGE_COLORS[l], fontWeight: 700 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: TRIAGE_COLORS[l], display: 'inline-block' }} />
+                  {triageCounts[l]}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+
+        {tab === 'queue' && !queueLoaded && <SkeletonRows n={4} />}
+        {tab === 'queue' && queueLoaded && filteredPatients.map(p => {
           const isOpen = !!expanded[p.phone]; // collapsed until clicked, so "NEW" shows first
           const headColor = p.triage ? TRIAGE_COLORS[p.triage] : null;
           return (
             <div key={p.phone} style={{ marginBottom: 8 }}>
               {/* Patient heading */}
-              <div onClick={() => { markSeen(p.latest.id); setExpanded(e => ({ ...e, [p.phone]: !isOpen })); }}
+              <div onClick={() => setExpanded(e => ({ ...e, [p.phone]: !isOpen }))}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '8px 10px', borderRadius: 8, background: '#fff', borderLeft: `4px solid ${headColor || 'transparent'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                 <div style={{ flex: 1 }}>
                   <p style={{ fontWeight: 700, fontSize: 14, color: headColor || 'var(--text)' }}>{p.name}</p>
@@ -331,7 +442,7 @@ function DoctorDashboard({ doctor }) {
                     const isSel = selected?.id === v.id;
                     const meds = v.prescription_items || [];
                     return (
-                      <div key={v.id} onClick={() => selectSession(v)}
+                      <div key={v.id} onClick={() => { markSeen(v.id); selectSession(v); }}
                         style={{ padding: '6px 8px', borderRadius: 6, cursor: 'pointer', marginBottom: 4,
                           background: isSel ? '#EAF2F8' : (isFilledNow ? '#FEF9E7' : 'transparent'),
                           border: isSel ? '2px solid var(--secondary)' : (isFilledNow ? `1px solid ${TRIAGE_COLORS[v.triage_level] || '#ccc'}` : '1px solid transparent') }}>
@@ -364,19 +475,27 @@ function DoctorDashboard({ doctor }) {
             </div>
           );
         })}
-        {tab === 'queue' && patients.length === 0 && (
-          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>No patients yet</p>
+        {tab === 'queue' && queueLoaded && filteredPatients.length === 0 && (
+          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
+            {q ? `No patients match “${search.trim()}”` : 'No patients yet'}
+          </p>
         )}
 
-        {/* CONSULTED tab → one row per patient (their latest consulted visit) */}
-        {tab === 'consulted' && consultedLatest.map(s => (
+        {tab === 'consulted' && !consultedLoaded && <SkeletonRows n={4} />}
+
+        {/* CONSULTED tab → every consulted visit as its own individual entry,
+            each with that visit's own triage colour, newest-consult first. */}
+        {tab === 'consulted' && consultedLoaded && filteredConsulted.map(s => (
           <div key={s.id} className="queue-item" onClick={() => selectSession(s)}
             style={{ border: selected?.id === s.id ? '2px solid var(--secondary)' : 'none' }}>
             {s.triage_level && <TriageBadge level={s.triage_level} />}
             <div style={{ flex: 1 }}>
               <p style={{ fontWeight: 600, fontSize: 14 }}>{s.patient_name || 'Unregistered'}</p>
               <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
-                {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · {s.state} · #{s.queue_slot || '-'}
+                {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
+                🕒 Consulted: {fmtVisitDate(s.consulted_at || s.updated_at)}
               </p>
               {s.doctor_feedback && (
                 <span style={{ fontSize: 10, background: s.doctor_feedback === 'accurate' ? '#D5F5E3' : '#FADBD8',
@@ -387,14 +506,26 @@ function DoctorDashboard({ doctor }) {
             </div>
           </div>
         ))}
-        {tab === 'consulted' && consultedLatest.length === 0 && (
-          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>No consulted patients yet</p>
+        {tab === 'consulted' && consultedLoaded && filteredConsulted.length === 0 && (
+          <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
+            {q ? `No consulted entries match “${search.trim()}”` : 'No consulted patients yet'}
+          </p>
         )}
       </div>
 
       {/* Right Panel */}
       <div style={{ flex: 1, background: 'var(--card-bg)', borderRadius: 16, padding: 24, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
-        {!selected && <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a patient from the {tab}</p>}
+        {!selected && (
+          <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
+            <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'queue' ? '🩺' : '📋'}</div>
+            <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: '0 0 6px' }}>No patient selected</p>
+            <p style={{ fontSize: 13, margin: 0 }}>
+              {tab === 'queue'
+                ? 'Pick a patient from the queue to view their pre-consult report.'
+                : 'Pick a consulted visit to review its report and prescription.'}
+            </p>
+          </div>
+        )}
 
         {selected && (
           <>
@@ -447,14 +578,15 @@ function DoctorDashboard({ doctor }) {
                 style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
                 <div onClick={e => e.stopPropagation()}
                   style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 440, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}>
-                  <h3 style={{ color: '#E74C3C', marginBottom: 12, fontSize: 18 }}>Delete patient entry?</h3>
+                  <h3 style={{ color: '#E74C3C', marginBottom: 12, fontSize: 18 }}>Remove patient entry?</h3>
                   <p style={{ fontSize: 14, lineHeight: 1.55, marginBottom: 16, color: 'var(--text)' }}>
-                    This permanently deletes <strong>{selected.patient_name}</strong>'s entry and all associated
-                    data — answers, vitals, uploaded documents, and the generated report. <strong>This cannot be undone.</strong>
+                    This removes <strong>{selected.patient_name}</strong> from the active dashboard (Queue) and from
+                    the patient's previous-visit history. If this visit was consulted, it <strong>stays in your
+                    Consulted history</strong> for the record — so you keep what they were seen for.
                   </p>
                   <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, marginBottom: 18, cursor: 'pointer' }}>
                     <input type="checkbox" checked={deleteAck} onChange={e => setDeleteAck(e.target.checked)} style={{ marginTop: 2 }} />
-                    <span>I understand this permanently deletes all data for this patient.</span>
+                    <span>I understand this removes the patient from the active dashboard.</span>
                   </label>
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                     <button className="btn btn-outline" style={{ fontSize: 13, padding: '8px 16px' }}
@@ -463,7 +595,7 @@ function DoctorDashboard({ doctor }) {
                     </button>
                     <button onClick={handleDelete} disabled={!deleteAck || deleting}
                       style={{ background: deleteAck ? '#E74C3C' : '#ccc', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: deleteAck && !deleting ? 'pointer' : 'not-allowed' }}>
-                      {deleting ? 'Deleting…' : 'Delete Permanently'}
+                      {deleting ? 'Removing…' : 'Remove from Dashboard'}
                     </button>
                   </div>
                 </div>

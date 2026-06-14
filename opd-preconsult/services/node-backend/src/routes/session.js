@@ -69,6 +69,7 @@ router.post('/register', authMiddleware, async (req, res) => {
         WHERE patient_phone = $1
           AND id <> $2
           AND state = 'COMPLETE'
+          AND removed_at IS NULL
         ORDER BY created_at DESC
         LIMIT 5`,
       [patient_phone, session_id]
@@ -78,7 +79,8 @@ router.post('/register', authMiddleware, async (req, res) => {
          FROM sessions
         WHERE patient_phone = $1
           AND id <> $2
-          AND state = 'COMPLETE'`,
+          AND state = 'COMPLETE'
+          AND removed_at IS NULL`,
       [patient_phone, session_id]
     );
 
