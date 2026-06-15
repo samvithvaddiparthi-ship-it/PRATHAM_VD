@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bhashini STT Test Lab</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; margin: 0;
+      display: flex; min-height: 100vh; align-items: center; justify-content: center;
+    }
+    .card { background: #1e293b; border-radius: 16px; padding: 32px; width: 100%; max-width: 560px; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .sub { color: #94a3b8; font-size: 13px; margin-bottom: 22px; }
+    label.fld { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+    select {
+      width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #334155;
+      background: #0f172a; color: #e2e8f0; font-size: 15px; margin-bottom: 18px;
+    }
+    button {
+      border: none; border-radius: 10px; padding: 14px 24px; font-size: 16px;
+      font-weight: 600; cursor: pointer; transition: .15s; width: 100%;
+    }
+    .rec { background: #f97316; color: #fff; }
+    .rec:hover { background: #ea580c; }
+    .recording { background: #dc2626; color: #fff; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .65; } }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .status { margin: 18px 0 8px; font-size: 13px; color: #94a3b8; min-height: 18px; }
+    .result {
+      background: #0f172a; border: 1px solid #334155; border-radius: 10px;
+      padding: 16px; margin-top: 12px; min-height: 80px; font-size: 20px; line-height: 1.6;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .meta { display: flex; gap: 16px; margin-top: 12px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
+    .meta b { color: #cbd5e1; }
+    .warn { background: #7c2d12; color: #fed7aa; border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🪔 Bhashini STT Test Lab</h1>
+    <div class="sub">Record speech, transcribe via Bhashini ASR. Regional Indian languages.</div>
+
+    <div id="keyWarn" class="warn" style="display:none;">
+      ⚠ Bhashini inference key not configured — set BHASHINI_INFERENCE_API_KEY in bhashini-lab/.env
+    </div>
+
+    <label class="fld" for="lang">Language</label>
+    <select id="lang"><option>Loading…</option></select>
+
+    <button id="recBtn" class="rec">● Start recording</button>
+    <div class="status" id="status">Pick a language and record.</div>
+
+    <div class="result" id="result" dir="auto">Your transcript will appear here.</div>
+    <div class="meta" id="meta" style="display:none;">
+      <span>Language: <b id="mLang">—</b></span>
+      <span>Service: <b id="mSvc">—</b></span>
+      <span>Latency: <b id="mMs">—</b></span>
+    </div>
+  </div>
+
+  <script>
+    const langSel = document.getElementById('lang');
+    const recBtn = document.getElementById('recBtn');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    const metaEl = document.getElementById('meta');
+    const keyWarn = document.getElementById('keyWarn');
+
+    let mediaRecorder = null, chunks = [], recording = false;
+
+    (async function init() {
+      try {
+        const { languages, keys_configured } = await (await fetch('/languages')).json();
+        langSel.innerHTML = '';
+        languages.forEach(l => {
+          const o = document.createElement('option');
+          o.value = l.code; o.textContent = l.label;
+          langSel.appendChild(o);
+        });
+        langSel.value = 'hi';
+        if (!keys_configured) keyWarn.style.display = 'block';
+      } catch {
+        langSel.innerHTML = '<option>Failed to load</option>';
+      }
+    })();
+
+    recBtn.addEventListener('click', () => recording ? stop() : start());
+
+    async function start() {
+      try {
+        // Cleaner audio = the single biggest accuracy lever for a hosted ASR.
+        // Ask the browser to denoise, cancel echo, auto-level gain, and capture
+        // mono at 16 kHz (what Bhashini wants — avoids a lossy downsample later).
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        mediaRecorder = new MediaRecorder(stream, {
+          mimeType: 'audio/webm;codecs=opus',
+          audioBitsPerSecond: 128000,
+        });
+        chunks = [];
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = onStop;
+        mediaRecorder.start();
+        recording = true;
+        recBtn.textContent = '■ Stop recording';
+        recBtn.classList.replace('rec', 'recording');
+        statusEl.textContent = 'Recording… speak now.';
+      } catch (err) {
+        statusEl.textContent = 'Microphone error: ' + err.message;
+      }
+    }
+
+    function stop() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+      recording = false;
+      recBtn.textContent = '● Start recording';
+      recBtn.classList.replace('recording', 'rec');
+    }
+
+    async function onStop() {
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const lang = langSel.value;
+
+      recBtn.disabled = true; langSel.disabled = true;
+      statusEl.textContent = 'Transcribing via Bhashini…';
+      resultEl.textContent = '…'; metaEl.style.display = 'none';
+
+      const form = new FormData();
+      form.append('file', new File([blob], 'rec.webm', { type: 'audio/webm' }));
+      form.append('lang', lang);
+
+      try {
+        const res = await fetch('/transcribe', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+        resultEl.textContent = data.transcript || '(empty — speak louder/longer)';
+        document.getElementById('mLang').textContent = data.lang;
+        document.getElementById('mSvc').textContent = data.service_id;
+        document.getElementById('mMs').textContent = data.ms + ' ms';
+        metaEl.style.display = 'flex';
+        statusEl.textContent = 'Done.';
+      } catch (err) {
+        resultEl.textContent = '';
+        statusEl.textContent = 'Failed: ' + err.message;
+      } finally {
+        recBtn.disabled = false; langSel.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
