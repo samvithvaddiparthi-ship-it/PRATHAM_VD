@@ -25,10 +25,10 @@ from PIL import Image
 HERE = Path(__file__).parent
 
 # Cap the longest image edge before extraction. VLM cost scales with image
-# tokens, so a full-res phone photo is slow; 1600px keeps printed text crisp
-# while cutting vision tokens (also eases VRAM pressure / CPU spill). Bump this
-# up if you find accuracy drops on dense documents.
-OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "1600"))
+# tokens. 1536px is the sweet spot: fast on the 3B (fully GPU-resident) yet
+# detailed enough to read messy handwriting accurately. Raise it (e.g. 2048)
+# for maximum detail on hard handwriting; lower it (1280) for more speed.
+OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "1536"))
 
 import engines
 

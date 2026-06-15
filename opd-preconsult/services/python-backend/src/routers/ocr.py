@@ -130,8 +130,15 @@ Return ONLY a valid JSON object. No markdown fences, no explanation, nothing out
   "doctor_name": "name or null",
   "lab_name": "lab or hospital name or null",
   "report_date": "date string if visible or null",
-  "clinical_notes": "any other clinically relevant text not captured above or null"
-}"""
+  "clinical_notes": "any other clinically relevant text not captured above or null",
+  "confidence": 0.0
+}
+
+For "confidence", return a number between 0.0 and 1.0 expressing how confident you are that the
+extraction above is accurate and complete: 1.0 = the document was fully legible and you are certain
+of every value; ~0.6-0.8 = mostly legible but a few fields were unclear or inferred; below 0.5 =
+poor legibility / significant guessing. Base this on the IMAGE legibility and your certainty, NOT
+on how the text was typed."""
 
 
 # ── Image preprocessing ───────────────────────────────────────────────────────
@@ -307,6 +314,16 @@ async def process_document(
 
     if llm_result:
         doc_type = llm_result.get("doc_type") or classify_document(raw_text)
+        # Displayed confidence must reflect the AI's certainty about the
+        # extraction — NOT Tesseract's character score, which is meaningless for
+        # handwriting the vision model read perfectly. Use the model's
+        # self-reported confidence; if it gave none, assume a solid default since
+        # the AI extraction did succeed.
+        try:
+            display_confidence = max(0.0, min(1.0, float(llm_result.get("confidence"))))
+        except (TypeError, ValueError):
+            display_confidence = 0.85
+        confidence_source = "ai"
         structured = {
             "doc_type": doc_type,
             "medications":            llm_result.get("medications") or [],
@@ -318,16 +335,23 @@ async def process_document(
             "report_date":            llm_result.get("report_date"),
             "clinical_notes":         llm_result.get("clinical_notes"),
             "extraction_source":      extraction_source,
+            "confidence_source":      confidence_source,
         }
     else:
-        # Regex fallback — no vision LLM configured
+        # Regex fallback — no vision LLM configured. Here the Tesseract score is
+        # the only signal we have, so it's appropriate to show it.
         doc_type = classify_document(raw_text)
+        display_confidence = round(avg_confidence, 3)
+        confidence_source = "text_scan"
         structured = {
             "doc_type":          doc_type,
             "medications":       extract_medications(raw_text),
             "lab_values":        extract_lab_values(raw_text),
             "extraction_source": "regex_fallback",
+            "confidence_source": confidence_source,
         }
+
+    display_confidence = round(display_confidence, 3)
 
     # Persist to DB
     doc_id = None
@@ -335,7 +359,7 @@ async def process_document(
         rows = execute(
             """INSERT INTO session_documents (session_id, doc_type, ocr_raw, ocr_structured, ocr_confidence, patient_confirmed)
                VALUES (%s, %s, %s, %s, %s, false) RETURNING id""",
-            (session_id, doc_label or doc_type, raw_text.strip(), json.dumps(structured), round(avg_confidence, 3)),
+            (session_id, doc_label or doc_type, raw_text.strip(), json.dumps(structured), display_confidence),
         )
         if rows:
             doc_id = str(rows[0]['id'])
@@ -344,7 +368,8 @@ async def process_document(
         'doc_id':     doc_id,
         'raw_text':   raw_text.strip(),
         'structured': structured,
-        'confidence': round(avg_confidence, 3),
+        'confidence': display_confidence,
+        'confidence_source': confidence_source,
     }
 
 

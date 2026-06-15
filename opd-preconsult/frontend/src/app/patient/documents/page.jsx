@@ -106,8 +106,11 @@ export default function Documents() {
                   <span style={{ fontWeight: 600, fontSize: 13, textTransform: 'capitalize' }}>
                     {doc.type.replace('_', ' ')}
                   </span>
-                  <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
-                    Confidence: {Math.round((doc.confidence || 0) * 100)}%
+                  <span style={{
+                    fontSize: 11, fontWeight: 600,
+                    color: (doc.confidence || 0) >= 0.8 ? '#1E8449' : (doc.confidence || 0) >= 0.5 ? '#B9770E' : '#C0392B',
+                  }}>
+                    {(doc.confidence_source || doc.structured?.confidence_source) === 'text_scan' ? 'Text-scan confidence' : 'AI confidence'}: {Math.round((doc.confidence || 0) * 100)}%
                   </span>
                   {doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ Confirmed</span>}
                 </div>

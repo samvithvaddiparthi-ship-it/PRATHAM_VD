@@ -155,6 +155,21 @@
 
     function esc(v) { return (v === null || v === undefined) ? '—' : String(v); }
 
+    // Flatten any value (string / array / object) into readable text so the model
+    // returning objects (e.g. investigations or notes as {name:...}) never shows
+    // up as "[object Object]".
+    function toText(v) {
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'string') return v;
+      if (Array.isArray(v)) return v.map(toText).filter(Boolean).join(', ');
+      if (typeof v === 'object') {
+        const pick = v.name || v.test || v.title || v.investigation || v.text;
+        if (pick) return toText(pick);
+        return Object.values(v).map(toText).filter(Boolean).join(' — ');
+      }
+      return String(v);
+    }
+
     function renderStructured(s) {
       if (!s) { rendered.innerHTML = '<p style="color:#f87171">Model did not return valid JSON — see raw output below.</p>'; return; }
       let html = '';
@@ -178,13 +193,13 @@
       }
 
       const extras = [];
-      if (s.diagnosis) extras.push(['Diagnosis', s.diagnosis]);
-      if (s.doctor_name) extras.push(['Doctor', s.doctor_name]);
-      if (s.lab_name) extras.push(['Lab / Hospital', s.lab_name]);
-      if (s.report_date) extras.push(['Date', s.report_date]);
+      if (s.diagnosis) extras.push(['Diagnosis', toText(s.diagnosis)]);
+      if (s.doctor_name) extras.push(['Doctor', toText(s.doctor_name)]);
+      if (s.lab_name) extras.push(['Lab / Hospital', toText(s.lab_name)]);
+      if (s.report_date) extras.push(['Date', toText(s.report_date)]);
       if (Array.isArray(s.investigations_ordered) && s.investigations_ordered.length)
-        extras.push(['Investigations', s.investigations_ordered.join(', ')]);
-      if (s.clinical_notes) extras.push(['Notes', s.clinical_notes]);
+        extras.push(['Investigations', toText(s.investigations_ordered)]);
+      if (s.clinical_notes) extras.push(['Notes', toText(s.clinical_notes)]);
       if (extras.length) {
         html += '<h3>Other</h3><table>';
         extras.forEach(([k, v]) => { html += `<tr><th>${k}</th><td>${esc(v)}</td></tr>`; });

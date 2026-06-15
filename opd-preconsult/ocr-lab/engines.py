@@ -29,7 +29,10 @@ except Exception:
     pass
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OCR_LOCAL_MODEL = os.getenv("OCR_LOCAL_MODEL", "qwen2.5vl:7b")
+# Default to 3B: fully GPU-resident on an 8GB card (fast, ~7s) and accurate on
+# handwriting at 1536px. Use 7B (OCR_LOCAL_MODEL=qwen2.5vl:7b) for max accuracy
+# on the hardest documents, accepting higher latency from CPU spill.
+OCR_LOCAL_MODEL = os.getenv("OCR_LOCAL_MODEL", "qwen2.5vl:3b")
 
 
 # ── Local engine (Ollama VLM) ────────────────────────────────────────────────
@@ -55,7 +58,11 @@ def extract_local(image_bytes: bytes, mime: str):
         "stream": False,
         "format": "json",          # force valid JSON output
         "keep_alive": -1,          # keep the model resident — no reload between runs
-        "options": {"temperature": 0.1, "num_predict": 4096},
+        # num_ctx: the long extraction prompt + a 2048px image is ~4800 tokens,
+        # which overflows Ollama's default 4096 context (causes HTTP 400). Give it
+        # a roomy window. num_predict capped at 2048 (the JSON output is small) so
+        # prompt + generation comfortably fit inside num_ctx.
+        "options": {"temperature": 0.1, "num_predict": 2048, "num_ctx": int(os.getenv("OCR_NUM_CTX", "8192"))},
     }
     with httpx.Client(timeout=300) as client:
         r = client.post(f"{OLLAMA_URL}/api/generate", json=payload)
