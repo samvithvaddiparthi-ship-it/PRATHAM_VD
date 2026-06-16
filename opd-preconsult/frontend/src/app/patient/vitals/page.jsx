@@ -13,6 +13,7 @@ export default function Vitals() {
   const [loading, setLoading] = useState(false);
   const [requiredVitals, setRequiredVitals] = useState([]);
   const [requiredTests, setRequiredTests] = useState([]);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
@@ -42,6 +43,7 @@ export default function Vitals() {
   // nurse can record the values later without the patient waiting here.
   async function finish(data) {
     setLoading(true);
+    setError('');
     const sessionId = sessionStorage.getItem('session_id');
     try {
       await api.submitVitals(sessionId, data);
@@ -49,7 +51,7 @@ export default function Vitals() {
       await api.generateReport(sessionId);  // also sets state = COMPLETE
       router.push('/patient/done');
     } catch (err) {
-      alert(err.message);
+      setError('Could not submit: ' + (err.message || 'Unknown error') + '. Please try again.');
       setLoading(false);
     }
   }
@@ -109,6 +111,11 @@ export default function Vitals() {
         ))}
 
         <div style={{ flex: 1 }} />
+        {error && (
+          <div style={{ background: '#FADBD8', color: '#C0392B', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
+            {error}
+          </div>
+        )}
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? 'Generating Report...' : t('submit', lang)}
         </button>

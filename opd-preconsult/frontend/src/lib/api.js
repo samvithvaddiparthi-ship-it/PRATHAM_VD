@@ -97,6 +97,9 @@ export const api = {
   checkInteractions: (data) => apiFetch('/api/prescription/check-interactions', { method: 'POST', body: JSON.stringify(data) }),
   checkBulkInteractions: (data) => apiFetch('/api/prescription/check-bulk', { method: 'POST', body: JSON.stringify(data) }),
 
+  // Drug formulary (autocomplete list — single source of truth in the backend)
+  getDrugs: () => apiFetch('/api/drugs'),
+
   // Scribe
   transcribeAudio: async (file, sessionId) => {
     const formData = new FormData();

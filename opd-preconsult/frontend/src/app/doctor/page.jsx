@@ -4,6 +4,8 @@ import QRCode from 'qrcode';
 import { api, setToken } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
+import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { useToast } from '../../components/ui/Toast';
 
 const TRIAGE_COLORS = { RED: '#E74C3C', AMBER: '#F39C12', GREEN: '#27AE60' };
 const TRIAGE_SEVERITY = { RED: 0, AMBER: 1, GREEN: 2 };
@@ -133,6 +135,9 @@ function DoctorDashboard({ doctor }) {
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
   const [rightTab, setRightTab] = useState('report'); // report | prescribe | scribe
+  const [feedbackGiven, setFeedbackGiven] = useState(null); // { id, val } — inline report-accuracy confirmation
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
   const [confirmDelete, setConfirmDelete] = useState(false); // delete confirmation modal
   const [deleteAck, setDeleteAck] = useState(false);     // "I understand" checkbox
@@ -221,11 +226,19 @@ function DoctorDashboard({ doctor }) {
 
   async function handleUnassign() {
     if (!selected) return;
-    if (!confirm('Release this patient back to the unassigned pool?')) return;
-    await api.doctorUnassign(selected.id);
-    setSelected(null);
-    setReport(null);
-    loadQueue();
+    if (!(await confirm({
+      title: 'Release this patient?',
+      message: 'This returns the patient to the unassigned pool so another doctor can pick them up.',
+      confirmLabel: 'Release',
+    }))) return;
+    try {
+      await api.doctorUnassign(selected.id);
+      setSelected(null);
+      setReport(null);
+      loadQueue();
+    } catch (err) {
+      toast('Release failed: ' + (err.message || 'unknown error'), 'error');
+    }
   }
 
   async function handleReassign(targetId) {
@@ -250,7 +263,7 @@ function DoctorDashboard({ doctor }) {
       loadQueue();
       loadConsulted();
     } catch (err) {
-      alert('Delete failed: ' + (err.message || 'unknown error'));
+      toast('Delete failed: ' + (err.message || 'unknown error'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -258,8 +271,12 @@ function DoctorDashboard({ doctor }) {
 
   async function handleFeedback(val) {
     if (!selected) return;
-    await api.submitFeedback(selected.id, val);
-    alert('Feedback submitted');
+    try {
+      await api.submitFeedback(selected.id, val);
+      setFeedbackGiven({ id: selected.id, val });
+    } catch {
+      setFeedbackGiven({ id: selected.id, val: 'error' });
+    }
   }
 
   function handleLogout() {
@@ -339,6 +356,8 @@ function DoctorDashboard({ doctor }) {
 
   return (
     <div className="doctor-layout" style={{ display: 'flex', gap: 16, minHeight: '100vh' }}>
+      {dialog}
+      {toastView}
       {/* Left Panel */}
       <div style={{ width: 340, flexShrink: 0 }}>
         <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }`}</style>
@@ -631,10 +650,30 @@ function DoctorDashboard({ doctor }) {
                       <ReactMarkdown>{report.report_md}</ReactMarkdown>
                     </div>
                     {tab === 'queue' && (
-                      <div style={{ display: 'flex', gap: 12, marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
-                        <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
-                        <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
-                          onClick={() => handleFeedback('inaccurate')}>Incorrect History</button>
+                      <div style={{ marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
+                        {feedbackGiven?.id === selected?.id ? (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                              background: feedbackGiven.val === 'accurate' ? '#D5F5E3' : feedbackGiven.val === 'error' ? '#FADBD8' : '#FCF3CF',
+                              color: feedbackGiven.val === 'accurate' ? '#1E8449' : feedbackGiven.val === 'error' ? '#C0392B' : '#B9770E',
+                            }}>
+                              {feedbackGiven.val === 'accurate' ? '✓ Marked as accurate — thank you'
+                                : feedbackGiven.val === 'error' ? '⚠ Couldn’t save — please try again'
+                                : '✓ Flagged as incorrect history — thank you'}
+                            </span>
+                            <button onClick={() => setFeedbackGiven(null)}
+                              style={{ background: 'none', border: 'none', color: 'var(--text-light)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+                              {feedbackGiven.val === 'error' ? 'Retry' : 'Change'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 12 }}>
+                            <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
+                            <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
+                              onClick={() => handleFeedback('inaccurate')}>Incorrect History</button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
@@ -658,35 +697,152 @@ function DoctorDashboard({ doctor }) {
   );
 }
 
+// Common-OPD formulary (generic names), alphabetical. Kept in sync with the
+// backend's drug_data.GENERIC_DRUGS (the source of truth for interactions and
+// brand→generic OCR normalization).
 const DRUG_LIST = [
-  "warfarin","acenocoumarol","rivaroxaban","apixaban","heparin",
-  "metoprolol","atenolol","propranolol","carvedilol","bisoprolol",
-  "amlodipine","nifedipine","diltiazem","verapamil",
-  "enalapril","ramipril","lisinopril","telmisartan","losartan","olmesartan",
-  "furosemide","torsemide","spironolactone","hydrochlorothiazide",
-  "aspirin","clopidogrel","ticagrelor","prasugrel",
-  "atorvastatin","rosuvastatin","simvastatin",
-  "metformin","glipizide","glimepiride","sitagliptin","vildagliptin",
-  "empagliflozin","dapagliflozin","canagliflozin","insulin","pioglitazone",
-  "digoxin","amiodarone","ivabradine","nitroglycerin","isosorbide",
-  "pantoprazole","omeprazole","rabeprazole",
-  "paracetamol","ibuprofen","diclofenac",
-  "levothyroxine","carbimazole",
-  "prednisolone","dexamethasone","methylprednisolone",
-  "azithromycin","amoxicillin","ciprofloxacin","ceftriaxone",
-  "montelukast","salbutamol","budesonide",
+  "acarbose","aceclofenac","acenocoumarol","alprazolam","ambroxol","amiodarone","amitriptyline",
+  "amlodipine","amoxicillin","ampicillin","apixaban","aspirin","atenolol","atorvastatin",
+  "azithromycin","bisoprolol","budesonide","calcium","canagliflozin","carbimazole","carvedilol",
+  "cefixime","ceftriaxone","cefuroxime","cephalexin","cetirizine","chlorpheniramine",
+  "chlorthalidone","cholecalciferol","cilnidipine","ciprofloxacin","clarithromycin","clindamycin",
+  "clonazepam","clopidogrel","cloxacillin","cotrimoxazole","dabigatran","dapagliflozin",
+  "deflazacort","dexamethasone","diclofenac","dicyclomine","digoxin","diltiazem","domperidone",
+  "doxycycline","empagliflozin","enalapril","enoxaparin","erythromycin","escitalopram",
+  "esomeprazole","etoricoxib","ezetimibe","famotidine","fenofibrate","ferrous sulfate",
+  "fexofenadine","folic acid","formoterol","furosemide","gabapentin","gliclazide","glimepiride",
+  "glipizide","guaifenesin","heparin","hydrochlorothiazide","hydrocortisone","hydroxyzine",
+  "ibuprofen","indapamide","insulin","isosorbide","ivabradine","ketorolac","levocetirizine",
+  "levofloxacin","levosalbutamol","levothyroxine","linagliptin","lisinopril","loratadine",
+  "losartan","mefenamic","metformin","methylcobalamin","methylprednisolone","metoclopramide",
+  "metoprolol","metronidazole","montelukast","naproxen","nebivolol","nifedipine","nimesulide",
+  "nitrofurantoin","nitroglycerin","norfloxacin","ofloxacin","olmesartan","omeprazole",
+  "ondansetron","ornidazole","ors","pantoprazole","paracetamol","perindopril","pioglitazone",
+  "prasugrel","prednisolone","pregabalin","propranolol","rabeprazole","ramipril","ranitidine",
+  "rivaroxaban","rosuvastatin","salbutamol","serratiopeptidase","sertraline","simvastatin",
+  "sitagliptin","spironolactone","sucralfate","telmisartan","teneligliptin","theophylline",
+  "ticagrelor","torsemide","tramadol","valsartan","verapamil","vildagliptin","vitamin b12",
+  "vitamin d3","warfarin","zinc",
 ];
 
 const FREQ_OPTIONS = ['OD', 'BD', 'TDS', 'QID', 'HS', 'SOS', 'Weekly'];
 
+const titleCase = (s) => (s || '').replace(/\b\w/g, c => c.toUpperCase());
+
+// Stable per-row IDs so React keys prescription/med rows by identity, not index
+// (keying by index misaligns input state when a middle row is deleted/reordered).
+let _rxSeq = 0;
+const rxUid = () => `rx${Date.now().toString(36)}${(_rxSeq++).toString(36)}`;
+const makeItem = (extra = {}) => ({ id: rxUid(), drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '', ...extra });
+
+// Keep only the leading dose token, dropping composition/ingredient text the OCR
+// sometimes captures: "625mg (500mg Amoxycillin + 125mg Clavulanate)" -> "625mg",
+// "400mg Vitamin C + 7.5mg Zinc" -> "400mg". Falls back to the trimmed original
+// when there's no recognizable dose token (e.g. a "1-0-1" schedule).
+const DOSE_TOKEN_RE = /\d+(?:\.\d+)?\s*(?:mg|mcg|µg|g|gm|ml|iu|units?|tablets?|tabs?|capsules?|caps?|drops?|puffs?|%)/i;
+function primaryDose(s) {
+  if (!s) return '';
+  const m = String(s).match(DOSE_TOKEN_RE);
+  return m ? m[0].replace(/\s+/g, '') : String(s).trim();
+}
+
+// Searchable drug dropdown: filters DRUG_LIST as you type, supports keyboard
+// (↑/↓/Enter/Esc) and click selection, closes on click-away. Free text is still
+// allowed (whatever is typed is the value) so doctors aren't limited to the list.
+function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const wrapRef = useRef(null);
+
+  const q = (value || '').trim().toLowerCase();
+  const matches = (q
+    ? options.filter(d => d.includes(q))
+    : options
+  ).slice(0, 50);
+
+  // Close when clicking outside the widget.
+  useEffect(() => {
+    function onDocClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  function choose(name) {
+    onChange(titleCase(name));
+    setOpen(false);
+  }
+
+  function onKeyDown(e) {
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { setOpen(true); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, matches.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === 'Enter') {
+      if (open && matches[hi]) { e.preventDefault(); choose(matches[hi]); }
+    } else if (e.key === 'Escape') { setOpen(false); }
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <input className="input" value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); setHi(0); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder} style={style} autoComplete="off" />
+      {open && matches.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
+          background: '#fff', border: '1px solid #D5D8DC', borderRadius: 6,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.12)', maxHeight: 220, overflowY: 'auto', marginTop: 2,
+        }}>
+          {matches.map((d, i) => (
+            <div key={d}
+              onMouseDown={(e) => { e.preventDefault(); choose(d); }}
+              onMouseEnter={() => setHi(i)}
+              style={{
+                padding: '7px 10px', fontSize: 13, cursor: 'pointer',
+                background: i === hi ? '#EBF5FB' : '#fff',
+              }}>
+              {titleCase(d)}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && q && matches.length === 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
+          background: '#fff', border: '1px solid #D5D8DC', borderRadius: 6,
+          padding: '7px 10px', fontSize: 12, color: 'var(--text-light)', marginTop: 2,
+        }}>
+          No match — "{value}" will be used as typed.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PrescriptionPanel({ session, doctor }) {
-  const [items, setItems] = useState([{ drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' }]);
+  const [items, setItems] = useState(() => [makeItem()]);
   const [allergies, setAllergies] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [interactionChecked, setInteractionChecked] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [drugList, setDrugList] = useState(DRUG_LIST); // hardcoded fallback; replaced by /api/drugs
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
 
-  const EMPTY_ITEM = { drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '' };
+  // Fetch the formulary once (single source of truth in the backend). On any
+  // failure we silently keep the bundled DRUG_LIST fallback, so the dropdown
+  // always works even offline.
+  useEffect(() => {
+    let alive = true;
+    api.getDrugs()
+      .then(res => { if (alive && Array.isArray(res?.drugs) && res.drugs.length) setDrugList(res.drugs); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   const draftKey = session?.id ? `rx_draft_${session.id}` : null;
 
   // Persist the in-progress prescription for this patient so it survives tab
@@ -702,7 +858,7 @@ function PrescriptionPanel({ session, doctor }) {
 
   function clearDraft() {
     if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
-    setItems([{ ...EMPTY_ITEM }]);
+    setItems([makeItem()]);
     setNotes('');
     setWarnings([]);
     setInteractionChecked(false);
@@ -802,7 +958,7 @@ function PrescriptionPanel({ session, doctor }) {
 </body></html>`;
 
     const w = window.open('', '_blank', 'width=840,height=1060');
-    if (!w) { alert('Please allow pop-ups to print the prescription.'); return; }
+    if (!w) { toast('Please allow pop-ups to print the prescription.', 'error'); return; }
     w.document.write(html);
     w.document.close();
   }
@@ -819,7 +975,11 @@ function PrescriptionPanel({ session, doctor }) {
         const reportJson = report?.report_json;
         if (reportJson?.medications_from_documents) {
           reportJson.medications_from_documents.forEach(m => {
-            meds.push({ drug_name: m.name || '', dose: m.dose || '', frequency: m.frequency || '', source: 'document', duration: '', instructions: '' });
+            // Prefer the formal/generic name (filled by OCR brand→generic
+            // normalization); keep the original brand as a hint when it differs.
+            const formal = m.generic || m.name || '';
+            const brand = (m.generic && m.name && m.generic.toLowerCase() !== m.name.toLowerCase()) ? m.name : '';
+            meds.push({ id: rxUid(), drug_name: formal, brand, dose: primaryDose(m.dose), frequency: m.frequency || '', source: 'document', duration: '', instructions: '' });
           });
         }
         // Patient-reported from questionnaire answer
@@ -829,7 +989,7 @@ function PrescriptionPanel({ session, doctor }) {
           patientMeds.split(',').forEach(m => {
             const trimmed = m.trim();
             if (trimmed && !meds.some(existing => existing.drug_name.toLowerCase() === trimmed.toLowerCase())) {
-              meds.push({ drug_name: trimmed, dose: '', frequency: '', source: 'patient', duration: '', instructions: '' });
+              meds.push({ id: rxUid(), drug_name: trimmed, dose: '', frequency: '', source: 'patient', duration: '', instructions: '' });
             }
           });
         }
@@ -848,22 +1008,23 @@ function PrescriptionPanel({ session, doctor }) {
       const raw = session?.id ? localStorage.getItem(`rx_draft_${session.id}`) : null;
       if (raw) {
         const draft = JSON.parse(raw);
-        setItems(draft.items?.length ? draft.items : [{ ...EMPTY_ITEM }]);
+        // Ensure every restored row has a stable id (older drafts won't).
+        setItems(draft.items?.length ? draft.items.map(it => ({ ...it, id: it.id || rxUid() })) : [makeItem()]);
         setNotes(draft.notes || '');
         restored = !!(draft.items?.some(i => i.drug_name?.trim()) || (draft.notes || '').trim());
       } else {
-        setItems([{ ...EMPTY_ITEM }]);
+        setItems([makeItem()]);
         setNotes('');
       }
     } catch {
-      setItems([{ ...EMPTY_ITEM }]);
+      setItems([makeItem()]);
       setNotes('');
     }
     setDraftRestored(restored);
   }, [session?.id]);
 
   function addItem() {
-    const updated = [...items, { ...EMPTY_ITEM }];
+    const updated = [...items, makeItem()];
     setItems(updated);
     persistDraft(updated, notes);
   }
@@ -891,12 +1052,12 @@ function PrescriptionPanel({ session, doctor }) {
     const existingNames = new Set(existing.map(i => i.drug_name.trim().toLowerCase()));
     const toAdd = (rx.items || [])
       .filter(it => it.drug_name && !existingNames.has(it.drug_name.trim().toLowerCase()))
-      .map(it => ({
+      .map(it => makeItem({
         drug_name: it.drug_name, dose: it.dose || '', frequency: it.frequency || 'OD',
         duration: it.duration || '', instructions: it.instructions || '',
       }));
     if (!toAdd.length) return;
-    const updated = [...existing, ...toAdd, { ...EMPTY_ITEM }];
+    const updated = [...existing, ...toAdd, makeItem()];
     setItems(updated);
     persistDraft(updated, notes);
     setInteractionChecked(false);
@@ -935,7 +1096,12 @@ function PrescriptionPanel({ session, doctor }) {
     // Check for blocks
     const blocks = warnings.filter(w => w.severity === 'block');
     if (blocks.length > 0) {
-      if (!confirm(`There are ${blocks.length} BLOCKED interaction(s). Proceed anyway?`)) return;
+      if (!(await confirm({
+        title: `${blocks.length} blocked interaction${blocks.length > 1 ? 's' : ''}`,
+        message: 'This prescription has interactions flagged as BLOCKED above. Prescribe anyway only if you have reviewed them and judged it clinically appropriate.',
+        confirmLabel: 'Prescribe anyway',
+        danger: true,
+      }))) return;
     }
 
     setSaving(true);
@@ -950,7 +1116,7 @@ function PrescriptionPanel({ session, doctor }) {
       if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
       setDraftRestored(false);
     } catch (err) {
-      alert('Failed: ' + err.message);
+      setSaveError('Failed to save prescription: ' + (err.message || 'unknown error'));
     } finally {
       setSaving(false);
     }
@@ -964,6 +1130,8 @@ function PrescriptionPanel({ session, doctor }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {dialog}
+      {toastView}
       {/* Allergies */}
       {allergies.length > 0 && (
         <div style={{ background: '#FADBD8', borderRadius: 8, padding: 10, fontSize: 13 }}>
@@ -979,12 +1147,15 @@ function PrescriptionPanel({ session, doctor }) {
             From patient intake (OCR and questionnaire). Edit, delete, or carry forward to prescription.
           </p>
           {currentMeds.map((med, idx) => (
-            <div key={idx} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div key={med.id || idx} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ flex: 2, minWidth: 140 }}>
                 {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
                 <input className="input" value={med.drug_name}
                   onChange={e => { const u = [...currentMeds]; u[idx] = { ...u[idx], drug_name: e.target.value }; setCurrentMeds(u); }}
                   style={{ minHeight: 32, fontSize: 13 }} />
+                {med.brand && (
+                  <div style={{ fontSize: 9, color: 'var(--text-light)', marginTop: 2 }}>written as: {med.brand}</div>
+                )}
               </div>
               <div style={{ flex: 1, minWidth: 60 }}>
                 {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
@@ -1013,9 +1184,9 @@ function PrescriptionPanel({ session, doctor }) {
             const existing = items.filter(i => i.drug_name);
             const toAdd = namedCurrentMeds
               .filter(m => !rxDrugNames.has(m.drug_name.trim().toLowerCase()))
-              .map(m => ({ drug_name: m.drug_name, dose: m.dose, frequency: m.frequency || 'OD', duration: '', instructions: '' }));
+              .map(m => makeItem({ drug_name: m.drug_name, dose: m.dose, frequency: m.frequency || 'OD', duration: '', instructions: '' }));
             if (!toAdd.length) return;
-            const updated = [...existing, ...toAdd, { ...EMPTY_ITEM }];
+            const updated = [...existing, ...toAdd, makeItem()];
             setItems(updated);
             persistDraft(updated, notes);
             setInteractionChecked(false);
@@ -1075,11 +1246,12 @@ function PrescriptionPanel({ session, doctor }) {
         )}
 
         {items.map((item, idx) => (
-          <div key={idx} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div key={item.id} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div style={{ flex: 2, minWidth: 150 }}>
               {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
-              <input className="input" list="drug-list" value={item.drug_name}
-                onChange={e => updateItem(idx, 'drug_name', e.target.value)}
+              <DrugCombobox value={item.drug_name}
+                onChange={v => updateItem(idx, 'drug_name', v)}
+                options={drugList}
                 placeholder="Drug name" style={{ minHeight: 34, fontSize: 13 }} />
             </div>
             <div style={{ flex: 1, minWidth: 70 }}>
@@ -1110,10 +1282,6 @@ function PrescriptionPanel({ session, doctor }) {
             </button>
           </div>
         ))}
-
-        <datalist id="drug-list">
-          {DRUG_LIST.map(d => <option key={d} value={d.charAt(0).toUpperCase() + d.slice(1)} />)}
-        </datalist>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button type="button" onClick={addItem}
@@ -1238,6 +1406,7 @@ function ScribePanel({ session }) {
   const [processing, setProcessing] = useState('');
   const mediaRecorder = useRef(null);
   const audioChunks = useRef([]);
+  const { toast, toastView } = useToast();
 
   useEffect(() => {
     // Load existing SOAP if available
@@ -1260,7 +1429,7 @@ function ScribePanel({ session }) {
       mediaRecorder.current = recorder;
       setRecording(true);
     } catch (err) {
-      alert('Microphone access denied: ' + err.message);
+      toast('Microphone access denied: ' + err.message, 'error');
     }
   }
 
@@ -1283,7 +1452,7 @@ function ScribePanel({ session }) {
           setProcessing('');
         } catch (err) {
           setProcessing('');
-          alert('Transcription failed: ' + err.message);
+          toast('Transcription failed: ' + err.message, 'error');
         }
         resolve();
       };
@@ -1298,7 +1467,7 @@ function ScribePanel({ session }) {
       const result = await api.extractSOAP({ transcript, session_id: session?.id });
       setSoap(result.soap);
     } catch (err) {
-      alert('SOAP extraction failed: ' + err.message);
+      toast('SOAP extraction failed: ' + err.message, 'error');
     }
     setProcessing('');
   }
@@ -1334,6 +1503,7 @@ function ScribePanel({ session }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {toastView}
       <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12, fontSize: 12, color: 'var(--text-light)' }}>
         Record the consultation. Audio is transcribed and discarded (zero-retention). The transcript is processed into SOAP notes.
       </div>

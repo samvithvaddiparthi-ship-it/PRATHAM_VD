@@ -59,7 +59,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
         setValue(prev => prev ? `${prev}\n${result.raw_text.slice(0, 300)}` : result.raw_text.slice(0, 300));
       }
     } catch (err) {
-      alert('Upload failed: ' + (err.message || 'Unknown error'));
+      setInputError('Upload failed: ' + (err.message || 'Unknown error'));
     } finally {
       setUploading(false);
     }

@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
+const { sendServerError } = require('../utils/http');
 
 const router = Router();
 
@@ -21,7 +22,7 @@ router.get('/', async (req, res) => {
     const result = await pool.query(sql, vals);
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -39,7 +40,7 @@ router.post('/', async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -61,7 +62,7 @@ router.post('/:id/respond', async (req, res) => {
     );
     res.json({ status: newStatus });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 

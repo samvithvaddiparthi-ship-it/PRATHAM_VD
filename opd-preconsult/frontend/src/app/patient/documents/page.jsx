@@ -20,6 +20,7 @@ export default function Documents() {
   const [loading, setLoading] = useState(false);
   const [selectedType, setSelectedType] = useState('prescription');
   const [skipWarning, setSkipWarning] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
@@ -33,11 +34,12 @@ export default function Documents() {
     const file = e.target.files[0];
     if (!file) return;
     setLoading(true);
+    setError('');
     try {
       const result = await api.uploadDocument(file, sessionId, selectedType);
       setDocs(prev => [...prev, { ...result, type: selectedType, confirmed: false }]);
     } catch (err) {
-      alert(err.message);
+      setError('Upload failed: ' + (err.message || 'Unknown error'));
     } finally {
       setLoading(false);
       e.target.value = '';
@@ -90,6 +92,12 @@ export default function Documents() {
             style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', top: 0, left: 0, cursor: 'pointer' }}
           />
         </label>
+
+        {error && (
+          <div style={{ background: '#FADBD8', color: '#C0392B', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 12 }}>
+            {error}
+          </div>
+        )}
 
         {/* Uploaded documents list */}
         {docs.length > 0 && (

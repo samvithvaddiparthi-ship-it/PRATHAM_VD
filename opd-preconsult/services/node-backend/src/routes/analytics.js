@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
+const { sendServerError } = require('../utils/http');
 
 const router = Router();
 
@@ -58,7 +59,7 @@ router.get('/summary', async (req, res) => {
     });
   } catch (err) {
     console.error('analytics error:', err);
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 

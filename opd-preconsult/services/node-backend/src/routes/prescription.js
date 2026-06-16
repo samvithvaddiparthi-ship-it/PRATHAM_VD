@@ -2,10 +2,19 @@ const { Router } = require('express');
 const crypto = require('crypto');
 const pool = require('../models/db');
 const { authMiddleware } = require('../middleware/auth');
+const { sendServerError } = require('../utils/http');
 
 const router = Router();
 
 const QR_SECRET = process.env.DEMO_QR_SECRET || 'changeme_qr_secret';
+if (QR_SECRET === 'changeme_qr_secret') {
+  console.warn('[prescription] WARNING: DEMO_QR_SECRET is the default value. Set a strong, secret DEMO_QR_SECRET before any real use — QR prescriptions are otherwise forgeable.');
+}
+
+// Sign a payload for the prescription QR (full HMAC-SHA256, hex).
+function signPayload(payload) {
+  return crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex');
+}
 
 // Create prescription (doctor auth required)
 router.post('/', authMiddleware, async (req, res) => {
@@ -70,7 +79,7 @@ router.post('/', authMiddleware, async (req, res) => {
       issued_at: issuedAt,
     };
     const payload = JSON.stringify(qrData);
-    const signature = crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex').slice(0, 16);
+    const signature = signPayload(payload);
     const qrPayload = Buffer.from(JSON.stringify({ ...qrData, sig: signature })).toString('base64');
 
     await pool.query('UPDATE prescriptions SET qr_payload = $1 WHERE id = $2', [qrPayload, rx.id]);
@@ -78,7 +87,7 @@ router.post('/', authMiddleware, async (req, res) => {
     res.json({ prescription: { ...rx, qr_payload: qrPayload }, items: insertedItems, issued_at: issuedAt });
   } catch (err) {
     console.error('create prescription error:', err);
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -100,7 +109,7 @@ router.get('/session/:session_id', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -112,7 +121,7 @@ router.post('/verify-qr', async (req, res) => {
 
     const decoded = JSON.parse(Buffer.from(qr_payload, 'base64').toString());
     const { sig, ...data } = decoded;
-    const expected = crypto.createHmac('sha256', QR_SECRET).update(JSON.stringify(data)).digest('hex').slice(0, 16);
+    const expected = signPayload(JSON.stringify(data));
 
     if (sig !== expected) {
       return res.json({ valid: false, error: 'Invalid signature' });
@@ -133,7 +142,7 @@ router.get('/allergies/:phone', async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -151,7 +160,7 @@ router.post('/allergies', async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 

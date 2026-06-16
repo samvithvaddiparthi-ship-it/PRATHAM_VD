@@ -1,164 +1,261 @@
 """
-Drug interaction checker — static JSON matrix for common Indian OPD drugs.
-Covers critical interactions for drugs in the KNOWN_DRUGS list.
-"""
+Drug interaction checker for common Indian OPD drugs.
 
-# Drug-drug interactions: {drug_a: {drug_b: {severity, description}}}
-# severity: "block" (hard stop) or "warn" (alert but allow)
+Two layers, both keyed off the shared vocabulary in drug_data.py:
+  1. CLASS_INTERACTIONS — rules between drug CLASSES (e.g. any ACE-inhibitor +
+     any ARB = block). Scales to the whole formulary without hand-listing pairs.
+  2. DRUG_INTERACTIONS  — specific drug-pair rules for cases that aren't a clean
+     class-vs-class rule (e.g. clopidogrel + omeprazole, levothyroxine + PPI).
+
+Every drug name is run through normalize_drug_name() first, so brand names
+written on a prescription (Ecosprin, Telma, Augmentin…) are checked correctly.
+
+POC content — NOT exhaustive and NOT clinically validated. The rules below must
+be reviewed by a clinician before any real-world reliance.
+"""
+from .drug_data import normalize_drug_name, drug_classes
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Class-vs-class rules.
+# Key: frozenset of class names.
+#   - 2 classes {a, b} -> fires when one drug is class a and the other is class b.
+#   - 1 class  {a}     -> fires when BOTH drugs are class a (e.g. dual therapy).
+# ──────────────────────────────────────────────────────────────────────────────
+CLASS_INTERACTIONS = {
+    frozenset({"ace_inhibitor", "arb"}):
+        {"severity": "block", "description": "ACE inhibitor + ARB: increased renal failure and hyperkalemia risk. Avoid combination."},
+    frozenset({"beta_blocker", "nondhp_ccb"}):
+        {"severity": "block", "description": "Beta-blocker + non-DHP CCB (verapamil/diltiazem): severe bradycardia and heart-block risk."},
+
+    frozenset({"ace_inhibitor", "k_sparing"}):
+        {"severity": "warn", "description": "ACE inhibitor + potassium-sparing diuretic: hyperkalemia risk. Monitor potassium."},
+    frozenset({"arb", "k_sparing"}):
+        {"severity": "warn", "description": "ARB + potassium-sparing diuretic: hyperkalemia risk. Monitor potassium."},
+
+    frozenset({"nsaid", "anticoagulant"}):
+        {"severity": "warn", "description": "NSAID + anticoagulant: increased bleeding risk."},
+    frozenset({"nsaid", "antiplatelet"}):
+        {"severity": "warn", "description": "NSAID + antiplatelet: increased bleeding risk."},
+    frozenset({"anticoagulant", "antiplatelet"}):
+        {"severity": "warn", "description": "Anticoagulant + antiplatelet: increased bleeding risk. Monitor."},
+    frozenset({"anticoagulant"}):
+        {"severity": "warn", "description": "Two anticoagulants together: high bleeding risk. Avoid unless intended."},
+    frozenset({"antiplatelet"}):
+        {"severity": "warn", "description": "Dual antiplatelet therapy: increased bleeding risk. Confirm this is intended."},
+
+    frozenset({"nsaid", "ace_inhibitor"}):
+        {"severity": "warn", "description": "NSAID + ACE inhibitor: reduced BP control and renal impairment risk."},
+    frozenset({"nsaid", "arb"}):
+        {"severity": "warn", "description": "NSAID + ARB: reduced BP control and renal impairment risk."},
+    frozenset({"nsaid", "loop_diuretic"}):
+        {"severity": "warn", "description": "NSAID + diuretic: reduced diuretic effect and renal risk ('triple whammy' with ACE/ARB)."},
+    frozenset({"nsaid", "corticosteroid"}):
+        {"severity": "warn", "description": "NSAID + corticosteroid: increased GI ulceration and bleeding risk."},
+    frozenset({"nsaid"}):
+        {"severity": "warn", "description": "Two NSAIDs together: additive GI and renal toxicity. Avoid."},
+
+    frozenset({"macrolide", "statin"}):
+        {"severity": "warn", "description": "Macrolide (clarithromycin/erythromycin) + statin: rhabdomyolysis risk. Consider holding the statin."},
+    frozenset({"nondhp_ccb", "statin"}):
+        {"severity": "warn", "description": "Diltiazem/verapamil + statin: raised statin levels. Limit simvastatin/atorvastatin dose."},
+
+    frozenset({"sulfonylurea", "insulin"}):
+        {"severity": "warn", "description": "Sulfonylurea + insulin: additive hypoglycemia risk. Monitor blood glucose."},
+    frozenset({"sulfonylurea"}):
+        {"severity": "warn", "description": "Two sulfonylureas together: hypoglycemia risk. Avoid duplication."},
+
+    frozenset({"loop_diuretic", "cardiac_glycoside"}):
+        {"severity": "warn", "description": "Loop diuretic-induced hypokalemia increases digoxin toxicity risk. Monitor potassium."},
+    frozenset({"thiazide", "cardiac_glycoside"}):
+        {"severity": "warn", "description": "Thiazide-induced hypokalemia increases digoxin toxicity risk. Monitor potassium."},
+
+    frozenset({"fluoroquinolone", "corticosteroid"}):
+        {"severity": "warn", "description": "Fluoroquinolone + corticosteroid: increased tendon rupture risk."},
+
+    frozenset({"benzodiazepine", "opioid"}):
+        {"severity": "warn", "description": "Benzodiazepine + opioid: additive sedation and respiratory depression. Avoid if possible."},
+
+    frozenset({"ssri", "nsaid"}):
+        {"severity": "warn", "description": "SSRI + NSAID: increased GI bleeding risk."},
+    frozenset({"ssri", "anticoagulant"}):
+        {"severity": "warn", "description": "SSRI + anticoagulant: increased bleeding risk."},
+    frozenset({"ssri", "antiplatelet"}):
+        {"severity": "warn", "description": "SSRI + antiplatelet: increased bleeding risk."},
+    frozenset({"ssri", "tca"}):
+        {"severity": "warn", "description": "SSRI + tricyclic: serotonin toxicity and raised TCA levels. Use caution."},
+
+    frozenset({"macrolide", "antiarrhythmic"}):
+        {"severity": "warn", "description": "Macrolide + amiodarone: additive QT prolongation. Monitor ECG."},
+    frozenset({"fluoroquinolone", "antiarrhythmic"}):
+        {"severity": "warn", "description": "Fluoroquinolone + amiodarone: additive QT prolongation. Monitor ECG."},
+    frozenset({"macrolide", "fluoroquinolone"}):
+        {"severity": "warn", "description": "Two QT-prolonging antibiotics together: additive QT prolongation risk."},
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Specific drug-pair rules (generic names). Used in addition to class rules; a
+# specific rule takes precedence over any class rule for the same pair.
+# Format: {drug_a: {drug_b: {severity, description}}}
+# ──────────────────────────────────────────────────────────────────────────────
 DRUG_INTERACTIONS = {
     "warfarin": {
-        "aspirin": {"severity": "warn", "description": "Increased bleeding risk. Monitor INR closely."},
-        "ibuprofen": {"severity": "warn", "description": "NSAIDs increase bleeding risk with warfarin."},
-        "diclofenac": {"severity": "warn", "description": "NSAIDs increase bleeding risk with warfarin."},
-        "amiodarone": {"severity": "warn", "description": "Amiodarone increases warfarin levels. Reduce warfarin dose."},
-        "clopidogrel": {"severity": "warn", "description": "Dual antithrombotic — increased bleeding risk."},
-        "metronidazole": {"severity": "warn", "description": "Increases warfarin effect. Monitor INR."},
-    },
-    "metformin": {
-        "insulin": {"severity": "warn", "description": "Hypoglycemia risk. Monitor blood glucose closely."},
-        "glipizide": {"severity": "warn", "description": "Combined hypoglycemia risk. Monitor blood glucose."},
-        "glimepiride": {"severity": "warn", "description": "Combined hypoglycemia risk. Monitor blood glucose."},
-    },
-    "enalapril": {
-        "spironolactone": {"severity": "warn", "description": "Risk of hyperkalemia. Monitor potassium levels."},
-        "losartan": {"severity": "block", "description": "ACE inhibitor + ARB: increased renal failure and hyperkalemia risk. Avoid combination."},
-        "telmisartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-        "olmesartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-    },
-    "ramipril": {
-        "spironolactone": {"severity": "warn", "description": "Risk of hyperkalemia. Monitor potassium."},
-        "losartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-        "telmisartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-        "olmesartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-    },
-    "lisinopril": {
-        "spironolactone": {"severity": "warn", "description": "Risk of hyperkalemia."},
-        "losartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
-        "telmisartan": {"severity": "block", "description": "ACE inhibitor + ARB: avoid combination."},
+        "amiodarone": {"severity": "warn", "description": "Amiodarone increases warfarin levels. Reduce warfarin dose and monitor INR."},
+        "metronidazole": {"severity": "warn", "description": "Metronidazole increases warfarin effect. Monitor INR."},
+        "ciprofloxacin": {"severity": "warn", "description": "Ciprofloxacin increases warfarin effect. Monitor INR."},
+        "levothyroxine": {"severity": "warn", "description": "Levothyroxine can increase warfarin effect. Monitor INR."},
     },
     "digoxin": {
-        "amiodarone": {"severity": "warn", "description": "Amiodarone increases digoxin levels. Reduce digoxin dose by 50%."},
+        "amiodarone": {"severity": "warn", "description": "Amiodarone increases digoxin levels. Reduce digoxin dose by ~50%."},
         "verapamil": {"severity": "warn", "description": "Verapamil increases digoxin levels and risk of bradycardia."},
-        "furosemide": {"severity": "warn", "description": "Loop diuretic-induced hypokalemia increases digoxin toxicity risk."},
-        "torsemide": {"severity": "warn", "description": "Loop diuretic-induced hypokalemia increases digoxin toxicity risk."},
-    },
-    "metoprolol": {
-        "verapamil": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia and heart block risk."},
-        "diltiazem": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-    },
-    "atenolol": {
-        "verapamil": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-        "diltiazem": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-    },
-    "propranolol": {
-        "verapamil": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: risk of asystole."},
-        "diltiazem": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-        "insulin": {"severity": "warn", "description": "Beta-blockers mask hypoglycemia symptoms."},
-    },
-    "carvedilol": {
-        "verapamil": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-        "diltiazem": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-    },
-    "bisoprolol": {
-        "verapamil": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
-        "diltiazem": {"severity": "block", "description": "Beta-blocker + non-DHP CCB: severe bradycardia risk."},
     },
     "clopidogrel": {
         "omeprazole": {"severity": "warn", "description": "Omeprazole reduces clopidogrel efficacy. Use pantoprazole instead."},
-        "aspirin": {"severity": "warn", "description": "Dual antiplatelet — increased bleeding risk. Monitor."},
+        "esomeprazole": {"severity": "warn", "description": "Esomeprazole reduces clopidogrel efficacy. Use pantoprazole instead."},
     },
     "ticagrelor": {
-        "aspirin": {"severity": "warn", "description": "Use low-dose aspirin only (75-100mg). Higher doses reduce ticagrelor efficacy."},
+        "aspirin": {"severity": "warn", "description": "Use low-dose aspirin only (75-100mg); higher doses reduce ticagrelor efficacy."},
+    },
+    "levothyroxine": {
+        "pantoprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption. Separate doses by ~4 hours."},
+        "omeprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption. Separate doses by ~4 hours."},
+        "rabeprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption. Separate doses by ~4 hours."},
+        "esomeprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption. Separate doses by ~4 hours."},
+        "calcium": {"severity": "warn", "description": "Calcium reduces levothyroxine absorption. Separate doses by ~4 hours."},
+        "ferrous_sulfate": {"severity": "warn", "description": "Iron reduces levothyroxine absorption. Separate doses by ~4 hours."},
     },
     "simvastatin": {
         "amiodarone": {"severity": "warn", "description": "Limit simvastatin to 20mg/day with amiodarone. Rhabdomyolysis risk."},
-        "diltiazem": {"severity": "warn", "description": "Limit simvastatin to 20mg/day. Rhabdomyolysis risk."},
-        "verapamil": {"severity": "warn", "description": "Limit simvastatin to 20mg/day. Rhabdomyolysis risk."},
-        "azithromycin": {"severity": "warn", "description": "Temporary statin hold during azithromycin course may be considered."},
-    },
-    "ciprofloxacin": {
-        "prednisolone": {"severity": "warn", "description": "Fluoroquinolone + corticosteroid: increased tendon rupture risk."},
-        "dexamethasone": {"severity": "warn", "description": "Fluoroquinolone + corticosteroid: increased tendon rupture risk."},
-        "methylprednisolone": {"severity": "warn", "description": "Fluoroquinolone + corticosteroid: increased tendon rupture risk."},
-        "warfarin": {"severity": "warn", "description": "Ciprofloxacin increases warfarin effect. Monitor INR."},
-    },
-    "levothyroxine": {
-        "pantoprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption. Take levothyroxine 4 hours apart."},
-        "omeprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption."},
-        "rabeprazole": {"severity": "warn", "description": "PPIs reduce levothyroxine absorption."},
-    },
-    "aspirin": {
-        "ibuprofen": {"severity": "warn", "description": "Ibuprofen may reduce cardioprotective effect of aspirin. Take aspirin 30 min before ibuprofen."},
     },
 }
 
-# Common drug-allergy contraindications
-ALLERGY_CONTRAINDICATIONS = {
-    "sulfa": ["furosemide", "hydrochlorothiazide", "glipizide", "glimepiride"],
-    "sulfonamide": ["furosemide", "hydrochlorothiazide", "glipizide", "glimepiride"],
-    "penicillin": ["amoxicillin"],
-    "aspirin": ["aspirin", "diclofenac", "ibuprofen"],
-    "nsaid": ["aspirin", "diclofenac", "ibuprofen"],
-    "ace inhibitor": ["enalapril", "ramipril", "lisinopril"],
-    "statin": ["atorvastatin", "rosuvastatin", "simvastatin"],
-    "beta blocker": ["metoprolol", "atenolol", "propranolol", "carvedilol", "bisoprolol"],
+# Allergy term -> the drug class it contraindicates. Plus direct generic matches.
+ALLERGY_CLASS_MAP = {
+    "sulfa": "sulfonamide",
+    "sulfonamide": "sulfonamide",
+    "sulpha": "sulfonamide",
+    "penicillin": "penicillin",
+    "nsaid": "nsaid",
+    "nsaids": "nsaid",
+    "aspirin": "nsaid",
+    "ace inhibitor": "ace_inhibitor",
+    "ace-inhibitor": "ace_inhibitor",
+    "statin": "statin",
+    "beta blocker": "beta_blocker",
+    "beta-blocker": "beta_blocker",
+    "macrolide": "macrolide",
+    "cephalosporin": "cephalosporin",
+    "fluoroquinolone": "fluoroquinolone",
+    "quinolone": "fluoroquinolone",
 }
+
+
+def _class_rule_for(classes_a: set, classes_b: set):
+    """Best (most severe) class rule between two class sets, or None."""
+    best = None
+    for key, rule in CLASS_INTERACTIONS.items():
+        if len(key) == 1:
+            (c,) = tuple(key)
+            hit = c in classes_a and c in classes_b
+        else:
+            c1, c2 = tuple(key)
+            hit = (c1 in classes_a and c2 in classes_b) or (c2 in classes_a and c1 in classes_b)
+        if hit:
+            if best is None or (rule["severity"] == "block" and best["severity"] != "block"):
+                best = rule
+    return best
+
+
+def _specific_rule_for(generic_a: str, generic_b: str):
+    """Specific drug-pair rule (either direction), or None."""
+    if generic_a in DRUG_INTERACTIONS and generic_b in DRUG_INTERACTIONS[generic_a]:
+        return DRUG_INTERACTIONS[generic_a][generic_b]
+    if generic_b in DRUG_INTERACTIONS and generic_a in DRUG_INTERACTIONS[generic_b]:
+        return DRUG_INTERACTIONS[generic_b][generic_a]
+    return None
 
 
 def check_interactions(drug_name, other_drugs):
-    """Check a drug against a list of other drugs. Returns list of warnings."""
+    """Check a drug against a list of other drugs. Returns a list of warnings.
+    Output shape is unchanged: {drug_a, drug_b, severity, description} using the
+    original names as written (for display)."""
     warnings = []
-    drug_lower = drug_name.lower()
+    generic = normalize_drug_name(drug_name)
+    classes_a = drug_classes(generic)
 
     for other in other_drugs:
-        other_lower = other.lower()
-        if drug_lower == other_lower:
+        other_generic = normalize_drug_name(other)
+        if generic == other_generic:
             continue
 
-        # Check both directions
-        interaction = None
-        if drug_lower in DRUG_INTERACTIONS and other_lower in DRUG_INTERACTIONS[drug_lower]:
-            interaction = DRUG_INTERACTIONS[drug_lower][other_lower]
-        elif other_lower in DRUG_INTERACTIONS and drug_lower in DRUG_INTERACTIONS[other_lower]:
-            interaction = DRUG_INTERACTIONS[other_lower][drug_lower]
+        # Specific pair rule wins; otherwise fall back to class rule.
+        rule = _specific_rule_for(generic, other_generic)
+        if rule is None:
+            rule = _class_rule_for(classes_a, drug_classes(other_generic))
 
-        if interaction:
+        if rule:
             warnings.append({
                 "drug_a": drug_name,
                 "drug_b": other,
-                "severity": interaction["severity"],
-                "description": interaction["description"],
+                "severity": rule["severity"],
+                "description": rule["description"],
             })
 
     return warnings
 
 
-def check_allergies(drug_name, allergies):
-    """Check a drug against patient allergies. Returns list of contraindications."""
+def check_duplicates(drugs):
+    """Flag the same active drug prescribed more than once (e.g. a brand and its
+    generic, or a drug repeated). Returns warnings in the same shape as
+    check_interactions so the frontend renders them identically."""
     warnings = []
-    drug_lower = drug_name.lower()
+    seen = {}
+    for name in drugs:
+        generic = normalize_drug_name(name)
+        if not generic:
+            continue
+        if generic in seen:
+            warnings.append({
+                "drug_a": seen[generic],
+                "drug_b": name,
+                "severity": "warn",
+                "description": f"Same drug prescribed twice ({generic}). Confirm this duplication is intended.",
+            })
+        else:
+            seen[generic] = name
+    return warnings
+
+
+def check_allergies(drug_name, allergies):
+    """Check a drug against patient allergies. Returns a list of contraindications.
+    Output shape unchanged: {drug, allergy, severity, description}."""
+    warnings = []
+    generic = normalize_drug_name(drug_name)
+    classes = drug_classes(generic)
 
     for allergy in allergies:
-        allergy_lower = allergy.lower().strip()
+        allergy_lower = (allergy or "").lower().strip()
+        if not allergy_lower:
+            continue
 
-        # Direct match
-        if allergy_lower == drug_lower:
+        # Direct match against the generic (also matches if the allergy itself is
+        # a brand name, since both sides are normalized).
+        if allergy_lower == generic or normalize_drug_name(allergy_lower) == generic:
             warnings.append({
                 "drug": drug_name,
                 "allergy": allergy,
                 "severity": "block",
-                "description": f"Patient has documented allergy to {allergy}. Do NOT prescribe {drug_name}.",
+                "description": f"Patient has a documented allergy to {allergy}. Do NOT prescribe {drug_name}.",
             })
             continue
 
-        # Class-based match
-        if allergy_lower in ALLERGY_CONTRAINDICATIONS:
-            if drug_lower in ALLERGY_CONTRAINDICATIONS[allergy_lower]:
-                warnings.append({
-                    "drug": drug_name,
-                    "allergy": allergy,
-                    "severity": "block",
-                    "description": f"Patient has {allergy} allergy. {drug_name} is contraindicated.",
-                })
+        # Class-based match.
+        cls = ALLERGY_CLASS_MAP.get(allergy_lower)
+        if cls and cls in classes:
+            warnings.append({
+                "drug": drug_name,
+                "allergy": allergy,
+                "severity": "block",
+                "description": f"Patient has a {allergy} allergy. {drug_name} is contraindicated.",
+            })
 
     return warnings

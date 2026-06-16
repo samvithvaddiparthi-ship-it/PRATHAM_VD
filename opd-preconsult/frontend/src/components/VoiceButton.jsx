@@ -1,17 +1,20 @@
 'use client';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export default function VoiceButton({ onResult, lang = 'en' }) {
   const [recording, setRecording] = useState(false);
+  const [supported, setSupported] = useState(true);
   const recRef = useRef(null);
 
   const langMap = { en: 'en-IN', hi: 'hi-IN', te: 'te-IN' };
 
+  // Detect browser support after mount (window isn't available during SSR).
+  useEffect(() => {
+    setSupported('webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
+  }, []);
+
   function toggle() {
-    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-      alert('Speech recognition not supported in this browser');
-      return;
-    }
+    if (!supported) return;
 
     if (recording) {
       recRef.current?.stop();
@@ -39,7 +42,11 @@ export default function VoiceButton({ onResult, lang = 'en' }) {
   }
 
   return (
-    <button className={`voice-btn ${recording ? 'recording' : ''}`} onClick={toggle} type="button">
+    <button className={`voice-btn ${recording ? 'recording' : ''}`} onClick={toggle} type="button"
+      disabled={!supported}
+      title={supported ? 'Tap to speak' : 'Voice input is not supported in this browser'}
+      aria-label={supported ? 'Record voice input' : 'Voice input not supported in this browser'}
+      style={!supported ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}>
       🎤
     </button>
   );

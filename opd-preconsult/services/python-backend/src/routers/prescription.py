@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List, Optional
-from ..drug_interactions import check_interactions, check_allergies
+from ..drug_interactions import check_interactions, check_allergies, check_duplicates
 
 router = APIRouter(prefix="/api/prescription", tags=["prescription"])
 
@@ -52,6 +52,9 @@ async def check_bulk_interactions(req: BulkCheckRequest):
         # Allergy warnings
         for warning in check_allergies(drug, req.patient_allergies):
             all_warnings.append(warning)
+
+    # Duplicate-drug warnings (same active prescribed twice)
+    all_warnings.extend(check_duplicates(req.drugs))
 
     has_block = any(w["severity"] == "block" for w in all_warnings)
 

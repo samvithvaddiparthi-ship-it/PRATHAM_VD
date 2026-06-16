@@ -5,6 +5,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Per-call timeout for LLM providers (seconds). Prevents a hung provider from
+# blocking a request indefinitely.
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+
+
+class LLMUnavailable(RuntimeError):
+    """Raised when no LLM provider is configured/usable. Mapped to HTTP 503 so the
+    app degrades gracefully (clear message) instead of returning an opaque 500."""
+
 
 def has_llm():
     """Returns True if any LLM API key is configured."""
@@ -44,7 +53,7 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
     if ant_key and ant_key != "your_key_here":
         return _anthropic_complete(ant_key, system_prompt, user_content, max_tokens)
 
-    raise RuntimeError("No LLM API key configured")
+    raise LLMUnavailable("No LLM API key configured. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.")
 
 
 def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str = "image/jpeg", max_tokens: int = 1500) -> str:
@@ -77,7 +86,17 @@ def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, 
         except Exception as e:
             logger.warning(f"Anthropic vision failed: {e}")
 
-    raise RuntimeError("All vision LLM providers failed or no API keys configured")
+    raise LLMUnavailable("All vision LLM providers failed or no API keys configured.")
+
+
+def _gemini_client(api_key: str):
+    """Gemini client with a request timeout when the SDK supports it."""
+    from google import genai
+    try:
+        from google.genai import types
+        return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=LLM_TIMEOUT * 1000))
+    except Exception:
+        return genai.Client(api_key=api_key)  # older SDK — no http_options
 
 
 # ── Text-only backends ────────────────────────────────────────────────────────
@@ -103,10 +122,9 @@ def _gemini_config_kwargs(types_module, system_prompt: str, max_tokens: int, tem
 
 
 def _gemini_complete(api_key: str, system_prompt: str, user_content: str, max_tokens: int) -> str:
-    from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = _gemini_client(api_key)
     model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     response = client.models.generate_content(
@@ -120,7 +138,7 @@ def _gemini_complete(api_key: str, system_prompt: str, user_content: str, max_to
 def _openai_complete(api_key: str, system_prompt: str, user_content: str, max_tokens: int) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT)
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         max_tokens=max_tokens,
@@ -136,7 +154,7 @@ def _openai_complete(api_key: str, system_prompt: str, user_content: str, max_to
 def _anthropic_complete(api_key: str, system_prompt: str, user_content: str, max_tokens: int) -> str:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, timeout=LLM_TIMEOUT)
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
     response = client.messages.create(
@@ -153,7 +171,7 @@ def _anthropic_complete(api_key: str, system_prompt: str, user_content: str, max
 def _openai_vision_complete(api_key: str, system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     response = client.chat.completions.create(
@@ -175,10 +193,9 @@ def _openai_vision_complete(api_key: str, system_prompt: str, user_text: str, im
 
 
 def _gemini_vision_complete(api_key: str, system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> str:
-    from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = _gemini_client(api_key)
     model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     response = client.models.generate_content(
@@ -195,7 +212,7 @@ def _gemini_vision_complete(api_key: str, system_prompt: str, user_text: str, im
 def _anthropic_vision_complete(api_key: str, system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> str:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, timeout=LLM_TIMEOUT)
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 

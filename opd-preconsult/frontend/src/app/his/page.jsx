@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
+import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { useToast } from '../../components/ui/Toast';
 
 export default function HISPage() {
   const [tab, setTab] = useState('sessions');
@@ -13,6 +15,7 @@ export default function HISPage() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ department: '', doctor_id: '', state: '' });
+  const { toast, toastView } = useToast();
 
   useEffect(() => {
     loadData();
@@ -60,7 +63,7 @@ export default function HISPage() {
         if (updated) setSelected({ ...updated, assigned_doctor_id: targetDoctorId });
       }
     } catch (err) {
-      alert('Reassign failed: ' + err.message);
+      toast('Reassign failed: ' + err.message, 'error');
     }
   }
 
@@ -78,7 +81,7 @@ export default function HISPage() {
       loadData();
     } catch {
       // Fallback: set via session endpoint
-      alert('Unassign requires doctor login. Use reassign instead.');
+      toast('Unassign requires doctor login. Use reassign instead.', 'error');
     }
   }
 
@@ -97,6 +100,7 @@ export default function HISPage() {
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: 16, minHeight: '100vh' }}>
+      {toastView}
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <h1 style={{ fontSize: 20, color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
@@ -285,6 +289,8 @@ function DoctorsManager({ doctors, depts = [], onChange }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -308,12 +314,17 @@ function DoctorsManager({ doctors, depts = [], onChange }) {
   }
 
   async function handleDeactivate(doctor) {
-    if (!confirm(`Deactivate ${doctor.name}? They won't be able to log in, but historical data is kept.`)) return;
+    if (!(await confirm({
+      title: `Deactivate ${doctor.name}?`,
+      message: "They won't be able to log in, but all historical data is kept.",
+      confirmLabel: 'Deactivate',
+      danger: true,
+    }))) return;
     try {
       await api.deactivateDoctor(doctor.id);
       onChange();
     } catch (err) {
-      alert('Failed: ' + err.message);
+      toast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -322,6 +333,8 @@ function DoctorsManager({ doctors, depts = [], onChange }) {
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
+      {dialog}
+      {toastView}
       {/* Add doctor form */}
       <div style={{ width: 360, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: 'fit-content' }}>
         <h3 style={{ fontSize: 16, marginBottom: 16, color: 'var(--primary)' }}>Add New Doctor</h3>
@@ -434,6 +447,8 @@ function QuestionsManager({ depts = [] }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
 
   useEffect(() => { loadQuestions(); }, [dept]);
 
@@ -491,13 +506,18 @@ function QuestionsManager({ depts = [] }) {
   }
 
   async function handleDelete(id) {
-    if (!confirm(`Delete question "${id}"? This may break the DAG flow.`)) return;
+    if (!(await confirm({
+      title: `Delete question "${id}"?`,
+      message: 'This may break the questionnaire (DAG) flow if other questions depend on it.',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     try {
       await api.deleteQuestion(id);
       loadQuestions();
       if (editing?.id === id) setEditing(null);
     } catch (err) {
-      alert('Failed: ' + err.message);
+      toast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -536,6 +556,8 @@ function QuestionsManager({ depts = [] }) {
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
+      {dialog}
+      {toastView}
       {/* Left: question list */}
       <div style={{ width: 380, flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
@@ -747,6 +769,8 @@ function DepartmentsManager({ depts, onChange }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -766,17 +790,24 @@ function DepartmentsManager({ depts, onChange }) {
   }
 
   async function handleDelete(code) {
-    if (!confirm(`Delete department "${code}"? Only possible if no doctors, patients, or questions are linked to it.`)) return;
+    if (!(await confirm({
+      title: `Delete department "${code}"?`,
+      message: 'Only possible if no doctors, patients, or questions are linked to it.',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     try {
       await api.deleteDepartment(code);
       onChange();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   }
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
+      {dialog}
+      {toastView}
       {/* Add form */}
       <div style={{ width: 360, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: 'fit-content' }}>
         <h3 style={{ fontSize: 16, marginBottom: 16, color: 'var(--primary)' }}>Add New Department</h3>
@@ -829,7 +860,7 @@ function DepartmentsManager({ depts, onChange }) {
                   <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 600 }}>{d.code}</td>
                   <td style={{ padding: '10px 12px', fontSize: 14 }}>{d.name}</td>
                   <td style={{ padding: '10px 12px' }}>
-                    <button onClick={() => { navigator.clipboard?.writeText(qr); alert('QR payload copied to clipboard!\n\nUse: /?qr=' + qr); }}
+                    <button onClick={() => { navigator.clipboard?.writeText(qr); toast('QR payload copied to clipboard', 'success'); }}
                       style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
                       Copy QR
                     </button>
@@ -861,6 +892,8 @@ function ProtocolsManager({ depts = [] }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
 
   useEffect(() => { loadProtocols(); }, [dept]);
 
@@ -916,13 +949,18 @@ function ProtocolsManager({ depts = [] }) {
   }
 
   async function handleDelete(id) {
-    if (!confirm(`Deactivate protocol "${id}"?`)) return;
+    if (!(await confirm({
+      title: `Deactivate protocol "${id}"?`,
+      message: 'It will no longer be evaluated during patient intake.',
+      confirmLabel: 'Deactivate',
+      danger: true,
+    }))) return;
     try {
       await api.deleteProtocol(id);
       loadProtocols();
       if (editing?.id === id) setEditing(null);
     } catch (err) {
-      alert('Failed: ' + err.message);
+      toast('Failed: ' + err.message, 'error');
     }
   }
 
@@ -945,6 +983,8 @@ function ProtocolsManager({ depts = [] }) {
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
+      {dialog}
+      {toastView}
       {/* Left: protocol list */}
       <div style={{ width: 380, flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>

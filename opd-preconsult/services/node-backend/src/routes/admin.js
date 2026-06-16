@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
+const { sendServerError } = require('../utils/http');
 
 const router = Router();
 
@@ -35,7 +36,7 @@ router.post('/departments', async (req, res) => {
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Department code already exists' });
     console.error('create department error:', err);
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -61,7 +62,7 @@ router.delete('/departments/:code', async (req, res) => {
     await pool.query('DELETE FROM departments WHERE code = $1', [code]);
     res.json({ deleted: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -96,7 +97,7 @@ router.post('/questions', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('create question error:', err);
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -121,7 +122,7 @@ router.put('/questions/:id', async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -131,7 +132,7 @@ router.delete('/questions/:id', async (req, res) => {
     await pool.query('DELETE FROM questionnaire_nodes WHERE id = $1', [req.params.id]);
     res.json({ deleted: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 

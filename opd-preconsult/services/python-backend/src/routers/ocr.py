@@ -1,41 +1,55 @@
+import os
 import re
 import io
 import json
 import logging
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 
 from ..db import execute, query
 from ..llm_client import complete_with_image, has_llm, has_vision
+from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
 # ── Regex fallback data (used only when no vision LLM is available) ───────────
+# Shared formulary from drug_data so the OCR fallback, the interaction engine and
+# the prescribe dropdown all speak the same drug vocabulary.
+KNOWN_DRUGS = SORTED_GENERICS
 
-KNOWN_DRUGS = [
-    "warfarin", "acenocoumarol", "rivaroxaban", "apixaban", "heparin",
-    "metoprolol", "atenolol", "propranolol", "carvedilol", "bisoprolol",
-    "amlodipine", "nifedipine", "diltiazem", "verapamil",
-    "enalapril", "ramipril", "lisinopril", "telmisartan", "losartan", "olmesartan",
-    "furosemide", "torsemide", "spironolactone", "hydrochlorothiazide",
-    "aspirin", "clopidogrel", "ticagrelor", "prasugrel",
-    "atorvastatin", "rosuvastatin", "simvastatin",
-    "metformin", "glipizide", "glimepiride", "sitagliptin", "vildagliptin",
-    "empagliflozin", "dapagliflozin", "canagliflozin",
-    "insulin", "pioglitazone",
-    "digoxin", "amiodarone", "ivabradine",
-    "nitroglycerin", "isosorbide",
-    "pantoprazole", "omeprazole", "rabeprazole",
-    "paracetamol", "ibuprofen", "diclofenac",
-    "levothyroxine", "carbimazole",
-    "prednisolone", "dexamethasone", "methylprednisolone",
-    "azithromycin", "amoxicillin", "ciprofloxacin", "ceftriaxone",
-    "montelukast", "salbutamol", "budesonide",
-]
+# Brand -> formal/generic normalization of OCR-extracted drug names. Indian
+# prescriptions are written in brand names (Crocin, Augmentin, Pan-D…); this maps
+# them to their formal generic so the report, prescribe tab, QR slip and the
+# interaction checks all use the real drug. Toggle off instantly (revert to the
+# old behaviour) with OCR_NORMALIZE_BRANDS=false + restart — see _apply_generic_names.
+OCR_NORMALIZE_BRANDS = os.getenv("OCR_NORMALIZE_BRANDS", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# Upload guards — reject oversized files (memory) and decompression-bomb images.
+OCR_MAX_UPLOAD_MB = int(os.getenv("OCR_MAX_UPLOAD_MB", "15"))
+OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "12000"))  # max px per side
+
+
+def _apply_generic_names(meds: list) -> list:
+    """Fill each medication's `generic` with the formal name from the brand map.
+    NON-DESTRUCTIVE: the original brand stays in `name`; we only set `generic`
+    when we confidently map to a real formulary drug. Gated by OCR_NORMALIZE_BRANDS
+    so the whole feature can be turned off without code changes or data loss."""
+    if not OCR_NORMALIZE_BRANDS or not meds:
+        return meds
+    for m in meds:
+        if not isinstance(m, dict):
+            continue
+        original = (m.get("name") or "").strip()
+        if not original:
+            continue
+        formal = normalize_drug_name(original)
+        if formal in GENERIC_DRUGS:
+            m["generic"] = formal
+    return meds
 
 DOSE_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(mg|mcg|µg|ml|iu|units?|gm?)\b', re.IGNORECASE)
 
@@ -264,6 +278,10 @@ async def process_document(
     """Process an uploaded document image or PDF with AI vision + Tesseract fallback."""
     contents = await file.read()
 
+    # Guard: reject oversized uploads before loading them into memory.
+    if len(contents) > OCR_MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large (max {OCR_MAX_UPLOAD_MB} MB)")
+
     # PDF → first page image
     filename = (file.filename or "").lower()
     is_pdf = filename.endswith(".pdf") or (file.content_type or "").lower() == "application/pdf"
@@ -285,6 +303,10 @@ async def process_document(
         image = Image.open(io.BytesIO(contents))
         fmt = (image.format or "JPEG").upper()
         mime_type = {"JPEG": "image/jpeg", "JPG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(fmt, "image/jpeg")
+
+    # Guard: reject absurd dimensions (decompression bombs) before processing.
+    if image.width > OCR_MAX_DIM or image.height > OCR_MAX_DIM:
+        raise HTTPException(status_code=400, detail=f"Image dimensions too large (max {OCR_MAX_DIM}px per side)")
 
     # Tesseract — for confidence score and printed-doc hint
     processed = preprocess_image(image)
@@ -326,7 +348,7 @@ async def process_document(
         confidence_source = "ai"
         structured = {
             "doc_type": doc_type,
-            "medications":            llm_result.get("medications") or [],
+            "medications":            _apply_generic_names(llm_result.get("medications") or []),
             "lab_values":             llm_result.get("lab_values") or [],
             "investigations_ordered": llm_result.get("investigations_ordered") or [],
             "diagnosis":              llm_result.get("diagnosis"),
@@ -345,7 +367,7 @@ async def process_document(
         confidence_source = "text_scan"
         structured = {
             "doc_type":          doc_type,
-            "medications":       extract_medications(raw_text),
+            "medications":       _apply_generic_names(extract_medications(raw_text)),
             "lab_values":        extract_lab_values(raw_text),
             "extraction_source": "regex_fallback",
             "confidence_source": confidence_source,

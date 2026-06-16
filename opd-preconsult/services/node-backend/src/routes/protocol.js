@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
+const { sendServerError } = require('../utils/http');
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.get('/', async (req, res) => {
     }
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -29,7 +30,7 @@ router.get('/:id', async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -60,7 +61,7 @@ router.post('/', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Protocol ID already exists' });
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -87,7 +88,7 @@ router.put('/:id', async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -97,7 +98,7 @@ router.delete('/:id', async (req, res) => {
     await pool.query('UPDATE protocols SET is_active = false WHERE id = $1', [req.params.id]);
     res.json({ deleted: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
@@ -156,7 +157,7 @@ router.get('/evaluate/:session_id', async (req, res) => {
 
     res.json({ session_id: sessionId, department: dept, matched_protocols: matched });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendServerError(res, err);
   }
 });
 
