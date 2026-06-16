@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 import bhashini
+import medcorrect
+import llm
 
 HERE = Path(__file__).parent
 
@@ -41,16 +43,51 @@ def languages():
     return {"languages": bhashini.LANGUAGES, "keys_configured": bhashini.have_keys()}
 
 
+@app.get("/llm-status")
+def llm_status():
+    return {"llm_available": llm.have_llm(), "provider": llm.active_provider(),
+            "model": llm.model_name()}
+
+
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), lang: str = Form(default="hi")):
-    """Transcribe an uploaded clip via Bhashini. Audio held in memory only."""
+async def transcribe(file: UploadFile = File(...), lang: str = Form(default="hi"),
+                     correct: bool = Form(default=True), patient_name: str = Form(default="")):
+    """Two-stage transcription:
+       Stage 1 — Bhashini ASR (raw transcript)
+       Stage 2 — medical-domain correction, validation, confidence (Hindi only;
+                 other langs return Stage-1 text unchanged).
+    Audio is held in memory only."""
     contents = await file.read()
     try:
-        text, service_id, ms = bhashini.transcribe(contents, lang)
-        return {"transcript": text, "lang": lang, "service_id": service_id, "ms": ms}
+        raw, service_id, ms1 = bhashini.transcribe(contents, lang)
     except Exception as e:
-        print(f"[bhashini-lab] error [{lang}]: {type(e).__name__}: {e}", flush=True)
+        print(f"[bhashini-lab] STT error [{lang}]: {type(e).__name__}: {e}", flush=True)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+    resp = {"lang": lang, "service_id": service_id, "stage1_ms": ms1,
+            "raw": raw, "corrected": raw, "confidence": None,
+            "changes": [], "uncertain": [], "stage2_ms": 0,
+            "llm_used": False, "corrected_applied": False}
+
+    # Stage 2 medical correction runs for Hindi and Telugu. Skip if disabled/empty.
+    if correct and lang in ("hi", "te") and raw.strip():
+        try:
+            c = medcorrect.correct(raw, lang, patient_name=patient_name)
+            resp.update({k: c[k] for k in
+                         ("corrected", "confidence", "changes", "uncertain",
+                          "stage2_ms", "llm_used")})
+            resp["corrected_applied"] = True
+            resp["llm_provider"] = c.get("llm_provider")
+            resp["llm_model"] = c.get("llm_model")
+        except Exception as e:
+            print(f"[bhashini-lab] correction error: {type(e).__name__}: {e}", flush=True)
+    return resp
+
+
+@app.get("/stats")
+def stats():
+    """Recurring transcription corrections (error analysis from the log)."""
+    return medcorrect.stats()
 
 
 if __name__ == "__main__":

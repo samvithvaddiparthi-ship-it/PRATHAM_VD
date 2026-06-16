@@ -45,15 +45,16 @@ POSTPROCESSORS = [
 LANGUAGES = [
     {"code": "en", "label": "English"},
     {"code": "hi", "label": "Hindi (हिन्दी)"},
-    {"code": "kn", "label": "Kannada (ಕನ್ನಡ)"},
+    {"code": "te", "label": "Telugu (తెలుగు)"},
 ]
 
 # Fallback ASR serviceIds (used if the config call can't be reached/authorised),
 # so inference still works for the evaluation. From Bhashini's available models.
+# Telugu is Dravidian → served by the IITM Dravidian multilingual ASR.
 FALLBACK_SERVICE_ID = {
     "en": "ai4bharat/whisper-medium-en--gpu--t4",
     "hi": "ai4bharat/conformer-hi-gpu--t4",
-    "kn": "bhashini/iitm/asr-dravidian--gpu--t4",
+    "te": "bhashini/iitm/asr-dravidian--gpu--t4",
 }
 
 _service_id_cache: dict = {}
@@ -80,6 +81,10 @@ def have_keys() -> bool:
 
 
 # ── Audio: webm/opus -> 16kHz mono WAV (Bhashini expects WAV) ────────────────
+# The browser already captures mono @ 16 kHz with echo-cancel, noise-suppress and
+# auto-gain on, so we just transcode straight to WAV. (An earlier server-side
+# loudness-normalise step was removed: stacked on top of the browser's AGC it
+# over-amplified and clipped the audio, which made Bhashini return empty.)
 
 def to_wav_bytes(src_bytes: bytes) -> bytes:
     import av

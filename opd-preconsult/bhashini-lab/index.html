@@ -37,6 +37,18 @@
     .meta { display: flex; gap: 16px; margin-top: 12px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
     .meta b { color: #cbd5e1; }
     .warn { background: #7c2d12; color: #fed7aa; border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 16px; }
+    .blk { margin-top: 14px; }
+    .blk h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #64748b; }
+    .raw { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; font-size: 15px; line-height: 1.6; color: #94a3b8; white-space: pre-wrap; }
+    .corrected { background: #0f172a; border: 1px solid #14532d; border-radius: 10px; padding: 14px; font-size: 21px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .corrected ins { background: #14532d; color: #bbf7d0; text-decoration: none; border-radius: 4px; padding: 0 3px; }
+    .confbar { height: 8px; border-radius: 6px; background: #334155; overflow: hidden; margin-top: 4px; }
+    .confbar > span { display: block; height: 100%; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { font-size: 12px; border-radius: 6px; padding: 3px 8px; background: #1e293b; border: 1px solid #334155; }
+    .chip.fix { border-color: #14532d; color: #bbf7d0; }
+    .chip.unc { border-color: #78350f; color: #fed7aa; cursor: help; }
+    .muted { color: #64748b; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -51,14 +63,44 @@
     <label class="fld" for="lang">Language</label>
     <select id="lang"><option>Loading…</option></select>
 
+    <label class="fld" for="pname">Patient name (from credentials) — optional</label>
+    <input id="pname" placeholder="e.g. Samvith"
+      style="width:100%; padding:12px; border-radius:10px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; font-size:15px; margin-bottom:18px;" />
+
     <button id="recBtn" class="rec">● Start recording</button>
     <div class="status" id="status">Pick a language and record.</div>
 
     <div class="result" id="result" dir="auto">Your transcript will appear here.</div>
+
+    <div id="twoStage" style="display:none;">
+      <div class="blk">
+        <h3>Corrected (medical)</h3>
+        <div class="corrected" id="corrected" dir="auto"></div>
+      </div>
+      <div class="blk" id="confWrap">
+        <h3>Review confidence · <span id="confPct">—</span></h3>
+        <div class="confbar"><span id="confFill"></span></div>
+        <p class="muted" style="margin-top:5px;">Confidence of the correction stage — not raw transcription accuracy (Bhashini provides no acoustic confidence).</p>
+      </div>
+      <div class="blk" id="changesWrap" style="display:none;">
+        <h3>Corrections</h3>
+        <div class="chips" id="changes"></div>
+      </div>
+      <div class="blk" id="uncWrap" style="display:none;">
+        <h3>Uncertain — verify with patient</h3>
+        <div class="chips" id="uncertain"></div>
+      </div>
+      <div class="blk">
+        <h3>Raw (Stage 1)</h3>
+        <div class="raw" id="rawText" dir="auto"></div>
+      </div>
+    </div>
+
     <div class="meta" id="meta" style="display:none;">
-      <span>Language: <b id="mLang">—</b></span>
       <span>Service: <b id="mSvc">—</b></span>
-      <span>Latency: <b id="mMs">—</b></span>
+      <span>STT: <b id="mMs1">—</b></span>
+      <span>Correct: <b id="mMs2">—</b></span>
+      <span id="mEngWrap" style="display:none;">Engine: <b id="mEng">—</b></span>
     </div>
   </div>
 
@@ -140,23 +182,98 @@
       const form = new FormData();
       form.append('file', new File([blob], 'rec.webm', { type: 'audio/webm' }));
       form.append('lang', lang);
+      form.append('patient_name', document.getElementById('pname').value || '');
 
       try {
         const res = await fetch('/transcribe', { method: 'POST', body: form });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
-        resultEl.textContent = data.transcript || '(empty — speak louder/longer)';
-        document.getElementById('mLang').textContent = data.lang;
-        document.getElementById('mSvc').textContent = data.service_id;
-        document.getElementById('mMs').textContent = data.ms + ' ms';
-        metaEl.style.display = 'flex';
+        render(data);
         statusEl.textContent = 'Done.';
       } catch (err) {
         resultEl.textContent = '';
+        document.getElementById('twoStage').style.display = 'none';
         statusEl.textContent = 'Failed: ' + err.message;
       } finally {
         recBtn.disabled = false; langSel.disabled = false;
       }
+    }
+
+    const esc = s => (s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+    // Word-level diff: wrap tokens in `corrected` that differ from `raw` in <ins>.
+    function diffHtml(raw, corrected) {
+      const a = (raw || '').split(/(\s+)/), b = (corrected || '').split(/(\s+)/);
+      const m = a.length, n = b.length;
+      const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+      for (let i = m - 1; i >= 0; i--)
+        for (let j = n - 1; j >= 0; j--)
+          dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      let i = 0, j = 0, out = '';
+      while (i < m && j < n) {
+        if (a[i] === b[j]) { out += esc(b[j]); i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) { i++; }
+        else { out += /\s+/.test(b[j]) ? b[j] : '<ins>' + esc(b[j]) + '</ins>'; j++; }
+      }
+      while (j < n) { out += /\s+/.test(b[j]) ? b[j] : '<ins>' + esc(b[j]) + '</ins>'; j++; }
+      return out;
+    }
+
+    function render(d) {
+      document.getElementById('mSvc').textContent = d.service_id || '—';
+      document.getElementById('mMs1').textContent = (d.stage1_ms ?? d.ms ?? 0) + ' ms';
+      metaEl.style.display = 'flex';
+
+      if (!d.corrected_applied) {
+        // Non-Hindi (or correction disabled): Stage-1 only.
+        resultEl.style.display = 'block';
+        resultEl.textContent = d.raw || '(empty — speak louder/longer)';
+        document.getElementById('twoStage').style.display = 'none';
+        document.getElementById('mMs2').textContent = '—';
+        document.getElementById('mEngWrap').style.display = 'none';
+        return;
+      }
+
+      resultEl.style.display = 'none';
+      document.getElementById('twoStage').style.display = 'block';
+      document.getElementById('corrected').innerHTML =
+        diffHtml(d.raw, d.corrected) || '(empty — speak louder/longer)';
+      document.getElementById('rawText').textContent = d.raw || '—';
+      document.getElementById('mMs2').textContent = (d.stage2_ms || 0) + ' ms';
+      document.getElementById('mEng').textContent =
+        (d.llm_used ? (d.llm_provider + '/' + d.llm_model) : 'lexicon only');
+      document.getElementById('mEngWrap').style.display = 'inline';
+
+      // Confidence bar
+      const pct = d.confidence == null ? null : Math.round(d.confidence * 100);
+      const fill = document.getElementById('confFill');
+      document.getElementById('confPct').textContent = pct == null ? '—' : pct + '%';
+      fill.style.width = (pct == null ? 0 : pct) + '%';
+      fill.style.background = pct == null ? '#334155' : pct >= 80 ? '#22c55e' : pct >= 60 ? '#eab308' : '#ef4444';
+
+      // Corrections
+      const chW = document.getElementById('changesWrap'), ch = document.getElementById('changes');
+      ch.innerHTML = '';
+      (d.changes || []).forEach(c => {
+        const el = document.createElement('span');
+        el.className = 'chip fix';
+        el.textContent = c.from + ' → ' + c.to;
+        el.title = c.reason || '';
+        ch.appendChild(el);
+      });
+      chW.style.display = (d.changes && d.changes.length) ? 'block' : 'none';
+
+      // Uncertain
+      const uW = document.getElementById('uncWrap'), u = document.getElementById('uncertain');
+      u.innerHTML = '';
+      (d.uncertain || []).forEach(x => {
+        const el = document.createElement('span');
+        el.className = 'chip unc';
+        el.textContent = '? ' + x.span;
+        el.title = (x.reason || '') + (x.alternatives ? '  ·  alternatives: ' + x.alternatives.join(', ') : '');
+        u.appendChild(el);
+      });
+      uW.style.display = (d.uncertain && d.uncertain.length) ? 'block' : 'none';
     }
   </script>
 </body>

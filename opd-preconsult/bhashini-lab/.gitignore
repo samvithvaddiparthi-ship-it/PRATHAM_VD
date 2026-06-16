@@ -1,0 +1,5 @@
+# Bhashini lab — local-only artifacts (never commit)
+.env
+.venv/
+logs/
+__pycache__/
