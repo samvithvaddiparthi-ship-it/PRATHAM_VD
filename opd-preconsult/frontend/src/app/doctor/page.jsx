@@ -149,6 +149,7 @@ function DoctorDashboard({ doctor }) {
   const [now, setNow] = useState(() => new Date()); // live clock
   const [queueLoaded, setQueueLoaded] = useState(false);       // first queue fetch done? (for skeletons)
   const [consultedLoaded, setConsultedLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);          // brief spin on the refresh icon
 
   useEffect(() => {
     loadQueue();
@@ -279,7 +280,26 @@ function DoctorDashboard({ doctor }) {
     }
   }
 
-  function handleLogout() {
+  // Refresh the active tab. Spins for the real fetch time but holds the spin a
+  // minimum ~0.7s so a near-instant local refresh still visibly registers.
+  async function refreshActive() {
+    if (refreshing) return;
+    setRefreshing(true);
+    const started = Date.now();
+    try {
+      await (tab === 'queue' ? loadQueue() : loadConsulted());
+    } finally {
+      const remaining = 500 - (Date.now() - started);
+      setTimeout(() => setRefreshing(false), Math.max(0, remaining));
+    }
+  }
+
+  async function handleLogout() {
+    if (!(await confirm({
+      title: 'Log out?',
+      message: 'You’ll be returned to the login screen and will need your PIN to sign back in.',
+      confirmLabel: 'Log out',
+    }))) return;
     setToken(null);
     sessionStorage.removeItem('doctor_token');
     sessionStorage.removeItem('doctor_info');
@@ -335,6 +355,13 @@ function DoctorDashboard({ doctor }) {
     return acc;
   }, { RED: 0, AMBER: 0, GREEN: 0 });
 
+  // Triage counts among the (filtered) consulted visits — same breakdown bar
+  // for the Consulted tab as the Queue tab.
+  const consultedTriageCounts = filteredConsulted.reduce((acc, s) => {
+    if (s.triage_level) acc[s.triage_level] = (acc[s.triage_level] || 0) + 1;
+    return acc;
+  }, { RED: 0, AMBER: 0, GREEN: 0 });
+
   // "Waiting" = queue patients the doctor hasn't opened/consulted yet. Once a
   // patient's current visit is consulted (it has consulted_at / a doctor), they
   // still appear in the tree for reference but count as "seen", not "waiting".
@@ -361,7 +388,7 @@ function DoctorDashboard({ doctor }) {
       {/* Left Panel — fixed-height column: the header/tabs/search stay put while
           only the patient list below scrolls in its own scrollbar. */}
       <div style={{ width: 340, flexShrink: 0, position: 'sticky', top: 16, height: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
-        <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }`}</style>
+        <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } } @keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
             <p style={{ fontSize: 11, color: 'var(--text-light)', margin: 0 }}>{greeting},</p>
@@ -383,10 +410,6 @@ function DoctorDashboard({ doctor }) {
             Consulted
           </button>
         </div>
-
-        {tab === 'queue' && (
-          <button className="btn btn-outline" style={{ fontSize: 13, marginBottom: 8 }} onClick={loadQueue}>Refresh</button>
-        )}
 
         {/* Search box (both tabs) — filters by name or phone, with inline ghost prediction */}
         <div style={{ position: 'relative', marginBottom: 10 }}>
@@ -418,25 +441,38 @@ function DoctorDashboard({ doctor }) {
               ? <>{waitingCount} waiting{seenInQueueCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {seenInQueueCount} seen</span>}</>
               : <>{filteredConsulted.length} consulted{consultedTodayCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {consultedTodayCount} today</span>}</>}
           </span>
-          {tab === 'queue' && ['RED', 'AMBER', 'GREEN'].some(l => triageCounts[l] > 0) && (
-            <span style={{ display: 'inline-flex', gap: 9, fontSize: 12, flexShrink: 0 }}>
-              {['RED', 'AMBER', 'GREEN'].filter(l => triageCounts[l] > 0).map(l => (
-                <span key={l} title={l === 'RED' ? 'Severe' : l === 'AMBER' ? 'Moderate' : 'Mild'}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: TRIAGE_COLORS[l], fontWeight: 700 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: TRIAGE_COLORS[l], display: 'inline-block' }} />
-                  {triageCounts[l]}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {(() => {
+              const counts = tab === 'queue' ? triageCounts : consultedTriageCounts;
+              return ['RED', 'AMBER', 'GREEN'].some(l => counts[l] > 0) && (
+                <span style={{ display: 'inline-flex', gap: 9, fontSize: 12 }}>
+                  {['RED', 'AMBER', 'GREEN'].filter(l => counts[l] > 0).map(l => (
+                    <span key={l} title={l === 'RED' ? 'Severe' : l === 'AMBER' ? 'Moderate' : 'Mild'}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: TRIAGE_COLORS[l], fontWeight: 700 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: '50%', background: TRIAGE_COLORS[l], display: 'inline-block' }} />
+                      {counts[l]}
+                    </span>
+                  ))}
                 </span>
-              ))}
-            </span>
-          )}
+              );
+            })()}
+            {/* Compact labelled refresh — reloads whichever tab is active. The
+                word keeps it discoverable; spins briefly on click. */}
+            <button onClick={refreshActive} disabled={refreshing}
+              title="Refresh list" aria-label="Refresh"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 10px', borderRadius: 13, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+              <span style={{ display: 'inline-block', fontSize: 14, animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+              {refreshing ? 'Refreshing' : 'Refresh'}
+            </button>
+          </span>
         </div>
 
         {/* Scrollable list region — flex:1 so it fills the remaining column
             height, with its own vertical scrollbar (the rest of the panel and
             the right report pane stay fixed). */}
         <div className="scrolly" style={{ flex: 1, minHeight: 0, marginRight: -6, paddingRight: 6 }}>
-        {tab === 'queue' && !queueLoaded && <SkeletonRows n={4} />}
-        {tab === 'queue' && queueLoaded && filteredPatients.map(p => {
+        {tab === 'queue' && (!queueLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredPatients.length || 4, 6))} />}
+        {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.map(p => {
           const isOpen = !!expanded[p.phone]; // collapsed until clicked, so "NEW" shows first
           const headColor = p.triage ? TRIAGE_COLORS[p.triage] : null;
           return (
@@ -516,17 +552,17 @@ function DoctorDashboard({ doctor }) {
             </div>
           );
         })}
-        {tab === 'queue' && queueLoaded && filteredPatients.length === 0 && (
+        {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.length === 0 && (
           <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
             {q ? `No patients match “${search.trim()}”` : 'No patients yet'}
           </p>
         )}
 
-        {tab === 'consulted' && !consultedLoaded && <SkeletonRows n={4} />}
+        {tab === 'consulted' && (!consultedLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredConsulted.length || 4, 6))} />}
 
         {/* CONSULTED tab → every consulted visit as its own individual entry,
             each with that visit's own triage colour, newest-consult first. */}
-        {tab === 'consulted' && consultedLoaded && filteredConsulted.map(s => {
+        {tab === 'consulted' && consultedLoaded && !refreshing && filteredConsulted.map(s => {
           const tColor = s.triage_level ? TRIAGE_COLORS[s.triage_level] : null;
           const isSel = selected?.id === s.id;
           return (
@@ -553,7 +589,7 @@ function DoctorDashboard({ doctor }) {
           </div>
           );
         })}
-        {tab === 'consulted' && consultedLoaded && filteredConsulted.length === 0 && (
+        {tab === 'consulted' && consultedLoaded && !refreshing && filteredConsulted.length === 0 && (
           <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
             {q ? `No consulted entries match “${search.trim()}”` : 'No consulted patients yet'}
           </p>
