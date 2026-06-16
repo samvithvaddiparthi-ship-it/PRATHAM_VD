@@ -68,9 +68,14 @@ export default function Register() {
       return;
     }
 
+    // Age required
+    if (String(form.patient_age).trim() === '') {
+      setError('Please enter the age.');
+      return;
+    }
     // Age cap
-    const age = form.patient_age ? parseInt(form.patient_age) : null;
-    if (age !== null && (age < 0 || age > 120)) {
+    const age = parseInt(form.patient_age);
+    if (Number.isNaN(age) || age < 0 || age > 120) {
       setError('Age must be between 0 and 120.');
       return;
     }
@@ -118,7 +123,7 @@ export default function Register() {
       <div className="screen" style={{ justifyContent: 'center' }}>
         <div className="card" style={{ gap: 18, textAlign: 'center' }}>
           <div style={{ fontSize: 48 }}>{isReturning ? '👋' : '🎉'}</div>
-          <h2 style={{ color: 'var(--primary)' }}>
+          <h2 style={{ color: 'var(--primary)', overflowWrap: 'anywhere' }}>
             {isReturning ? `Welcome back, ${form.patient_name}!` : `Welcome, ${form.patient_name}!`}
           </h2>
           <p style={{ color: 'var(--text-light)', lineHeight: 1.5 }}>
@@ -170,7 +175,7 @@ export default function Register() {
 
         <div>
           <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('name', lang)} *</label>
-          <input className="input" required value={form.patient_name} onChange={e => setForm({ ...form, patient_name: e.target.value })} />
+          <input className="input" required maxLength={40} value={form.patient_name} onChange={e => setForm({ ...form, patient_name: e.target.value.slice(0, 40) })} />
         </div>
         <div>
           <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('phone', lang)} *</label>
@@ -178,8 +183,8 @@ export default function Register() {
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)}</label>
-            <input className="input" type="number" min="0" max="120" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
+            <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)} *</label>
+            <input className="input" type="number" min="0" max="120" required value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
           </div>
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)}</label>

@@ -7,7 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
 
-const TRIAGE_COLORS = { RED: '#E74C3C', AMBER: '#F39C12', GREEN: '#27AE60' };
+const TRIAGE_COLORS = { RED: '#D9544D', AMBER: '#E0A82E', GREEN: '#3FA869' };
 const TRIAGE_SEVERITY = { RED: 0, AMBER: 1, GREEN: 2 };
 
 function fmtVisitDate(ts) {
@@ -355,11 +355,12 @@ function DoctorDashboard({ doctor }) {
   const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
 
   return (
-    <div className="doctor-layout" style={{ display: 'flex', gap: 16, minHeight: '100vh' }}>
+    <div className="doctor-layout" style={{ display: 'flex', gap: 16, height: '100vh', overflow: 'hidden', boxSizing: 'border-box' }}>
       {dialog}
       {toastView}
-      {/* Left Panel */}
-      <div style={{ width: 340, flexShrink: 0 }}>
+      {/* Left Panel — fixed-height column: the header/tabs/search stay put while
+          only the patient list below scrolls in its own scrollbar. */}
+      <div style={{ width: 340, flexShrink: 0, position: 'sticky', top: 16, height: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
         <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } }`}</style>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
@@ -420,7 +421,7 @@ function DoctorDashboard({ doctor }) {
           {tab === 'queue' && ['RED', 'AMBER', 'GREEN'].some(l => triageCounts[l] > 0) && (
             <span style={{ display: 'inline-flex', gap: 9, fontSize: 12, flexShrink: 0 }}>
               {['RED', 'AMBER', 'GREEN'].filter(l => triageCounts[l] > 0).map(l => (
-                <span key={l} title={l === 'RED' ? 'Emergency' : l === 'AMBER' ? 'Priority' : 'Routine'}
+                <span key={l} title={l === 'RED' ? 'Severe' : l === 'AMBER' ? 'Moderate' : 'Mild'}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: TRIAGE_COLORS[l], fontWeight: 700 }}>
                   <span style={{ width: 9, height: 9, borderRadius: '50%', background: TRIAGE_COLORS[l], display: 'inline-block' }} />
                   {triageCounts[l]}
@@ -430,6 +431,10 @@ function DoctorDashboard({ doctor }) {
           )}
         </div>
 
+        {/* Scrollable list region — flex:1 so it fills the remaining column
+            height, with its own vertical scrollbar (the rest of the panel and
+            the right report pane stay fixed). */}
+        <div className="scrolly" style={{ flex: 1, minHeight: 0, marginRight: -6, paddingRight: 6 }}>
         {tab === 'queue' && !queueLoaded && <SkeletonRows n={4} />}
         {tab === 'queue' && queueLoaded && filteredPatients.map(p => {
           const isOpen = !!expanded[p.phone]; // collapsed until clicked, so "NEW" shows first
@@ -438,20 +443,26 @@ function DoctorDashboard({ doctor }) {
             <div key={p.phone} style={{ marginBottom: 8 }}>
               {/* Patient heading */}
               <div onClick={() => setExpanded(e => ({ ...e, [p.phone]: !isOpen }))}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '8px 10px', borderRadius: 8, background: '#fff', borderLeft: `4px solid ${headColor || 'transparent'}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontWeight: 700, fontSize: 14, color: headColor || 'var(--text)' }}>{p.name}</p>
+                /* Header tinted by the patient's current triage; the nested visit
+                   rows stay white and carry only their own triage chip. */
+                style={{ display: 'flex', alignItems: 'stretch', gap: 8, cursor: 'pointer', padding: '8px 10px', borderRadius: 8, background: headColor ? `${headColor}14` : '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</p>
                   <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{p.phone} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
                 </div>
-                {/* Right indicator: a filled-now patient shows "NEW" until the
-                    doctor opens them once (like an unread badge). After that it's
-                    permanently a chevron — even when collapsed again — hinting the
+                {/* Right column: triage chip pinned top-right, the NEW/chevron
+                    indicator pinned bottom-right (directly under the chip). A
+                    filled-now patient shows "NEW" until the doctor opens them once
+                    (like an unread badge); after that it's a chevron hinting the
                     previous consultations can be expanded. */}
-                {(p.filledNow && !seenNew[p.latest.id]) ? (
-                  <span style={{ fontSize: 9, background: headColor || '#888', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
-                ) : (
-                  <span style={{ fontSize: 14, color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
-                )}
+                <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', gap: 6 }}>
+                  {p.triage ? <TriageBadge level={p.triage} compact /> : <span />}
+                  {(p.filledNow && !seenNew[p.latest.id]) ? (
+                    <span style={{ fontSize: 9, background: headColor || '#888', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
+                  ) : (
+                    <span style={{ fontSize: 14, color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
+                  )}
+                </div>
               </div>
               {/* Visits (newest first) */}
               {isOpen && (
@@ -460,13 +471,24 @@ function DoctorDashboard({ doctor }) {
                     const isFilledNow = vi === 0 && p.filledNow;
                     const isSel = selected?.id === v.id;
                     const meds = v.prescription_items || [];
+                    // Every visit row gets a light tint of its OWN triage colour
+                    // (matching the outer cards). The current "filled now" visit is
+                    // only slightly deeper + a soft, low-opacity triage border —
+                    // a gentle highlight, not the old harsh yellow-and-bright-edge.
+                    const vColor = v.triage_level ? TRIAGE_COLORS[v.triage_level] : null;
                     return (
                       <div key={v.id} onClick={() => { markSeen(v.id); selectSession(v); }}
-                        style={{ padding: '6px 8px', borderRadius: 6, cursor: 'pointer', marginBottom: 4,
-                          background: isSel ? '#EAF2F8' : (isFilledNow ? '#FEF9E7' : 'transparent'),
-                          border: isSel ? '2px solid var(--secondary)' : (isFilledNow ? `1px solid ${TRIAGE_COLORS[v.triage_level] || '#ccc'}` : '1px solid transparent') }}>
+                        style={{ padding: '7px 9px', borderRadius: 8, cursor: 'pointer', marginBottom: 6,
+                          // Each visit is its own boxed card. Triage is shown via
+                          // the chip; the active "Filled now" visit (or selected)
+                          // is accented with a coloured 3px left rail.
+                          background: isSel ? '#EAF2F8' : '#fff',
+                          border: '1px solid #E6EBF1',
+                          borderLeftWidth: 3,
+                          borderLeftColor: isSel ? 'var(--secondary)' : (isFilledNow && vColor ? vColor : '#E6EBF1'),
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {v.triage_level && <TriageBadge level={v.triage_level} />}
+                          {v.triage_level && <TriageBadge level={v.triage_level} compact />}
                           <div style={{ flex: 1 }}>
                             <p style={{ fontSize: 12, fontWeight: 600 }}>
                               {isFilledNow ? '★ Filled now' : fmtVisitDate(v.created_at)}
@@ -504,12 +526,17 @@ function DoctorDashboard({ doctor }) {
 
         {/* CONSULTED tab → every consulted visit as its own individual entry,
             each with that visit's own triage colour, newest-consult first. */}
-        {tab === 'consulted' && consultedLoaded && filteredConsulted.map(s => (
+        {tab === 'consulted' && consultedLoaded && filteredConsulted.map(s => {
+          const tColor = s.triage_level ? TRIAGE_COLORS[s.triage_level] : null;
+          const isSel = selected?.id === s.id;
+          return (
           <div key={s.id} className="queue-item" onClick={() => selectSession(s)}
-            style={{ border: selected?.id === s.id ? '2px solid var(--secondary)' : 'none' }}>
-            {s.triage_level && <TriageBadge level={s.triage_level} />}
-            <div style={{ flex: 1 }}>
-              <p style={{ fontWeight: 600, fontSize: 14 }}>{s.patient_name || 'Unregistered'}</p>
+            style={{ background: tColor ? `${tColor}14` : undefined, outline: isSel ? '2px solid var(--secondary)' : 'none', outlineOffset: -2 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', minWidth: 0, overflowWrap: 'anywhere' }}>{s.patient_name || 'Unregistered'}</p>
+                {s.triage_level && <div style={{ flexShrink: 0 }}><TriageBadge level={s.triage_level} compact /></div>}
+              </div>
               <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
                 {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''}
               </p>
@@ -524,16 +551,19 @@ function DoctorDashboard({ doctor }) {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
         {tab === 'consulted' && consultedLoaded && filteredConsulted.length === 0 && (
           <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
             {q ? `No consulted entries match “${search.trim()}”` : 'No consulted patients yet'}
           </p>
         )}
+        </div>
       </div>
 
-      {/* Right Panel */}
-      <div style={{ flex: 1, background: 'var(--card-bg)', borderRadius: 16, padding: 24, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+      {/* Right Panel — own height + internal scroll so the report scrolls
+          inside the card and never nudges the whole page at the edges. */}
+      <div className="scrolly" style={{ flex: 1, minWidth: 0, height: '100%', background: 'var(--card-bg)', borderRadius: 16, padding: 24, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
         {!selected && (
           <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
             <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'queue' ? '🩺' : '📋'}</div>
@@ -550,7 +580,7 @@ function DoctorDashboard({ doctor }) {
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
               <TriageBadge level={selected.triage_level} />
-              <h2 style={{ fontSize: 20 }}>{selected.patient_name}</h2>
+              <h2 style={{ fontSize: 20, overflowWrap: 'anywhere', minWidth: 0 }}>{selected.patient_name}</h2>
               <span style={{ color: 'var(--text-light)', fontSize: 14 }}>
                 {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department}
               </span>

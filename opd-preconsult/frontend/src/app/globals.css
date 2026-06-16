@@ -4,9 +4,9 @@
   --primary: #1B4F72;
   --secondary: #2E86AB;
   --accent: #48C9B0;
-  --red: #E74C3C;
-  --amber: #F39C12;
-  --green: #27AE60;
+  --red: #D9544D;
+  --amber: #E0A82E;
+  --green: #3FA869;
   --bg: #F5F7FA;
   --card-bg: #FFFFFF;
   --text: #2C3E50;
@@ -117,7 +117,7 @@ body {
   font-size: 14px;
 }
 .triage-RED { background: var(--red); color: #fff; }
-.triage-AMBER { background: var(--amber); color: #fff; }
+.triage-AMBER { background: var(--amber); color: #5A3E00; }
 .triage-GREEN { background: var(--green); color: #fff; }
 
 .voice-btn {
@@ -159,7 +159,15 @@ body {
   cursor: pointer;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-.queue-item:hover { background: #F0F4F8; }
+.queue-item:hover { filter: brightness(0.97); }
+
+/* Always-visible thin scrollbar — keeps both panes (queue + consulted list and
+   the report pane) showing a consistent scrollbar even when content fits. */
+.scrolly { overflow-y: scroll; scrollbar-width: thin; scrollbar-color: #c2ccd6 transparent; }
+.scrolly::-webkit-scrollbar { width: 8px; }
+.scrolly::-webkit-scrollbar-track { background: transparent; }
+.scrolly::-webkit-scrollbar-thumb { background: #c2ccd6; border-radius: 4px; }
+.scrolly::-webkit-scrollbar-thumb:hover { background: #a9b5c2; }
 
 .report-section { margin-bottom: 16px; }
 .report-section h3 { font-size: 14px; color: var(--text-light); margin-bottom: 8px; }

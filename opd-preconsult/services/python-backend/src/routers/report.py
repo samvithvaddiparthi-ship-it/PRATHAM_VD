@@ -191,7 +191,7 @@ def _fallback_report(session_json):
 
     lines = ["## QUICK SUMMARY"]
     if triage == "RED":
-        lines.append("- 🚨 **EMERGENCY** — Patient flagged for immediate review")
+        lines.append("- 🚨 **SEVERE** — Patient flagged for immediate review")
     if answers.get("q_chest_pain") == "yes":
         lines.append("- 🚨 Chest pain reported")
     if answers.get("q_chest_pain_radiation") == "yes":
@@ -203,7 +203,7 @@ def _fallback_report(session_json):
     if spo2 and spo2 < 95:
         lines.append(f"- ⚠ SpO2 {spo2}% — low")
     if not any("🚨" in l or "⚠" in l for l in lines[1:]):
-        lines.append("- Routine presentation, no critical flags")
+        lines.append("- Mild presentation, no critical flags")
 
     lines.append(f"\n## Chief Complaint & History\n{answers.get('q_chief_complaint', 'Not recorded')}")
     lines.append(f"\n## Vitals")
