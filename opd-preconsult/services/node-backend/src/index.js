@@ -72,6 +72,15 @@ async function start() {
     }
   }
 
+  // Apply any pending DB migrations BEFORE serving — so a pulled schema change
+  // never crashes a teammate's existing DB (it auto-applies on startup).
+  try {
+    const { runMigrations } = require('./migrate');
+    await runMigrations();
+  } catch (err) {
+    console.error('[migrate] migration run failed:', err.message);
+  }
+
   await seedQuestionnaires();
 
   app.listen(PORT, () => {

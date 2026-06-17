@@ -87,6 +87,10 @@ services:
     environment:
       PORT: 4001
       NODE_ENV: development
+      MIGRATIONS_DIR: /migrations
+    volumes:
+      # Auto-apply pending DB migrations on startup (see src/migrate.js).
+      - ./db/migrations:/migrations:ro
     depends_on:
       postgres:
         condition: service_healthy
