@@ -183,6 +183,90 @@ router.post('/assign/:session_id', async (req, res) => {
   }
 });
 
+// OPEN (lock) a patient's visit for consultation. Atomic: succeeds only if the
+// visit is free or already mine and not yet dispatched. If another doctor holds
+// it, returns 409 with their name so the UI can say "being consulted already".
+router.post('/open/:session_id', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).json({ error: 'No token' });
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+
+    const result = await pool.query(
+      `UPDATE sessions
+          SET assigned_doctor_id = $1,
+              consulted_at = COALESCE(consulted_at, NOW()),
+              updated_at = NOW()
+        WHERE id = $2
+          AND dispatched_at IS NULL
+          AND (assigned_doctor_id IS NULL OR assigned_doctor_id = $1)
+        RETURNING *`,
+      [decoded.doctor_id, req.params.session_id]
+    );
+
+    if (!result.rows.length) {
+      // Couldn't acquire — find out why (held by someone else, or already done).
+      const cur = await pool.query(
+        `SELECT s.assigned_doctor_id, s.dispatched_at, d.name AS doctor_name
+           FROM sessions s LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
+          WHERE s.id = $1`,
+        [req.params.session_id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+      const row = cur.rows[0];
+      return res.status(409).json({
+        error: 'locked',
+        locked_by: row.doctor_name || 'another doctor',
+        dispatched: !!row.dispatched_at,
+      });
+    }
+
+    await pool.query(
+      `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_opened', $2, $3)`,
+      [req.params.session_id, decoded.doctor_id, JSON.stringify({ doctor_name: decoded.doctor_name })]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('open error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DISPATCH — the consultation is complete (Save & Generate QR clicked). Stamps
+// dispatched_at, which removes the visit from the active queue and moves it into
+// the doctor's Consulted list, releasing the lock.
+router.post('/dispatch/:session_id', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).json({ error: 'No token' });
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+
+    const result = await pool.query(
+      `UPDATE sessions
+          SET dispatched_at = NOW(),
+              assigned_doctor_id = COALESCE(assigned_doctor_id, $1),
+              consulted_at = COALESCE(consulted_at, NOW()),
+              updated_at = NOW()
+        WHERE id = $2 RETURNING *`,
+      [decoded.doctor_id, req.params.session_id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+
+    await pool.query(
+      `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_dispatched', $2, $3)`,
+      [req.params.session_id, decoded.doctor_id, JSON.stringify({ doctor_name: decoded.doctor_name })]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('dispatch error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Unassign session — send back to pool
 router.post('/unassign/:session_id', async (req, res) => {
   try {
@@ -193,8 +277,10 @@ router.post('/unassign/:session_id', async (req, res) => {
     const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
+    // Abandon a lock — release the patient back to "waiting" (clear the doctor
+    // link AND the consulted stamp so it's open for anyone again).
     const result = await pool.query(
-      `UPDATE sessions SET assigned_doctor_id = NULL, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      `UPDATE sessions SET assigned_doctor_id = NULL, consulted_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING *`,
       [req.params.session_id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
@@ -227,7 +313,7 @@ router.post('/release/:session_id', async (req, res) => {
 
     const result = await pool.query(
       `UPDATE sessions
-          SET assigned_doctor_id = NULL, consulted_at = NULL,
+          SET assigned_doctor_id = NULL, consulted_at = NULL, dispatched_at = NULL,
               released_at = NOW(), updated_at = NOW()
         WHERE id = $1 RETURNING *`,
       [req.params.session_id]
@@ -298,13 +384,16 @@ router.get('/consulted', async (req, res) => {
     const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
+    // Consulted = visits I finished (Save & Generate QR → dispatched_at set).
+    // Merely opening/locking a patient does NOT put them here.
     const result = await pool.query(
       `SELECT s.*, sr.doctor_feedback, sr.created_at as report_created_at
        FROM sessions s
        LEFT JOIN session_reports sr ON sr.session_id = s.id
        WHERE s.assigned_doctor_id = $1
          AND s.state = 'COMPLETE'
-       ORDER BY s.updated_at DESC
+         AND s.dispatched_at IS NOT NULL
+       ORDER BY s.dispatched_at DESC
        LIMIT 100`,
       [decoded.doctor_id]
     );

@@ -98,6 +98,16 @@ export const api = {
   doctorUnassign: (sessionId) => apiFetch(`/api/doctor/unassign/${sessionId}`, { method: 'POST' }),
   doctorReassign: (sessionId, targetDoctorId) => apiFetch(`/api/doctor/reassign/${sessionId}`, { method: 'POST', body: JSON.stringify({ target_doctor_id: targetDoctorId }) }),
   doctorRelease: (sessionId) => apiFetch(`/api/doctor/release/${sessionId}`, { method: 'POST' }),
+  doctorOpen: async (sessionId) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/api/doctor/open/${sessionId}`, { method: 'POST', headers });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409) return { ok: false, locked: true, locked_by: body.locked_by, dispatched: body.dispatched };
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    return { ok: true, session: body };
+  },
+  doctorDispatch: (sessionId) => apiFetch(`/api/doctor/dispatch/${sessionId}`, { method: 'POST' }),
   doctorConsulted: () => apiFetch('/api/doctor/consulted'),
   doctorDeleteSession: (sessionId) => apiFetch(`/api/doctor/session/${sessionId}`, { method: 'DELETE' }),
   doctorChangePin: (old_pin, new_pin) => apiFetch('/api/doctor/change-pin', { method: 'POST', body: JSON.stringify({ old_pin, new_pin }) }),

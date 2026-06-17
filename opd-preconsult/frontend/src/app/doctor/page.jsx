@@ -50,6 +50,9 @@ function groupByPatient(list) {
       latest,
       filledNow,
       releasedRecent: RELEASE_RECENT(latest),
+      dispatched: !!latest.dispatched_at,            // finished (Save & QR) → leaves queue
+      lockedById: latest.dispatched_at ? null : (latest.assigned_doctor_id || null),
+      lockedByName: latest.dispatched_at ? null : (latest.doctor_name || null),
       triage: filledNow ? latest.triage_level : null,
     });
   }
@@ -162,6 +165,8 @@ function DoctorDashboard({ doctor }) {
   const [refreshing, setRefreshing] = useState(false);          // brief spin on the refresh icon
   const [voiceClips, setVoiceClips] = useState([]);             // patient's recorded voice answers for the selected visit
   const [audioOpen, setAudioOpen] = useState(false);            // patient-audio panel toggle (in the header, not a workflow tab)
+  const [activeLock, setActiveLock] = useState(null);           // phone of the patient I've opened & not yet dispatched
+  const [switchBlocked, setSwitchBlocked] = useState(false);    // tried to open another patient before finishing → red flash + message
 
   useEffect(() => {
     loadQueue();
@@ -203,6 +208,16 @@ function DoctorDashboard({ doctor }) {
     });
   }, [sessions]);
 
+  // Keep activeLock in sync with the server's truth: whatever patient is locked
+  // to me (assigned, not yet dispatched) IS my active consultation. This both
+  // restores the lock after a browser reload and clears it once I finish/abandon
+  // — so I can never get stuck, and can never hold two at once.
+  useEffect(() => {
+    const mine = groupByPatient(sessions).find(p => p.lockedById === doctor.id && !p.dispatched);
+    if (mine && activeLock !== mine.phone) setActiveLock(mine.phone);
+    else if (!mine && activeLock) setActiveLock(null);
+  }, [sessions]);
+
   function markSeen(visitId) {
     setSeenNew(prev => {
       if (prev[visitId]) return prev;
@@ -217,6 +232,8 @@ function DoctorDashboard({ doctor }) {
   }
 
   function switchTab(t) {
+    // Can't leave to Consulted mid-consultation — finish (Save & Generate QR) first.
+    if (t === 'consulted' && activeLock) { setSwitchBlocked(true); return; }
     setTab(t);
     setSelected(null);
     setReport(null);
@@ -230,9 +247,8 @@ function DoctorDashboard({ doctor }) {
     setReport(null);
     setRightTab('report');
     setLoading(true);
-    if (!s.assigned_doctor_id && tab === 'queue') {
-      try { await api.doctorAssign(s.id); loadQueue(); } catch {}
-    }
+    // No auto-assign here — locking a queue patient happens explicitly via
+    // openPatient() (with the confirm dialog). selectSession just loads a visit.
     try { setReport(await api.getReport(s.id)); } catch { setReport(null); }
     setLoading(false);
     // Load the patient's recorded voice answers (if any) for playback.
@@ -256,6 +272,58 @@ function DoctorDashboard({ doctor }) {
     } catch (err) {
       toast('Release failed: ' + (err.message || 'unknown error'), 'error');
     }
+  }
+
+  // Open a QUEUE patient (the tree root). Confirms, then acquires an exclusive
+  // lock. While I hold a lock on someone, clicking a DIFFERENT patient is blocked
+  // (red flash + message) until I finish them with Save & Generate QR.
+  async function openPatient(p) {
+    const lockedByMe = (p.lockedById && p.lockedById === doctor.id) || activeLock === p.phone;
+    const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
+
+    // Already mine → just toggle the tree open/closed, no confirm.
+    if (lockedByMe) {
+      setExpanded(e => ({ ...e, [p.phone]: !e[p.phone] }));
+      return;
+    }
+    // I'm mid-consultation with someone else → block the switch.
+    if (activeLock && activeLock !== p.phone) {
+      setSwitchBlocked(true);
+      return;
+    }
+    // Held by another doctor → can't open.
+    if (lockedByOther) {
+      toast(`Being consulted by ${p.lockedByName || 'another doctor'}`, 'error');
+      return;
+    }
+    // Free → confirm, then lock.
+    if (!(await confirm({
+      title: 'Open & lock this patient?',
+      message: `${p.name} · ${p.phone}\nOnce you open them, other doctors won't be able to view this patient until you finish (Save & Generate QR).`,
+      confirmLabel: 'Open & lock',
+    }))) return;
+
+    const res = await api.doctorOpen(p.latest.id).catch(() => ({ ok: false, error: true }));
+    if (res.ok) {
+      setActiveLock(p.phone);
+      setExpanded(e => ({ ...e, [p.phone]: true }));
+      markSeen(p.latest.id);
+      selectSession(p.latest);
+      loadQueue();
+    } else if (res.locked) {
+      toast(`Being consulted by ${res.locked_by || 'another doctor'}`, 'error');
+      loadQueue();
+    } else {
+      toast('Could not open patient — please try again.', 'error');
+    }
+  }
+
+  // Called by PrescriptionPanel after a successful Save & Generate QR: the visit
+  // is dispatched (now in Consulted, gone from the queue) and the lock is freed.
+  function handleDispatched() {
+    setActiveLock(null);
+    loadQueue();
+    loadConsulted();
   }
 
   // Release a CONSULTED visit back to the active queue. Clears the doctor link +
@@ -358,7 +426,9 @@ function DoctorDashboard({ doctor }) {
   // pinned this session (they appeared with a recent fill, so they stay visible
   // even after that visit is deleted). A patient with ONLY old visits and no
   // recent fill (never pinned) does not show up.
-  const patients = groupByPatient(sessions).filter(p => p.filledNow || pinned[p.phone]);
+  // Queue excludes DISPATCHED patients (finished via Save & Generate QR — they
+  // move to Consulted). Locked-but-not-finished patients stay (shown in-progress).
+  const patients = groupByPatient(sessions).filter(p => (p.filledNow || pinned[p.phone]) && !p.dispatched);
   // Consulted: a flat list of INDIVIDUAL consulted visits (NOT grouped per
   // patient). Every form a patient filled and the doctor consulted is its own
   // entry — so a returning patient who fills the form again appears as a new,
@@ -367,8 +437,8 @@ function DoctorDashboard({ doctor }) {
   // when each visit was first consulted (consulted_at, stamped once), newest
   // consult first, so re-opening a visit never reshuffles the list.
   const consultedList = [...consulted].sort((a, b) => {
-    const ta = a.consulted_at || a.updated_at;
-    const tb = b.consulted_at || b.updated_at;
+    const ta = a.dispatched_at || a.consulted_at || a.updated_at;
+    const tb = b.dispatched_at || b.consulted_at || b.updated_at;
     return new Date(tb) - new Date(ta);
   });
 
@@ -417,7 +487,7 @@ function DoctorDashboard({ doctor }) {
   // "Consulted today" count.
   const todayStr = now.toDateString();
   const consultedTodayCount = consultedList.filter(s => {
-    const t = s.consulted_at || s.updated_at;
+    const t = s.dispatched_at || s.consulted_at || s.updated_at;
     return t && new Date(t).toDateString() === todayStr;
   }).length;
 
@@ -518,27 +588,34 @@ function DoctorDashboard({ doctor }) {
         <div className="scrolly" style={{ flex: 1, minHeight: 0, marginRight: -6, paddingRight: 6 }}>
         {tab === 'queue' && (!queueLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredPatients.length || 4, 6))} />}
         {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.map(p => {
-          const isOpen = !!expanded[p.phone]; // collapsed until clicked, so "NEW" shows first
+          const lockedByMe = (p.lockedById && p.lockedById === doctor.id) || activeLock === p.phone;
+          const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
+          // Only the patient I currently hold shows its visit tree — others can't
+          // be expanded/peeked (opening = locking, which requires the confirm).
+          const isOpen = lockedByMe && !!expanded[p.phone];
           const headColor = p.triage ? TRIAGE_COLORS[p.triage] : null;
           return (
             <div key={p.phone} style={{ marginBottom: 8 }}>
               {/* Patient heading */}
-              <div onClick={() => setExpanded(e => ({ ...e, [p.phone]: !isOpen }))}
-                /* Header tinted by the patient's current triage; the nested visit
-                   rows stay white and carry only their own triage chip. */
-                style={{ display: 'flex', alignItems: 'stretch', gap: 8, cursor: 'pointer', padding: '8px 10px', borderRadius: 8, background: headColor ? `${headColor}14` : '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+              <div onClick={() => openPatient(p)}
+                /* Header tinted by the patient's current triage; greyed out when
+                   another doctor holds the lock. */
+                style={{ display: 'flex', alignItems: 'stretch', gap: 8, cursor: lockedByOther ? 'not-allowed' : 'pointer', padding: '8px 10px', borderRadius: 8, background: lockedByOther ? '#F2F3F5' : (headColor ? `${headColor}14` : '#fff'), boxShadow: '0 1px 3px rgba(0,0,0,0.06)', opacity: lockedByOther ? 0.75 : 1, outline: lockedByMe ? '2px solid var(--secondary)' : 'none', outlineOffset: -2 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</p>
                   <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{p.phone} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
+                  {lockedByOther && (
+                    <p style={{ fontSize: 10.5, color: '#C0392B', fontWeight: 600, marginTop: 2 }}>🔒 Being consulted by {p.lockedByName || 'another doctor'}</p>
+                  )}
+                  {lockedByMe && (
+                    <p style={{ fontSize: 10.5, color: 'var(--secondary)', fontWeight: 600, marginTop: 2 }}>● You're consulting</p>
+                  )}
                 </div>
-                {/* Right column: triage chip pinned top-right, the NEW/chevron
-                    indicator pinned bottom-right (directly under the chip). A
-                    filled-now patient shows "NEW" until the doctor opens them once
-                    (like an unread badge); after that it's a chevron hinting the
-                    previous consultations can be expanded. */}
                 <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', gap: 6 }}>
                   {p.triage ? <TriageBadge level={p.triage} compact /> : <span />}
-                  {(p.filledNow && !seenNew[p.latest.id]) ? (
+                  {lockedByOther ? (
+                    <span style={{ fontSize: 14 }}>🔒</span>
+                  ) : (p.filledNow && !seenNew[p.latest.id]) ? (
                     <span style={{ fontSize: 9, background: headColor || '#888', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
                   ) : (
                     <span style={{ fontSize: 14, color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
@@ -623,7 +700,7 @@ function DoctorDashboard({ doctor }) {
                 {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''}
               </p>
               <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
-                🕒 Consulted: {fmtVisitDate(s.consulted_at || s.updated_at)}
+                🕒 Consulted: {fmtVisitDate(s.dispatched_at || s.consulted_at || s.updated_at)}
               </p>
               {s.doctor_feedback && (
                 <span style={{ fontSize: 10, background: s.doctor_feedback === 'accurate' ? '#D5F5E3' : '#FADBD8',
@@ -645,7 +722,23 @@ function DoctorDashboard({ doctor }) {
 
       {/* Right Panel — own height + internal scroll so the report scrolls
           inside the card and never nudges the whole page at the edges. */}
-      <div className="scrolly" style={{ flex: 1, minWidth: 0, height: '100%', background: 'var(--card-bg)', borderRadius: 16, padding: 24, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+      <div className="scrolly" style={{ flex: 1, minWidth: 0, height: '100%', background: switchBlocked ? '#FDF1EF' : 'var(--card-bg)', borderRadius: 16, padding: 24, border: switchBlocked ? '1.5px solid #E6A79F' : '1.5px solid transparent', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', transition: 'background 0.15s, border-color 0.15s' }}>
+        {/* Blocked-switch notice — you must finish the current patient first. */}
+        {switchBlocked && (
+          <div onClick={() => setSwitchBlocked(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 420, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: 'center' }}>
+              <div style={{ fontSize: 34, marginBottom: 8 }}>✋</div>
+              <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish this patient first</h3>
+              <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: '0 0 18px' }}>
+                You're currently consulting a patient. Complete their prescription and click
+                <strong> Save &amp; Generate QR</strong> before opening another patient.
+              </p>
+              <button className="btn btn-primary" style={{ minWidth: 120 }} onClick={() => setSwitchBlocked(false)}>OK</button>
+            </div>
+          </div>
+        )}
         {!selected && (
           <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
             <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'queue' ? '🩺' : '📋'}</div>
@@ -850,7 +943,7 @@ function DoctorDashboard({ doctor }) {
             )}
 
             {rightTab === 'prescribe' && (
-              <PrescriptionPanel session={selected} doctor={doctor} />
+              <PrescriptionPanel session={selected} doctor={doctor} onDispatched={handleDispatched} />
             )}
 
             {rightTab === 'scribe' && (
@@ -988,7 +1081,7 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
   );
 }
 
-function PrescriptionPanel({ session, doctor }) {
+function PrescriptionPanel({ session, doctor, onDispatched }) {
   const [items, setItems] = useState(() => [makeItem()]);
   const [allergies, setAllergies] = useState([]);
   const [warnings, setWarnings] = useState([]);
@@ -1281,6 +1374,9 @@ function PrescriptionPanel({ session, doctor }) {
       setExistingRx(prev => [{ ...result.prescription, items: result.items }, ...prev]);
       if (draftKey) { try { localStorage.removeItem(draftKey); } catch {} }
       setDraftRestored(false);
+      // Save & Generate QR is the end-point: dispatch the visit (→ Consulted,
+      // out of the queue) and release the lock. Non-fatal if it fails.
+      try { await api.doctorDispatch(session.id); onDispatched?.(); } catch {}
     } catch (err) {
       setSaveError('Failed to save prescription: ' + (err.message || 'unknown error'));
     } finally {
@@ -1298,6 +1394,9 @@ function PrescriptionPanel({ session, doctor }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {dialog}
       {toastView}
+      {/* The whole prescription form is hidden once saved — at that point the
+          consultation is done and only the QR result below is relevant. */}
+      {!saved && (<>
       {/* Allergies */}
       {allergies.length > 0 && (
         <div style={{ background: '#FADBD8', borderRadius: 8, padding: 10, fontSize: 13 }}>
@@ -1504,6 +1603,7 @@ function PrescriptionPanel({ session, doctor }) {
       {saveError && (
         <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', fontWeight: 600 }}>⚠ {saveError}</p>
       )}
+      </>)}
 
       {/* QR Result */}
       {saved && (
