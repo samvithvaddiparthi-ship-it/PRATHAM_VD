@@ -74,12 +74,30 @@ export const api = {
   confirmDocument: (docId, confirmed = true) => apiFetch(`/api/ocr/confirm/${docId}`, { method: 'POST', body: JSON.stringify({ confirmed }) }),
   getDocuments: (sessionId) => apiFetch(`/api/ocr/documents/${sessionId}`),
 
+  // Per-answer voice recordings (patient capture → doctor playback)
+  uploadAnswerAudio: async (blob, sessionId, questionId, durationMs, transcript) => {
+    const fd = new FormData();
+    fd.append('file', blob, `answer_${questionId || 'q'}.webm`);
+    if (sessionId) fd.append('session_id', sessionId);
+    if (questionId) fd.append('question_id', questionId);
+    if (durationMs != null) fd.append('duration_ms', String(Math.round(durationMs)));
+    if (transcript) fd.append('transcript', transcript);
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/api/audio/answer`, { method: 'POST', headers, body: fd });
+    if (!res.ok) throw new Error('audio upload failed');
+    return res.json();
+  },
+  getAnswerAudio: (sessionId) => apiFetch(`/api/audio/session/${sessionId}`),
+  answerAudioUrl: (clipId) => `${BASE}/api/audio/clip/${clipId}`,
+
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),
   doctorQueue: () => apiFetch('/api/doctor/queue'),
   doctorAssign: (sessionId) => apiFetch(`/api/doctor/assign/${sessionId}`, { method: 'POST' }),
   doctorUnassign: (sessionId) => apiFetch(`/api/doctor/unassign/${sessionId}`, { method: 'POST' }),
   doctorReassign: (sessionId, targetDoctorId) => apiFetch(`/api/doctor/reassign/${sessionId}`, { method: 'POST', body: JSON.stringify({ target_doctor_id: targetDoctorId }) }),
+  doctorRelease: (sessionId) => apiFetch(`/api/doctor/release/${sessionId}`, { method: 'POST' }),
   doctorConsulted: () => apiFetch('/api/doctor/consulted'),
   doctorDeleteSession: (sessionId) => apiFetch(`/api/doctor/session/${sessionId}`, { method: 'DELETE' }),
   doctorChangePin: (old_pin, new_pin) => apiFetch('/api/doctor/change-pin', { method: 'POST', body: JSON.stringify({ old_pin, new_pin }) }),

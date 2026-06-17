@@ -31,9 +31,14 @@ function groupByPatient(list) {
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(s);
   }
+  const RELEASE_RECENT = v => !!v.released_at && (Date.now() - new Date(v.released_at).getTime() < 24 * 3600 * 1000);
+  // A visit's "queue recency": a just-released visit ranks by its release time, so
+  // releasing an OLD visit makes it the patient's representative entry (it floats
+  // to the top of the queue), otherwise by when it was filled.
+  const recencyOf = v => new Date((RELEASE_RECENT(v) && v.released_at) || v.created_at).getTime();
   const patients = [];
   for (const [phone, visits] of map) {
-    visits.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    visits.sort((a, b) => recencyOf(b) - recencyOf(a));
     const latest = visits[0];
     const filledNow = !!latest.is_recent;
     patients.push({
@@ -44,10 +49,15 @@ function groupByPatient(list) {
       visits,
       latest,
       filledNow,
+      releasedRecent: RELEASE_RECENT(latest),
       triage: filledNow ? latest.triage_level : null,
     });
   }
   patients.sort((a, b) => {
+    // A freshly-released visit pops to the very top (most recent release first),
+    // so a doctor's deliberate "send back to queue" is immediately visible.
+    if (a.releasedRecent !== b.releasedRecent) return a.releasedRecent ? -1 : 1;
+    if (a.releasedRecent && b.releasedRecent) return new Date(b.latest.released_at) - new Date(a.latest.released_at);
     if (a.filledNow !== b.filledNow) return a.filledNow ? -1 : 1;
     if (a.filledNow && b.filledNow) {
       const d = (TRIAGE_SEVERITY[a.triage] ?? 3) - (TRIAGE_SEVERITY[b.triage] ?? 3);
@@ -150,6 +160,8 @@ function DoctorDashboard({ doctor }) {
   const [queueLoaded, setQueueLoaded] = useState(false);       // first queue fetch done? (for skeletons)
   const [consultedLoaded, setConsultedLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);          // brief spin on the refresh icon
+  const [voiceClips, setVoiceClips] = useState([]);             // patient's recorded voice answers for the selected visit
+  const [audioOpen, setAudioOpen] = useState(false);            // patient-audio panel toggle (in the header, not a workflow tab)
 
   useEffect(() => {
     loadQueue();
@@ -223,6 +235,10 @@ function DoctorDashboard({ doctor }) {
     }
     try { setReport(await api.getReport(s.id)); } catch { setReport(null); }
     setLoading(false);
+    // Load the patient's recorded voice answers (if any) for playback.
+    setVoiceClips([]);
+    setAudioOpen(false);
+    api.getAnswerAudio(s.id).then(c => setVoiceClips(Array.isArray(c) ? c : [])).catch(() => setVoiceClips([]));
   }
 
   async function handleUnassign() {
@@ -237,6 +253,35 @@ function DoctorDashboard({ doctor }) {
       setSelected(null);
       setReport(null);
       loadQueue();
+    } catch (err) {
+      toast('Release failed: ' + (err.message || 'unknown error'), 'error');
+    }
+  }
+
+  // Release a CONSULTED visit back to the active queue. Clears the doctor link +
+  // consulted stamp on the server and pops it to the top of the queue as a NEW
+  // entry. We also un-"see" the visit locally so its NEW badge shows again.
+  async function handleRelease() {
+    if (!selected) return;
+    if (!(await confirm({
+      title: 'Release back to queue?',
+      message: 'This removes the visit from your Consulted list and sends it back to the top of the active queue as a new entry.',
+      confirmLabel: 'Release',
+    }))) return;
+    try {
+      await api.doctorRelease(selected.id);
+      setSeenNew(prev => {
+        if (!prev[selected.id]) return prev;
+        const next = { ...prev };
+        delete next[selected.id];
+        try { localStorage.setItem('seen_new_visits', JSON.stringify(next)); } catch {}
+        return next;
+      });
+      setSelected(null);
+      setReport(null);
+      loadConsulted();
+      loadQueue();
+      toast('Released back to the queue', 'success');
     } catch (err) {
       toast('Release failed: ' + (err.message || 'unknown error'), 'error');
     }
@@ -505,6 +550,7 @@ function DoctorDashboard({ doctor }) {
                 <div style={{ marginLeft: 14, marginTop: 4, borderLeft: '1px solid #E0E0E0', paddingLeft: 10 }}>
                   {p.visits.map((v, vi) => {
                     const isFilledNow = vi === 0 && p.filledNow;
+                    const isReleased = vi === 0 && p.releasedRecent;
                     const isSel = selected?.id === v.id;
                     const meds = v.prescription_items || [];
                     // Every visit row gets a light tint of its OWN triage colour
@@ -527,9 +573,9 @@ function DoctorDashboard({ doctor }) {
                           {v.triage_level && <TriageBadge level={v.triage_level} compact />}
                           <div style={{ flex: 1 }}>
                             <p style={{ fontSize: 12, fontWeight: 600 }}>
-                              {isFilledNow ? '★ Filled now' : fmtVisitDate(v.created_at)}
+                              {isReleased ? '↩ Returned to queue' : isFilledNow ? '★ Filled now' : fmtVisitDate(v.created_at)}
                             </p>
-                            {isFilledNow && <p style={{ fontSize: 10, color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
+                            {(isFilledNow || isReleased) && <p style={{ fontSize: 10, color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
                           </div>
                         </div>
                         {/* Prescriptions for this particular visit */}
@@ -614,47 +660,101 @@ function DoctorDashboard({ doctor }) {
 
         {selected && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-              <TriageBadge level={selected.triage_level} />
-              <h2 style={{ fontSize: 20, overflowWrap: 'anywhere', minWidth: 0 }}>{selected.patient_name}</h2>
-              <span style={{ color: 'var(--text-light)', fontSize: 14 }}>
-                {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department}
-              </span>
-              <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', alignItems: 'center', position: 'relative' }}>
-                {tab === 'queue' && selected.assigned_doctor_id && (
+            <div style={{ marginBottom: 16 }}>
+              {/* Top row: triage badge on the left, actions on the right. The
+                  patient name always sits on its OWN line below the triage (kept
+                  consistent for every entry), prefixed with a small "PATIENT"
+                  label so it can't be mistaken for the triage or the meta line. */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                <TriageBadge level={selected.triage_level} />
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', position: 'relative' }}>
+                {/* Queue: reassign to another doctor (Release lives on the
+                    Consulted side now — releasing returns a consulted visit to
+                    the active queue). */}
+                {tab === 'queue' && selected.assigned_doctor_id && otherDoctors.length > 0 && (
+                  <select onChange={e => { if (e.target.value) handleReassign(e.target.value); e.target.value = ''; }}
+                    style={{ border: '1px solid #ccc', borderRadius: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>
+                    <option value="">Reassign to...</option>
+                    {otherDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                )}
+
+                {/* Consulted: release this visit back to the active queue. */}
+                {tab === 'consulted' && (
+                  <button onClick={handleRelease}
+                    title="Send this visit back to the active queue"
+                    style={{ background: 'none', border: '1px solid #E74C3C', color: '#E74C3C', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                    ↩ Release to queue
+                  </button>
+                )}
+
+                {/* Discrete kebab (⋯) menu — holds the destructive Delete action.
+                    Only on the Queue tab: consulted visits are a permanent record
+                    and can't be deleted, so the menu would be empty there. */}
+                {tab === 'queue' && (
                   <>
-                    <button onClick={handleUnassign}
-                      style={{ background: 'none', border: '1px solid #E74C3C', color: '#E74C3C', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
-                      Release
+                    <button onClick={() => setMenuOpen(o => !o)} title="More options"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 8px', color: 'var(--text-light)', borderRadius: 6 }}>
+                      ⋯
                     </button>
-                    {otherDoctors.length > 0 && (
-                      <select onChange={e => { if (e.target.value) handleReassign(e.target.value); e.target.value = ''; }}
-                        style={{ border: '1px solid #ccc', borderRadius: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>
-                        <option value="">Reassign to...</option>
-                        {otherDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </select>
+                    {menuOpen && (
+                      <>
+                        {/* click-away overlay */}
+                        <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+                        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.14)', zIndex: 10, minWidth: 190, overflow: 'hidden' }}>
+                          <button onClick={() => { setMenuOpen(false); setDeleteAck(false); setConfirmDelete(true); }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '11px 14px', cursor: 'pointer', fontSize: 13, color: '#E74C3C' }}>
+                            🗑 Delete patient entry
+                          </button>
+                        </div>
+                      </>
                     )}
                   </>
                 )}
-
-                {/* Discrete kebab (⋯) menu — holds destructive actions out of the way */}
-                <button onClick={() => setMenuOpen(o => !o)} title="More options"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 8px', color: 'var(--text-light)', borderRadius: 6 }}>
-                  ⋯
-                </button>
-                {menuOpen && (
-                  <>
-                    {/* click-away overlay */}
-                    <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-                    <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.14)', zIndex: 10, minWidth: 190, overflow: 'hidden' }}>
-                      <button onClick={() => { setMenuOpen(false); setDeleteAck(false); setConfirmDelete(true); }}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '11px 14px', cursor: 'pointer', fontSize: 13, color: '#E74C3C' }}>
-                        🗑 Delete patient entry
-                      </button>
-                    </div>
-                  </>
-                )}
+                </div>
               </div>
+
+              {/* Patient name on its own line, clearly labelled, with the
+                  age / gender / department as a lighter meta line beneath it. */}
+              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--text-light)', marginBottom: 1 }}>Patient</div>
+              <h2 style={{ fontSize: 22, margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.patient_name}</h2>
+              <p style={{ margin: '3px 0 0', color: 'var(--text-light)', fontSize: 13 }}>
+                {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department}
+              </p>
+
+              {/* Patient-captured voice answers — reference material, NOT a doctor
+                  workflow step, so it lives here under the patient identity with a
+                  distinct teal accent (not the workflow-blue of Report/Prescribe/
+                  Scribe). Collapsed by default; expands inline on click. */}
+              {voiceClips.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <button onClick={() => setAudioOpen(o => !o)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: audioOpen ? '#E8F8F5' : '#fff', border: '1px solid var(--accent)', color: '#138D75', borderRadius: 20, padding: '5px 13px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+                    🔊 Patient audio ({voiceClips.length})
+                    <span style={{ fontSize: 10, color: 'var(--text-light)' }}>{audioOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {audioOpen && (
+                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10, borderLeft: '3px solid var(--accent)', paddingLeft: 12 }}>
+                      {voiceClips.map(clip => {
+                        // Label each clip by the question it answers (the transcript
+                        // is already in the report).
+                        const label = clip.question_id
+                          ? clip.question_id.replace(/^q_/, '').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())
+                          : 'Voice answer';
+                        return (
+                          <div key={clip.id} style={{ background: '#F7F9FB', border: '1px solid #E6EBF1', borderRadius: 10, padding: '10px 12px' }}>
+                            <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                              {label}
+                              {clip.duration_ms ? <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {(clip.duration_ms / 1000).toFixed(1)}s</span> : null}
+                            </p>
+                            <audio controls preload="none" src={api.answerAudioUrl(clip.id)} style={{ width: '100%', height: 36 }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Delete confirmation modal — requires an explicit acknowledgement */}

@@ -124,7 +124,8 @@ router.get('/queue', async (req, res) => {
     // heading by that visit's triage. Each visit also carries its prescriptions.
     const result = await pool.query(
       `SELECT s.*, d.name as doctor_name,
-         (s.created_at > NOW() - INTERVAL '24 hours') AS is_recent,
+         (s.created_at > NOW() - INTERVAL '24 hours'
+           OR s.released_at > NOW() - INTERVAL '24 hours') AS is_recent,
          COALESCE((
            SELECT json_agg(json_build_object(
              'drug_name', pi.drug_name, 'dose', pi.dose,
@@ -206,6 +207,41 @@ router.post('/unassign/:session_id', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('unassign error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Release a consulted visit back to the active queue. Unlike /unassign (which
+// only drops the doctor link), this also CLEARS consulted_at — so the visit
+// leaves the doctor's Consulted list entirely — and stamps released_at, which
+// makes the queue treat it as "filled now" again (re-surfaces at the top with a
+// NEW badge, like a fresh patient fill) and counts it as "waiting".
+router.post('/release/:session_id', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).json({ error: 'No token' });
+
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+
+    const result = await pool.query(
+      `UPDATE sessions
+          SET assigned_doctor_id = NULL, consulted_at = NULL,
+              released_at = NOW(), updated_at = NOW()
+        WHERE id = $1 RETURNING *`,
+      [req.params.session_id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+
+    await pool.query(
+      `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_released', $2, $3)`,
+      [req.params.session_id, decoded.doctor_id, JSON.stringify({ doctor_name: decoded.doctor_name })]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('release error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

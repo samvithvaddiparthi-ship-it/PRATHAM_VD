@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import llm, triage, report, ocr, prescription, scribe, drugs
+from .routers import llm, triage, report, ocr, prescription, scribe, drugs, audio
 from .llm_client import LLMUnavailable
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ app.include_router(ocr.router)
 app.include_router(prescription.router)
 app.include_router(scribe.router)
 app.include_router(drugs.router)
+app.include_router(audio.router)
 
 @app.get("/health")
 async def health():

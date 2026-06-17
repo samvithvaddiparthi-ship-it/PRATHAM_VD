@@ -96,6 +96,27 @@ def get_url(object_key: str, expires_hours: int = 24) -> str:
         return None
 
 
+def get_bytes(object_key: str):
+    """
+    Fetch the raw bytes of a stored object (used to stream audio back through the
+    backend, since MinIO itself isn't exposed to the browser). Returns None on
+    any failure.
+    """
+    if not object_key:
+        return None
+    try:
+        client, bucket = _get_client()
+        resp = client.get_object(bucket, object_key)
+        try:
+            return resp.read()
+        finally:
+            resp.close()
+            resp.release_conn()
+    except Exception as e:
+        print(f"[storage] get_bytes failed: {e}", flush=True)
+        return None
+
+
 def storage_available() -> bool:
     """Check if MinIO is reachable. Used for health checks."""
     try:

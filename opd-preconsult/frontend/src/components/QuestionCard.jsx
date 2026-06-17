@@ -36,6 +36,14 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     setOcrResult(null);
   }
 
+  // Store the patient's spoken audio for THIS question so the doctor can play it
+  // back. Fire-and-forget — a failed upload must never block the interview.
+  function uploadVoiceClip(blob, durMs, transcript) {
+    if (!blob) return;
+    const sessionId = sessionStorage.getItem('session_id');
+    api.uploadAnswerAudio(blob, sessionId, question.id, durMs, transcript).catch(() => {});
+  }
+
   async function handleUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -103,7 +111,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
             onChange={e => setValue(e.target.value)}
             placeholder={lang === 'hi' ? 'यहाँ टाइप करें...' : lang === 'te' ? 'ఇక్కడ టైప్ చేయండి...' : 'Type here...'}
           />
-          <VoiceButton lang={lang} onResult={v => { setValue(v); submit(v); }} />
+          <VoiceButton lang={lang} onResult={(v, blob, durMs) => { uploadVoiceClip(blob, durMs, v); setValue(v); submit(v); }} />
 
           {/* Contextual document upload */}
           {uploadCfg && (
