@@ -167,6 +167,8 @@ async def get_report(session_id: str):
         "fhir_bundle": r["fhir_bundle"],
         "his_pushed": r["his_pushed"],
         "doctor_feedback": r["doctor_feedback"],
+        "doctor_correction": r.get("doctor_correction"),
+        "corrected_at": r.get("corrected_at"),
     }
 
 
@@ -178,6 +180,26 @@ async def submit_feedback(session_id: str, feedback: dict):
     execute(
         "UPDATE session_reports SET doctor_feedback = %s WHERE session_id = %s",
         (val, session_id),
+    )
+    return {"stored": True}
+
+
+@router.post("/{session_id}/correction")
+async def save_correction(session_id: str, body: dict):
+    """Store the doctor's correction note for the latest report (preserves the AI
+    original) and flag the report as inaccurate. Empty note clears the correction."""
+    note = (body.get("note") or "").strip()
+    rows = query(
+        "SELECT id FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
+        (session_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found")
+    execute(
+        """UPDATE session_reports
+           SET doctor_correction = %s, corrected_at = NOW(), doctor_feedback = 'inaccurate'
+           WHERE id = %s""",
+        (note or None, rows[0]["id"]),
     )
     return {"stored": True}
 

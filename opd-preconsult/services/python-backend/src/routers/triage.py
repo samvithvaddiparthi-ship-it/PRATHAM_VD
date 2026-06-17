@@ -66,6 +66,10 @@ async def evaluate(req: TriageRequest):
     if bp_dia and bp_dia > 120:
         triggered.append("bp_diastolic_critical")
         level = "RED"
+    # Hypotension — a low systolic (shock) is a critical finding too, not just high BP.
+    if bp_sys and bp_sys < 90:
+        triggered.append("bp_systolic_hypotension")
+        level = "RED"
     if spo2 and spo2 < 90:
         triggered.append("spo2_critical")
         level = "RED"

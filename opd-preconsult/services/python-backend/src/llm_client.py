@@ -41,18 +41,33 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
     oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ant_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
+    configured = False
+
     if gem_key:
+        configured = True
         try:
             return _gemini_complete(gem_key, system_prompt, user_content, max_tokens)
         except Exception as e:
             logger.warning(f"Gemini text failed, trying fallback: {e}")
 
     if oai_key:
-        return _openai_complete(oai_key, system_prompt, user_content, max_tokens)
+        configured = True
+        try:
+            return _openai_complete(oai_key, system_prompt, user_content, max_tokens)
+        except Exception as e:
+            logger.warning(f"OpenAI text failed, trying fallback: {e}")
 
     if ant_key and ant_key != "your_key_here":
-        return _anthropic_complete(ant_key, system_prompt, user_content, max_tokens)
+        configured = True
+        try:
+            return _anthropic_complete(ant_key, system_prompt, user_content, max_tokens)
+        except Exception as e:
+            logger.warning(f"Anthropic text failed: {e}")
 
+    if configured:
+        # Keys exist but every provider failed (e.g. quota/network). Surface as
+        # unavailable so callers degrade gracefully.
+        raise LLMUnavailable("All configured LLM providers are currently unavailable (e.g. quota/rate limit).")
     raise LLMUnavailable("No LLM API key configured. Set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.")
 
 

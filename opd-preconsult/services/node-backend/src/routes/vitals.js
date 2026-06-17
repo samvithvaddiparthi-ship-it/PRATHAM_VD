@@ -16,9 +16,12 @@ router.post('/:session_id', authMiddleware, async (req, res) => {
       [session_id, bp_systolic, bp_diastolic, bp_side || 'left', weight_kg, spo2_pct, heart_rate, temperature_c, source || 'manual']
     );
 
-    // Update session state
+    // Advance the session to VITALS — but NEVER downgrade a session that has
+    // already COMPLETED (e.g. vitals entered late from the queue page). Doing so
+    // would pull the patient out of the doctor's queue. The late flow re-runs
+    // report generation, which sets COMPLETE again.
     await pool.query(
-      `UPDATE sessions SET state = 'VITALS', updated_at = NOW() WHERE id = $1`,
+      `UPDATE sessions SET state = 'VITALS', updated_at = NOW() WHERE id = $1 AND state <> 'COMPLETE'`,
       [session_id]
     );
 

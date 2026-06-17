@@ -13,7 +13,7 @@ written on a prescription (Ecosprin, Telma, Augmentin…) are checked correctly.
 POC content — NOT exhaustive and NOT clinically validated. The rules below must
 be reviewed by a clinician before any real-world reliance.
 """
-from .drug_data import normalize_drug_name, drug_classes
+from .drug_data import normalize_with, GENERIC_DRUGS, BRAND_TO_GENERIC
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Class-vs-class rules.
@@ -149,10 +149,30 @@ ALLERGY_CLASS_MAP = {
 }
 
 
-def _class_rule_for(classes_a: set, classes_b: set):
+# Bundle of the rule data the check functions operate on. The built-in module
+# dicts are the DEFAULT (used by tests and as the seed); the live app passes a
+# DB-backed bundle of the same shape from drug_repo.load_curated().
+DEFAULT_RULES = {
+    "generics": GENERIC_DRUGS,
+    "brands": BRAND_TO_GENERIC,
+    "class_interactions": CLASS_INTERACTIONS,
+    "pairs": DRUG_INTERACTIONS,
+    "allergy_map": ALLERGY_CLASS_MAP,
+}
+
+
+def _norm(name, rules):
+    return normalize_with(name, rules["generics"], rules["brands"])
+
+
+def _classes(generic, rules):
+    return set(rules["generics"].get((generic or "").lower(), []))
+
+
+def _class_rule_for(classes_a: set, classes_b: set, class_interactions):
     """Best (most severe) class rule between two class sets, or None."""
     best = None
-    for key, rule in CLASS_INTERACTIONS.items():
+    for key, rule in class_interactions.items():
         if len(key) == 1:
             (c,) = tuple(key)
             hit = c in classes_a and c in classes_b
@@ -165,32 +185,33 @@ def _class_rule_for(classes_a: set, classes_b: set):
     return best
 
 
-def _specific_rule_for(generic_a: str, generic_b: str):
+def _specific_rule_for(generic_a: str, generic_b: str, pairs):
     """Specific drug-pair rule (either direction), or None."""
-    if generic_a in DRUG_INTERACTIONS and generic_b in DRUG_INTERACTIONS[generic_a]:
-        return DRUG_INTERACTIONS[generic_a][generic_b]
-    if generic_b in DRUG_INTERACTIONS and generic_a in DRUG_INTERACTIONS[generic_b]:
-        return DRUG_INTERACTIONS[generic_b][generic_a]
+    if generic_a in pairs and generic_b in pairs[generic_a]:
+        return pairs[generic_a][generic_b]
+    if generic_b in pairs and generic_a in pairs[generic_b]:
+        return pairs[generic_b][generic_a]
     return None
 
 
-def check_interactions(drug_name, other_drugs):
+def check_interactions(drug_name, other_drugs, rules=None):
     """Check a drug against a list of other drugs. Returns a list of warnings.
     Output shape is unchanged: {drug_a, drug_b, severity, description} using the
-    original names as written (for display)."""
+    original names as written (for display). `rules` defaults to the built-ins."""
+    rules = rules or DEFAULT_RULES
     warnings = []
-    generic = normalize_drug_name(drug_name)
-    classes_a = drug_classes(generic)
+    generic = _norm(drug_name, rules)
+    classes_a = _classes(generic, rules)
 
     for other in other_drugs:
-        other_generic = normalize_drug_name(other)
+        other_generic = _norm(other, rules)
         if generic == other_generic:
             continue
 
         # Specific pair rule wins; otherwise fall back to class rule.
-        rule = _specific_rule_for(generic, other_generic)
+        rule = _specific_rule_for(generic, other_generic, rules["pairs"])
         if rule is None:
-            rule = _class_rule_for(classes_a, drug_classes(other_generic))
+            rule = _class_rule_for(classes_a, _classes(other_generic, rules), rules["class_interactions"])
 
         if rule:
             warnings.append({
@@ -203,14 +224,15 @@ def check_interactions(drug_name, other_drugs):
     return warnings
 
 
-def check_duplicates(drugs):
+def check_duplicates(drugs, rules=None):
     """Flag the same active drug prescribed more than once (e.g. a brand and its
     generic, or a drug repeated). Returns warnings in the same shape as
     check_interactions so the frontend renders them identically."""
+    rules = rules or DEFAULT_RULES
     warnings = []
     seen = {}
     for name in drugs:
-        generic = normalize_drug_name(name)
+        generic = _norm(name, rules)
         if not generic:
             continue
         if generic in seen:
@@ -225,12 +247,13 @@ def check_duplicates(drugs):
     return warnings
 
 
-def check_allergies(drug_name, allergies):
+def check_allergies(drug_name, allergies, rules=None):
     """Check a drug against patient allergies. Returns a list of contraindications.
     Output shape unchanged: {drug, allergy, severity, description}."""
+    rules = rules or DEFAULT_RULES
     warnings = []
-    generic = normalize_drug_name(drug_name)
-    classes = drug_classes(generic)
+    generic = _norm(drug_name, rules)
+    classes = _classes(generic, rules)
 
     for allergy in allergies:
         allergy_lower = (allergy or "").lower().strip()
@@ -239,7 +262,7 @@ def check_allergies(drug_name, allergies):
 
         # Direct match against the generic (also matches if the allergy itself is
         # a brand name, since both sides are normalized).
-        if allergy_lower == generic or normalize_drug_name(allergy_lower) == generic:
+        if allergy_lower == generic or _norm(allergy_lower, rules) == generic:
             warnings.append({
                 "drug": drug_name,
                 "allergy": allergy,
@@ -249,7 +272,7 @@ def check_allergies(drug_name, allergies):
             continue
 
         # Class-based match.
-        cls = ALLERGY_CLASS_MAP.get(allergy_lower)
+        cls = rules["allergy_map"].get(allergy_lower)
         if cls and cls in classes:
             warnings.append({
                 "drug": drug_name,
@@ -259,3 +282,9 @@ def check_allergies(drug_name, allergies):
             })
 
     return warnings
+
+
+def is_known(drug_name, rules=None):
+    """True if the drug normalizes to a generic that exists in the formulary."""
+    rules = rules or DEFAULT_RULES
+    return _norm(drug_name, rules) in rules["generics"]

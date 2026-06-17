@@ -6,6 +6,7 @@ import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
+import VitalsForm, { hasVitals } from '../../components/VitalsForm';
 
 const TRIAGE_COLORS = { RED: '#D9544D', AMBER: '#E0A82E', GREEN: '#3FA869' };
 const TRIAGE_SEVERITY = { RED: 0, AMBER: 1, GREEN: 2 };
@@ -149,6 +150,13 @@ function DoctorDashboard({ doctor }) {
   const [doctors, setDoctors] = useState([]);
   const [rightTab, setRightTab] = useState('report'); // report | prescribe | scribe
   const [feedbackGiven, setFeedbackGiven] = useState(null); // { id, val } — inline report-accuracy confirmation
+  const [vitals, setVitals] = useState(null);        // selected session's vitals row (null = not loaded/none)
+  const [vitalsOpen, setVitalsOpen] = useState(false); // doctor-side "add vitals" accordion expanded?
+  const [vitalsSaving, setVitalsSaving] = useState(false);
+  const [vitalsErr, setVitalsErr] = useState('');
+  const [correcting, setCorrecting] = useState(false);     // report-correction editor open?
+  const [correctionNote, setCorrectionNote] = useState('');
+  const [savingCorrection, setSavingCorrection] = useState(false);
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
@@ -255,6 +263,51 @@ function DoctorDashboard({ doctor }) {
     setVoiceClips([]);
     setAudioOpen(false);
     api.getAnswerAudio(s.id).then(c => setVoiceClips(Array.isArray(c) ? c : [])).catch(() => setVoiceClips([]));
+    // Load vitals so we can offer late entry when the patient skipped them.
+    setVitals(null); setVitalsOpen(false); setVitalsErr('');
+    api.getVitals(s.id).then(setVitals).catch(() => setVitals(null));
+    // Reset the report-correction editor for the new patient.
+    setCorrecting(false); setCorrectionNote('');
+  }
+
+  async function saveCorrection() {
+    if (!selected) return;
+    setSavingCorrection(true);
+    try {
+      await api.saveReportCorrection(selected.id, correctionNote.trim());
+      setReport(await api.getReport(selected.id));   // now carries doctor_correction
+      setCorrecting(false);
+      setFeedbackGiven({ id: selected.id, val: 'inaccurate' });
+    } catch {
+      toast('Could not save correction — please try again', 'error');
+    } finally {
+      setSavingCorrection(false);
+    }
+  }
+
+  // Doctor/nurse records vitals for a patient who skipped them. Same sequence as
+  // the patient side — re-run triage + regenerate the report so the values (and
+  // any escalation) show up here. Then refresh the report + vitals in place.
+  async function saveVitals(data) {
+    if (!selected) return;
+    setVitalsSaving(true);
+    setVitalsErr('');
+    try {
+      await api.submitVitals(selected.id, { ...data, source: 'nurse' });
+      const tri = await api.evaluate(selected.id);
+      await api.generateReport(selected.id);
+      const [rep, v] = await Promise.all([api.getReport(selected.id), api.getVitals(selected.id)]);
+      setReport(rep);
+      setVitals(v);
+      setVitalsOpen(false);
+      // Reflect any triage change immediately on the selected patient's badge.
+      setSelected(prev => (prev && prev.id === selected.id ? { ...prev, triage_level: tri.level } : prev));
+      loadQueue();  // refresh the queue list too
+    } catch (err) {
+      setVitalsErr('Could not save vitals: ' + (err.message || 'unknown error') + '. Please try again.');
+    } finally {
+      setVitalsSaving(false);
+    }
   }
 
   async function handleUnassign() {
@@ -819,14 +872,15 @@ function DoctorDashboard({ doctor }) {
                   workflow step, so it lives here under the patient identity with a
                   distinct teal accent (not the workflow-blue of Report/Prescribe/
                   Scribe). Collapsed by default; expands inline on click. */}
-              {voiceClips.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <button onClick={() => setAudioOpen(o => !o)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: audioOpen ? '#E8F8F5' : '#fff', border: '1px solid var(--accent)', color: '#138D75', borderRadius: 20, padding: '5px 13px', cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+              {/* Always shown for a selected patient — count 0 when none recorded
+                  (muted, non-expandable), expandable when clips exist. */}
+              <div style={{ marginTop: 12 }}>
+                  <button onClick={() => voiceClips.length && setAudioOpen(o => !o)} disabled={voiceClips.length === 0}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: (audioOpen && voiceClips.length) ? '#E8F8F5' : '#fff', border: '1px solid var(--accent)', color: '#138D75', borderRadius: 20, padding: '5px 13px', cursor: voiceClips.length ? 'pointer' : 'default', fontSize: 12.5, fontWeight: 600, opacity: voiceClips.length ? 1 : 0.6 }}>
                     🔊 Patient audio ({voiceClips.length})
-                    <span style={{ fontSize: 10, color: 'var(--text-light)' }}>{audioOpen ? '▲' : '▼'}</span>
+                    {voiceClips.length > 0 && <span style={{ fontSize: 10, color: 'var(--text-light)' }}>{audioOpen ? '▲' : '▼'}</span>}
                   </button>
-                  {audioOpen && (
+                  {audioOpen && voiceClips.length > 0 && (
                     <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10, borderLeft: '3px solid var(--accent)', paddingLeft: 12 }}>
                       {voiceClips.map(clip => {
                         // Label each clip by the question it answers (the transcript
@@ -847,7 +901,6 @@ function DoctorDashboard({ doctor }) {
                     </div>
                   )}
                 </div>
-              )}
             </div>
 
             {/* Delete confirmation modal — requires an explicit acknowledgement */}
@@ -908,9 +961,55 @@ function DoctorDashboard({ doctor }) {
                     <div style={{ lineHeight: 1.8, fontSize: 15 }}>
                       <ReactMarkdown>{report.report_md}</ReactMarkdown>
                     </div>
+
+                    {/* Doctor's correction note (original AI report above is preserved). */}
+                    {report.doctor_correction && (
+                      <div style={{ marginTop: 16, background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 10, padding: '12px 14px' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#B9770E', marginBottom: 4 }}>✎ Doctor's correction</div>
+                        <div style={{ fontSize: 14, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{report.doctor_correction}</div>
+                      </div>
+                    )}
+
+                    {/* Vitals not recorded → let the doctor/nurse add them (re-triages + regenerates). */}
+                    {!hasVitals(vitals) && (
+                      <div style={{ marginTop: 16, background: 'var(--bg)', borderRadius: 12, overflow: 'hidden' }}>
+                        <button type="button" onClick={() => { setVitalsErr(''); setVitalsOpen(o => !o); }} aria-expanded={vitalsOpen}
+                          style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, background: 'none', border: 'none', padding: 14, cursor: 'pointer' }}>
+                          <span style={{ fontSize: 20, lineHeight: 1 }}>🩺</span>
+                          <span style={{ flex: 1, textAlign: 'left' }}>
+                            <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Vitals not recorded — add them</span>
+                            <span style={{ display: 'block', fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>Patient skipped vitals · entering them updates triage &amp; the report</span>
+                          </span>
+                          <span style={{ color: 'var(--text-light)', fontSize: 12, transition: 'transform .15s', transform: vitalsOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+                        </button>
+                        {vitalsOpen && (
+                          <div style={{ padding: '12px 14px 14px', borderTop: '1px solid #E0E0E0' }}>
+                            <VitalsForm lang="en" loading={vitalsSaving} error={vitalsErr}
+                              submitLabel="Save vitals" loadingLabel="Saving…" onSubmit={saveVitals} />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {tab === 'queue' && (
                       <div style={{ marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
-                        {feedbackGiven?.id === selected?.id ? (
+                        {correcting ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--red)' }}>Add a correction — the AI report is kept; your note is saved alongside it.</label>
+                            <textarea className="input" rows={3} value={correctionNote}
+                              onChange={e => setCorrectionNote(e.target.value)}
+                              placeholder="What's incorrect, and the correct information…"
+                              style={{ minHeight: 72, resize: 'vertical', lineHeight: 1.5 }} />
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                              <button className="btn btn-outline" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
+                                onClick={() => setCorrecting(false)} disabled={savingCorrection}>Cancel</button>
+                              <button className="btn btn-primary" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
+                                onClick={saveCorrection} disabled={savingCorrection || !correctionNote.trim()}>
+                                {savingCorrection ? 'Saving…' : 'Save correction'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : feedbackGiven?.id === selected?.id ? (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                             <span style={{
                               display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
@@ -930,7 +1029,7 @@ function DoctorDashboard({ doctor }) {
                           <div style={{ display: 'flex', gap: 12 }}>
                             <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
                             <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
-                              onClick={() => handleFeedback('inaccurate')}>Incorrect History</button>
+                              onClick={() => { handleFeedback('inaccurate'); setCorrectionNote(report?.doctor_correction || ''); setCorrecting(true); }}>Incorrect History</button>
                           </div>
                         )}
                       </div>
@@ -1086,6 +1185,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   const [allergies, setAllergies] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [interactionChecked, setInteractionChecked] = useState(false);
+  const [aiNote, setAiNote] = useState('');
   const [draftRestored, setDraftRestored] = useState(false);
   const [drugList, setDrugList] = useState(DRUG_LIST); // hardcoded fallback; replaced by /api/drugs
   const { confirm, dialog } = useConfirm();
@@ -1328,11 +1428,15 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     if (drugs.length === 0) return;
 
     try {
-      const result = await api.checkBulkInteractions({ drugs, patient_allergies: allergenList });
+      const result = await api.checkBulkInteractions({ drugs, patient_allergies: allergenList, session_id: session?.id });
       setWarnings(result.warnings || []);
+      setAiNote(result.ai_error ? result.ai_error
+        : (result.unknown_drugs?.length && !result.ai_checked) ? 'AI check for unrecognised drugs was unavailable.'
+        : '');
       setInteractionChecked(true);
     } catch {
       setWarnings([]);
+      setAiNote('');
       setInteractionChecked(false);
     }
   }
@@ -1563,19 +1667,35 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
       {/* Warnings */}
       {warnings.length > 0 && (
         <div style={{ borderRadius: 8, overflow: 'hidden' }}>
-          {warnings.map((w, i) => (
-            <div key={i} style={{
-              background: w.severity === 'block' ? '#FADBD8' : '#FFF3CD',
-              padding: 10, fontSize: 13, borderBottom: '1px solid rgba(0,0,0,0.1)'
-            }}>
-              <strong style={{ color: w.severity === 'block' ? '#C0392B' : '#856404' }}>
-                {w.severity === 'block' ? 'BLOCKED' : 'WARNING'}:
-              </strong>{' '}
-              {w.description}
-              {w.drug_a && w.drug_b && <span style={{ color: 'var(--text-light)' }}> ({w.drug_a} + {w.drug_b})</span>}
-              {w.drug && w.allergy && <span style={{ color: 'var(--text-light)' }}> ({w.drug} / allergy: {w.allergy})</span>}
+          {warnings.map((w, i) => {
+            const ai = w.source === 'ai';
+            const bg = ai ? '#EAF3FB' : (w.severity === 'block' ? '#FADBD8' : '#FFF3CD');
+            const fg = ai ? '#1B4F72' : (w.severity === 'block' ? '#C0392B' : '#856404');
+            const label = ai ? 'AI-ASSESSED · UNVERIFIED' : (w.severity === 'block' ? 'BLOCKED' : 'WARNING');
+            return (
+              <div key={i} style={{
+                background: bg, padding: 10, fontSize: 13,
+                borderBottom: '1px solid rgba(0,0,0,0.1)',
+                borderLeft: ai ? '3px solid #2E86AB' : 'none',
+              }}>
+                <strong style={{ color: fg }}>
+                  {label}{ai && w.severity === 'block' ? ' (severe)' : ''}:
+                </strong>{' '}
+                {w.description}
+                {w.drug_a && w.drug_b && <span style={{ color: 'var(--text-light)' }}> ({w.drug_a} + {w.drug_b})</span>}
+                {w.drug && w.allergy && <span style={{ color: 'var(--text-light)' }}> ({w.drug} / allergy: {w.allergy})</span>}
+                {ai && typeof w.confidence === 'number' && (
+                  <span style={{ color: 'var(--text-light)' }}> · confidence {Math.round(w.confidence * 100)}%</span>
+                )}
+              </div>
+            );
+          })}
+          {warnings.some(w => w.source === 'ai') && (
+            <div style={{ background: '#F4F8FB', padding: '7px 10px', fontSize: 11, color: 'var(--text-light)' }}>
+              ⓘ AI-assessed items are for a drug not in the formulary — advisory only, do not block, and have been
+              sent to the HIS admin for review. Verify against a clinical reference before relying on them.
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -1583,6 +1703,13 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
       {interactionChecked && warnings.length === 0 && (
         <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449', fontWeight: 600 }}>
           ✓ No negative interactions found.
+        </div>
+      )}
+
+      {/* AI availability note */}
+      {aiNote && (
+        <div style={{ background: '#FEF9E7', borderRadius: 8, padding: 8, fontSize: 12, color: '#856404' }}>
+          {aiNote}
         </div>
       )}
 

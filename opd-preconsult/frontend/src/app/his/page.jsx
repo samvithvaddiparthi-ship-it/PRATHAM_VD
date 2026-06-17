@@ -124,10 +124,15 @@ export default function HISPage() {
           <button className={`btn ${tab === 'analytics' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('analytics')}>Analytics</button>
+          <button className={`btn ${tab === 'formulary' ? 'btn-primary' : 'btn-outline'}`}
+            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            onClick={() => setTab('formulary')}>Drug Formulary</button>
         </div>
       </div>
 
-      {tab === 'doctors' ? (
+      {tab === 'formulary' ? (
+        <FormularyManager />
+      ) : tab === 'doctors' ? (
         <DoctorsManager doctors={doctors} depts={depts} onChange={loadDoctors} />
       ) : tab === 'questions' ? (
         <QuestionsManager depts={depts} />
@@ -1283,6 +1288,169 @@ function AnalyticsDashboard() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ── Drug Formulary manager: AI review queue + curated drugs/interactions ──────
+function FormularyManager() {
+  const [queue, setQueue] = useState([]);
+  const [drugs, setDrugs] = useState([]);
+  const [inter, setInter] = useState([]);
+  const [classInter, setClassInter] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [drugForm, setDrugForm] = useState({ generic: '', classes: '', aliases: '' });
+  const [intForm, setIntForm] = useState({ generic_a: '', generic_b: '', severity: 'warn', description: '' });
+  const { confirm, dialog } = useConfirm();
+  const { toast, toastView } = useToast();
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [q, d, i, c] = await Promise.all([
+        api.reviewQueue().catch(() => []),
+        api.formularyDrugs().catch(() => []),
+        api.formularyInteractions().catch(() => []),
+        api.formularyClassInteractions().catch(() => []),
+      ]);
+      setQueue(q || []); setDrugs(d || []); setInter(i || []); setClassInter(c || []);
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function approve(item) {
+    try { await api.approveReview(item.id, {}); toast('Added to formulary', 'success'); loadAll(); }
+    catch (e) { toast('Approve failed: ' + e.message, 'error'); }
+  }
+  async function dismiss(item) {
+    if (!(await confirm({ title: 'Dismiss this AI finding?', message: `${item.unknown_drug} + ${item.other_drug}`, confirmLabel: 'Dismiss', danger: true }))) return;
+    try { await api.dismissReview(item.id); loadAll(); } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  }
+  async function addDrug(e) {
+    e.preventDefault();
+    if (!drugForm.generic.trim()) return;
+    const payload = {
+      generic: drugForm.generic.trim().toLowerCase().replace(/\s+/g, '_'),
+      classes: drugForm.classes.split(',').map(s => s.trim()).filter(Boolean),
+      aliases: drugForm.aliases.split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+    };
+    try { await api.saveFormularyDrug(payload); setDrugForm({ generic: '', classes: '', aliases: '' }); toast('Drug saved', 'success'); loadAll(); }
+    catch (e) { toast('Failed: ' + e.message, 'error'); }
+  }
+  async function delDrug(generic) {
+    if (!(await confirm({ title: `Remove "${generic}"?`, confirmLabel: 'Remove', danger: true }))) return;
+    try { await api.deleteFormularyDrug(generic); loadAll(); } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  }
+  async function addInteraction(e) {
+    e.preventDefault();
+    if (!intForm.generic_a.trim() || !intForm.generic_b.trim()) return;
+    try {
+      await api.saveFormularyInteraction({
+        generic_a: intForm.generic_a.trim().toLowerCase(), generic_b: intForm.generic_b.trim().toLowerCase(),
+        severity: intForm.severity, description: intForm.description.trim(),
+      });
+      setIntForm({ generic_a: '', generic_b: '', severity: 'warn', description: '' });
+      toast('Interaction saved', 'success'); loadAll();
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  }
+  async function delInteraction(id) {
+    if (!(await confirm({ title: 'Delete interaction?', confirmLabel: 'Delete', danger: true }))) return;
+    try { await api.deleteFormularyInteraction(id); loadAll(); } catch (e) { toast('Failed: ' + e.message, 'error'); }
+  }
+
+  const card = { background: 'var(--card-bg)', borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' };
+  const th = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '.03em' };
+  const td = { padding: '6px 8px', fontSize: 13, borderTop: '1px solid #F0F0F0' };
+  const sev = (s) => <span style={{ fontWeight: 700, color: s === 'block' ? 'var(--red)' : '#B9770E' }}>{(s || '').toUpperCase()}</span>;
+
+  if (loading) return <div style={{ padding: 24, color: 'var(--text-light)' }}>Loading formulary…</div>;
+
+  return (
+    <div>
+      {dialog}{toastView}
+
+      {/* Review queue — AI findings awaiting curation */}
+      <div style={card}>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 4 }}>AI Review Queue <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({queue.length} pending)</span></h3>
+        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 10 }}>
+          Interactions the AI flagged for drugs not yet in the formulary. Approving adds the drug + a curated interaction; nothing here affects checks until approved.
+        </p>
+        {queue.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-light)' }}>Nothing pending.</p> : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Unknown drug</th><th style={th}>Other drug</th><th style={th}>AI severity</th><th style={th}>Description</th><th style={th}>Conf.</th><th style={th}></th></tr></thead>
+            <tbody>
+              {queue.map(q => (
+                <tr key={q.id}>
+                  <td style={td}><strong>{q.unknown_drug}</strong></td>
+                  <td style={td}>{q.other_drug}</td>
+                  <td style={td}>{sev(q.ai_severity)}</td>
+                  <td style={{ ...td, maxWidth: 320 }}>{q.ai_description}</td>
+                  <td style={td}>{q.ai_confidence != null ? Math.round(q.ai_confidence * 100) + '%' : '—'}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    <button onClick={() => approve(q)} style={{ background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', marginRight: 6 }}>Approve</button>
+                    <button onClick={() => dismiss(q)} style={{ background: 'transparent', color: 'var(--red)', border: '1px solid var(--red)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Dismiss</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Curated interactions */}
+      <div style={card}>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 10 }}>Curated Interactions <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({inter.length})</span></h3>
+        <form onSubmit={addInteraction} style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input className="input" placeholder="drug a (generic)" value={intForm.generic_a} onChange={e => setIntForm({ ...intForm, generic_a: e.target.value })} style={{ width: 150, minHeight: 34 }} />
+          <input className="input" placeholder="drug b (generic)" value={intForm.generic_b} onChange={e => setIntForm({ ...intForm, generic_b: e.target.value })} style={{ width: 150, minHeight: 34 }} />
+          <select className="input" value={intForm.severity} onChange={e => setIntForm({ ...intForm, severity: e.target.value })} style={{ width: 100, minHeight: 34 }}><option value="warn">warn</option><option value="block">block</option></select>
+          <input className="input" placeholder="description" value={intForm.description} onChange={e => setIntForm({ ...intForm, description: e.target.value })} style={{ flex: 1, minWidth: 180, minHeight: 34 }} />
+          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 13 }}>Add</button>
+        </form>
+        <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>A</th><th style={th}>B</th><th style={th}>Severity</th><th style={th}>Description</th><th style={th}>Src</th><th style={th}></th></tr></thead>
+            <tbody>
+              {inter.map(r => (
+                <tr key={r.id}>
+                  <td style={td}>{r.generic_a}</td><td style={td}>{r.generic_b}</td><td style={td}>{sev(r.severity)}</td>
+                  <td style={{ ...td, maxWidth: 320 }}>{r.description}</td><td style={td}>{r.source}</td>
+                  <td style={td}><button onClick={() => delInteraction(r.id)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 14 }}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Curated drugs */}
+      <div style={card}>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 10 }}>Formulary Drugs <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({drugs.length})</span></h3>
+        <form onSubmit={addDrug} style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input className="input" placeholder="generic name" value={drugForm.generic} onChange={e => setDrugForm({ ...drugForm, generic: e.target.value })} style={{ width: 160, minHeight: 34 }} />
+          <input className="input" placeholder="classes (comma sep)" value={drugForm.classes} onChange={e => setDrugForm({ ...drugForm, classes: e.target.value })} style={{ width: 200, minHeight: 34 }} />
+          <input className="input" placeholder="brand aliases (comma sep)" value={drugForm.aliases} onChange={e => setDrugForm({ ...drugForm, aliases: e.target.value })} style={{ flex: 1, minWidth: 180, minHeight: 34 }} />
+          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 13 }}>Add</button>
+        </form>
+        <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Generic</th><th style={th}>Classes</th><th style={th}>Aliases</th><th style={th}>Src</th><th style={th}></th></tr></thead>
+            <tbody>
+              {drugs.map(d => (
+                <tr key={d.id}>
+                  <td style={td}><strong>{d.generic}</strong></td>
+                  <td style={{ ...td, color: 'var(--text-light)' }}>{(d.classes || []).join(', ')}</td>
+                  <td style={{ ...td, color: 'var(--text-light)', maxWidth: 280 }}>{(d.aliases || []).join(', ')}</td>
+                  <td style={td}>{d.source}</td>
+                  <td style={td}><button onClick={() => delDrug(d.generic)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 14 }}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>Class-vs-class rules ({classInter.length}) are also active and editable via the API.</p>
+      </div>
     </div>
   );
 }

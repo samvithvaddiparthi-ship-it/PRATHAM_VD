@@ -1,5 +1,5 @@
 """Tests for the class-based drug interaction engine (drug_interactions.py)."""
-from src.drug_interactions import check_interactions, check_allergies, check_duplicates
+from src.drug_interactions import check_interactions, check_allergies, check_duplicates, is_known
 
 
 def _severities(warnings):
@@ -75,3 +75,27 @@ def test_duplicate_brand_and_generic_flagged():
 
 def test_distinct_drugs_not_flagged_as_duplicate():
     assert check_duplicates(["amlodipine", "telmisartan"]) == []
+
+
+# ── DB-backed rule injection (the engine is now data-driven) ──────────────────
+
+def test_is_known_against_default_formulary():
+    assert is_known("amoxicillin") is True
+    assert is_known("Augmentin 625") is True          # brand → known generic
+    assert is_known("some-novel-drug-xyz") is False    # not in formulary
+
+
+def test_custom_rules_bundle_is_honored():
+    # A caller (e.g. the DB-backed path) can supply its own rule bundle.
+    rules = {
+        "generics": {"foodrug": ["fooclass"], "bardrug": ["barclass"]},
+        "brands": {"foobrand": "foodrug"},
+        "class_interactions": {frozenset({"fooclass", "barclass"}):
+                               {"severity": "block", "description": "foo+bar contraindicated"}},
+        "pairs": {},
+        "allergy_map": {},
+    }
+    warns = check_interactions("foobrand", ["bardrug"], rules)
+    assert any(w["severity"] == "block" for w in warns)
+    # And the default formulary's drugs are unknown under this custom bundle.
+    assert is_known("amoxicillin", rules) is False

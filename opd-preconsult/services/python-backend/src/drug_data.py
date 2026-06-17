@@ -344,31 +344,35 @@ def _clean(name: str) -> str:
     return s
 
 
-def normalize_drug_name(name: str) -> str:
-    """Turn a written drug name (brand or generic, with/without dose) into its
-    formal generic name. Returns the cleaned original if no brand match is found
-    (so unknown drugs pass through unchanged)."""
+def normalize_with(name: str, generics, brands) -> str:
+    """Data-driven normalisation: match a written drug name against the provided
+    `generics` (iterable/set of generic names) and `brands` (brand->generic map).
+    Lets the DB-backed formulary feed the same logic as the built-in defaults.
+    Returns the cleaned original if no match (unknown drugs pass through)."""
     cleaned = _clean(name)
     if not cleaned:
         return (name or "").strip()
 
-    # Already a known generic?
-    if cleaned in GENERIC_DRUGS:
+    if cleaned in generics:
         return cleaned
-
-    # Exact brand match.
-    if cleaned in BRAND_TO_GENERIC:
-        return BRAND_TO_GENERIC[cleaned]
+    if cleaned in brands:
+        return brands[cleaned]
 
     # First token (handles "telma 40", "augmentin 625", "shelcal ct").
     first = cleaned.split(" ")[0]
-    if first in GENERIC_DRUGS:
+    if first in generics:
         return first
-    if first in BRAND_TO_GENERIC:
-        return BRAND_TO_GENERIC[first]
+    if first in brands:
+        return brands[first]
 
-    # No match — return the cleaned original.
     return cleaned
+
+
+def normalize_drug_name(name: str) -> str:
+    """Turn a written drug name (brand or generic, with/without dose) into its
+    formal generic name, using the built-in defaults. Returns the cleaned original
+    if no match is found (so unknown drugs pass through unchanged)."""
+    return normalize_with(name, GENERIC_DRUGS, BRAND_TO_GENERIC)
 
 
 def drug_classes(generic: str) -> set:

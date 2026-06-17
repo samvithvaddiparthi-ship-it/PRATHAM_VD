@@ -59,6 +59,7 @@ export const api = {
   generateReport: (sessionId) => apiFetch('/api/report/generate', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }),
   getReport: (sessionId) => apiFetch(`/api/report/${sessionId}`),
   submitFeedback: (sessionId, feedback) => apiFetch(`/api/report/${sessionId}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
+  saveReportCorrection: (sessionId, note) => apiFetch(`/api/report/${sessionId}/correction`, { method: 'POST', body: JSON.stringify({ note }) }),
 
   // OCR
   uploadDocument: async (file, sessionId, docLabel) => {
@@ -127,6 +128,21 @@ export const api = {
 
   // Drug formulary (autocomplete list — single source of truth in the backend)
   getDrugs: () => apiFetch('/api/drugs'),
+
+  // Formulary admin (HIS)
+  formularyDrugs: () => apiFetch('/api/drugs/admin/drugs'),
+  saveFormularyDrug: (data) => apiFetch('/api/drugs/admin/drugs', { method: 'POST', body: JSON.stringify(data) }),
+  deleteFormularyDrug: (generic) => apiFetch(`/api/drugs/admin/drugs?generic=${encodeURIComponent(generic)}`, { method: 'DELETE' }),
+  formularyInteractions: () => apiFetch('/api/drugs/admin/interactions'),
+  saveFormularyInteraction: (data) => apiFetch('/api/drugs/admin/interactions', { method: 'POST', body: JSON.stringify(data) }),
+  deleteFormularyInteraction: (id) => apiFetch(`/api/drugs/admin/interactions/${id}`, { method: 'DELETE' }),
+  formularyClassInteractions: () => apiFetch('/api/drugs/admin/class-interactions'),
+  saveFormularyClassInteraction: (data) => apiFetch('/api/drugs/admin/class-interactions', { method: 'POST', body: JSON.stringify(data) }),
+  deleteFormularyClassInteraction: (id) => apiFetch(`/api/drugs/admin/class-interactions/${id}`, { method: 'DELETE' }),
+  // Review queue (AI findings → admin curation)
+  reviewQueue: () => apiFetch('/api/drugs/review-queue'),
+  approveReview: (id, data) => apiFetch(`/api/drugs/review-queue/${id}/approve`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  dismissReview: (id) => apiFetch(`/api/drugs/review-queue/${id}/dismiss`, { method: 'POST' }),
 
   // Scribe
   transcribeAudio: async (file, sessionId) => {

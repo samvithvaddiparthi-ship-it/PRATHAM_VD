@@ -224,14 +224,8 @@ def classify_document(text: str) -> str:
 # ── Vision LLM extraction ─────────────────────────────────────────────────────
 
 def _parse_llm_json(raw: str) -> Optional[dict]:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        parts = raw.split("```", 2)
-        raw = parts[1] if len(parts) > 1 else raw
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip().rstrip("`").strip()
-    return json.loads(raw)
+    from ..llm_json import parse_llm_json
+    return parse_llm_json(raw)
 
 
 def extract_with_vision(image_bytes: bytes, mime_type: str, ocr_text: str, ocr_confidence: float) -> Optional[dict]:
