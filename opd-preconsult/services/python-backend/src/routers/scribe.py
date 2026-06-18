@@ -121,6 +121,23 @@ async def extract_soap(body: dict):
     }
 
 
+@router.post("/soap/{session_id}")
+async def save_soap(session_id: str, body: dict):
+    """Persist the doctor's edited SOAP note (free text). Stored in the existing
+    scribe_soap column as {"text": ...} so it round-trips through get_soap."""
+    soap_text = (body.get("soap_text") or "").strip()
+    try:
+        execute(
+            """UPDATE session_reports SET scribe_soap = %s, scribe_created_at = NOW()
+               WHERE session_id = %s""",
+            (json.dumps({"text": soap_text}), session_id),
+        )
+    except Exception as e:
+        print(f"[scribe] save_soap error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail="Could not save SOAP note")
+    return {"saved": True}
+
+
 @router.get("/soap/{session_id}")
 async def get_soap(session_id: str):
     """Retrieve stored SOAP notes for a session."""

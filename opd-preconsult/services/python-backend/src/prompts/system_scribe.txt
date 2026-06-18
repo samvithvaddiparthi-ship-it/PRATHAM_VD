@@ -31,7 +31,8 @@ Output format (JSON):
     "referrals": ["..."],
     "follow_up": "...",
     "patient_education": "..."
-  }
+  },
+  "patient_advice": "..."
 }
 
 Rules:
@@ -40,3 +41,12 @@ Rules:
 - Flag any urgent findings with [URGENT] prefix
 - Include exact quotes from the patient for chief complaint when possible
 - Do NOT fabricate or infer clinical information not present in the transcript
+
+patient_advice (IMPORTANT — this is shown directly to the PATIENT on their prescription):
+- A short, plain-language summary of what the patient should DO, written for a layperson.
+- Build it ONLY from the plan: patient_education, follow_up, investigations/tests to get,
+  referrals, and lifestyle advice. Use simple sentences; no medical jargon or abbreviations.
+- Do NOT include diagnoses, differential diagnoses, or clinical assessment.
+- Do NOT restate the prescribed medication list (the prescription already lists the medicines);
+  you may mention general guidance like completing a course, but not the drug-by-drug schedule.
+- If there is nothing actionable to tell the patient, return an empty string "".

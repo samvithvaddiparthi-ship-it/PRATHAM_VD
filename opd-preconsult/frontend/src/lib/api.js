@@ -175,6 +175,7 @@ export const api = {
   },
   extractSOAP: (data) => apiFetch('/api/scribe/extract-soap', { method: 'POST', body: JSON.stringify(data) }),
   getSOAP: (sessionId) => apiFetch(`/api/scribe/soap/${sessionId}`),
+  saveSOAP: (sessionId, soap_text) => apiFetch(`/api/scribe/soap/${sessionId}`, { method: 'POST', body: JSON.stringify({ soap_text }) }),
 
   // Follow-ups
   getFollowups: (params) => apiFetch(`/api/followup?${new URLSearchParams(params || {})}`),

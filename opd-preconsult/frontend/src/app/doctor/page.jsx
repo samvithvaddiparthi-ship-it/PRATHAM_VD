@@ -148,7 +148,7 @@ function DoctorDashboard({ doctor }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
-  const [rightTab, setRightTab] = useState('report'); // report | prescribe | scribe
+  const [rightTab, setRightTab] = useState('report'); // report | prescribe (Scribe is embedded in Prescribe)
   // Once the doctor opens Prescribe for the selected patient we keep that panel
   // MOUNTED (just hidden) while they flip to Report/Scribe, so the saved
   // prescription + QR survive sub-tab switches instead of being rebuilt fresh.
@@ -952,9 +952,6 @@ function DoctorDashboard({ doctor }) {
               <button className={`btn ${rightTab === 'prescribe' ? 'btn-primary' : 'btn-outline'}`}
                 style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
                 onClick={() => { setRightTab('prescribe'); setPrescribeMounted(true); }}>Prescribe</button>
-              <button className={`btn ${rightTab === 'scribe' ? 'btn-primary' : 'btn-outline'}`}
-                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
-                onClick={() => setRightTab('scribe')}>Scribe</button>
             </div>
 
             {rightTab === 'report' && (
@@ -1059,15 +1056,12 @@ function DoctorDashboard({ doctor }) {
             )}
 
             {/* Kept mounted (just hidden) once opened so the saved prescription +
-                QR persist when the doctor flips to Report/Scribe and back. */}
+                QR persist when the doctor flips to Report and back. The Scribe now
+                lives inside this panel (collapsible), not as its own tab. */}
             {prescribeMounted && (
               <div style={{ display: rightTab === 'prescribe' ? 'block' : 'none' }}>
                 <PrescriptionPanel session={selected} doctor={doctor} onDispatched={handleDispatched} />
               </div>
-            )}
-
-            {rightTab === 'scribe' && (
-              <ScribePanel session={selected} />
             )}
           </>
         )}
@@ -1545,6 +1539,19 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   // an allergy/interaction still blocks even if they forget to click).
   const checkInteractions = () => runCheck(true);
 
+  // Called by the embedded Consultation Scribe when SOAP is extracted: drop the
+  // patient-facing advice into "Doctor's Advice & Instructions". Never clobbers
+  // what the doctor already typed (append below, de-duped); stays editable.
+  function applyAdvice(text) {
+    const advice = (text || '').trim();
+    if (!advice) return;
+    const cur = (notes || '').trim();
+    if (cur.includes(advice)) return;               // already added — don't duplicate
+    const next = cur ? cur + '\n\n' + advice : advice;
+    setNotes(next);
+    persistDraft(items, next);
+  }
+
   async function handleSave() {
     const validItems = items.filter(i => i.drug_name);
     if (!validItems.length) return;
@@ -1857,15 +1864,19 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         </div>
       )}
 
+      {/* Consultation Scribe — record the visit; its patient-facing summary
+          auto-fills the Doctor's Advice box just below. */}
+      <ScribePanel session={session} embedded onAdvice={applyAdvice} />
+
       {/* Doctor's Advice & Instructions + Save */}
       <div>
-        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>Doctor's Advice &amp; Instructions</label>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>Patient summary <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>(printed on the prescription)</span></label>
         <p style={{ fontSize: 11, color: 'var(--text-light)', margin: '2px 0 6px' }}>
-          Clinical guidance for the patient — printed on the prescription and shown in the digital Rx.
+          Auto-filled from the consultation scribe — plain-language guidance the patient sees on the printed &amp; digital Rx. Edit before saving.
         </p>
         <textarea className="input" rows={4} value={notes}
           onChange={e => { setNotes(e.target.value); persistDraft(items, e.target.value); }}
-          placeholder="e.g. Complete the full antibiotic course. Avoid driving while on this medication. Return immediately if chest pain or breathlessness recurs." />
+          placeholder="Record the consultation above to auto-fill this, or type the patient's instructions here. e.g. Drink plenty of fluids and rest. Get a blood test done. Come back in 5 days, or sooner if the fever worsens." />
       </div>
 
       <button className="btn btn-primary" onClick={handleSave} disabled={saving || !items.some(i => i.drug_name)}>
@@ -1942,25 +1953,75 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   );
 }
 
-function ScribePanel({ session }) {
+// Build the patient-facing advice from a SOAP note. Prefers the LLM's
+// plain-language `patient_advice`; falls back to formatting the plan's
+// patient-relevant fields (education / follow-up / tests / referrals). Never
+// includes diagnoses or the drug schedule.
+function buildPatientAdvice(soap) {
+  if (!soap) return '';
+  const direct = (soap.patient_advice || '').trim();
+  if (direct) return direct;
+  const plan = soap.plan || {};
+  const clean = v => {
+    if (!v) return '';
+    if (Array.isArray(v)) return v.map(x => String(x).trim()).filter(x => x && !/^not discussed$/i.test(x)).join('; ');
+    const s = String(v).trim();
+    return /^not discussed$/i.test(s) ? '' : s;
+  };
+  const parts = [];
+  const edu = clean(plan.patient_education); if (edu) parts.push(edu);
+  const fu = clean(plan.follow_up); if (fu) parts.push('Follow-up: ' + fu);
+  const inv = clean(plan.investigations_ordered); if (inv) parts.push('Tests to get: ' + inv);
+  const ref = clean(plan.referrals); if (ref) parts.push('Referral: ' + ref);
+  return parts.join('\n');
+}
+
+// Render a structured SOAP object as a readable, editable plain-text note. Also
+// handles the edited free-text shape ({text}) we store back, and a raw string.
+function soapToText(soap) {
+  if (!soap) return '';
+  if (typeof soap === 'string') return soap;
+  if (typeof soap.text === 'string') return soap.text;
+  const skip = v => v == null || /^not discussed$/i.test(String(v).trim());
+  const fmtVal = v => Array.isArray(v)
+    ? v.map(x => String(x).trim()).filter(Boolean).join(', ')
+    : String(v).trim();
+  const titleCaseLabel = k => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const out = [];
+  for (const [key, title] of [['subjective', 'SUBJECTIVE'], ['objective', 'OBJECTIVE'], ['assessment', 'ASSESSMENT'], ['plan', 'PLAN']]) {
+    const sec = soap[key];
+    if (!sec || typeof sec !== 'object') continue;
+    const rows = Object.entries(sec).filter(([_, v]) => !skip(v) && fmtVal(v));
+    if (!rows.length) continue;
+    out.push(title);
+    for (const [k, v] of rows) out.push(`- ${titleCaseLabel(k)}: ${fmtVal(v)}`);
+    out.push('');
+  }
+  return out.join('\n').trim();
+}
+
+function ScribePanel({ session, embedded = false, onAdvice }) {
   const [recording, setRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [soap, setSoap] = useState(null);
+  const [soapText, setSoapText] = useState('');   // the editable SOAP note (free text)
   const [processing, setProcessing] = useState('');
+  const [open, setOpen] = useState(!embedded);     // collapsed by default when embedded
+  const [advised, setAdvised] = useState(false);   // seeded the patient summary at least once
   const mediaRecorder = useRef(null);
   const audioChunks = useRef([]);
   const { toast, toastView } = useToast();
 
   useEffect(() => {
-    // Load existing SOAP if available
+    // Load any existing (possibly edited) SOAP note for this patient.
     if (session?.id) {
-      api.getSOAP(session.id).then(data => {
-        setTranscript(data.transcript || '');
-        setSoap(data.soap || null);
-      }).catch(() => {});
+      api.getSOAP(session.id).then(data => setSoapText(soapToText(data.soap))).catch(() => {});
     }
     return () => { if (mediaRecorder.current?.state === 'recording') mediaRecorder.current.stop(); };
   }, [session?.id]);
+
+  // Persist the edited SOAP note (called on blur; non-fatal).
+  function persistSoap(text) {
+    if (session?.id) api.saveSOAP(session.id, text).catch(() => {});
+  }
 
   async function startRecording() {
     try {
@@ -1976,79 +2037,80 @@ function ScribePanel({ session }) {
     }
   }
 
+  // Stop → transcribe → extract SOAP, all in one go (the doctor never sees the
+  // transcript). The resulting note is editable below.
   async function stopRecording() {
     if (!mediaRecorder.current) return;
-
     return new Promise(resolve => {
       mediaRecorder.current.onstop = async () => {
         const blob = new Blob(audioChunks.current, { type: 'audio/webm' });
         mediaRecorder.current.stream.getTracks().forEach(t => t.stop());
         mediaRecorder.current = null;
         setRecording(false);
-
-        // Transcribe
-        setProcessing('Transcribing audio...');
         try {
+          setProcessing('Transcribing…');
           const file = new File([blob], 'recording.webm', { type: 'audio/webm' });
-          const result = await api.transcribeAudio(file, session?.id);
-          setTranscript(result.transcript || '');
-          setProcessing('');
+          const tr = await api.transcribeAudio(file, session?.id);
+          const transcript = (tr.transcript || '').trim();
+          if (!transcript) {
+            toast('No speech detected — try again, or type the note below.', 'error');
+          } else {
+            setProcessing('Generating consultation notes…');
+            const result = await api.extractSOAP({ transcript, session_id: session?.id });
+            const text = soapToText(result.soap);
+            // Fresh note → set; if the doctor already had text, append below.
+            const next = soapText.trim() ? (soapText.trimEnd() + '\n\n' + text) : text;
+            setSoapText(next);
+            persistSoap(next);
+            // Seed the patient-facing summary (caller sets/append-dedupes; editable).
+            if (onAdvice) {
+              const advice = buildPatientAdvice(result.soap);
+              if (advice) { onAdvice(advice); setAdvised(true); }
+            }
+          }
         } catch (err) {
-          setProcessing('');
-          toast('Transcription failed: ' + err.message, 'error');
+          toast('Could not generate notes: ' + err.message, 'error');
         }
+        setProcessing('');
         resolve();
       };
       mediaRecorder.current.stop();
     });
   }
 
-  async function extractSOAP() {
-    if (!transcript) return;
-    setProcessing('Extracting SOAP notes...');
-    try {
-      const result = await api.extractSOAP({ transcript, session_id: session?.id });
-      setSoap(result.soap);
-    } catch (err) {
-      toast('SOAP extraction failed: ' + err.message, 'error');
-    }
-    setProcessing('');
-  }
-
-  function renderSOAPSection(title, data) {
-    if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) return null;
+  // Collapsible header used when embedded inside the Prescribe tab.
+  if (embedded && !open) {
     return (
-      <div style={{ marginBottom: 12 }}>
-        <h4 style={{ fontSize: 14, color: 'var(--primary)', marginBottom: 4, borderBottom: '1px solid #E0E0E0', paddingBottom: 4 }}>{title}</h4>
-        {typeof data === 'string' ? (
-          <p style={{ fontSize: 13 }}>{data}</p>
-        ) : Array.isArray(data) ? (
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {data.map((item, i) => <li key={i} style={{ fontSize: 13 }}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}
-          </ul>
-        ) : (
-          Object.entries(data).filter(([_, v]) => v && v !== 'not discussed' && v !== 'Not discussed').map(([key, val]) => (
-            <div key={key} style={{ marginBottom: 4 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-light)', textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}: </span>
-              {Array.isArray(val) ? (
-                <span style={{ fontSize: 13 }}>{val.join(', ')}</span>
-              ) : typeof val === 'object' ? (
-                <span style={{ fontSize: 13 }}>{JSON.stringify(val)}</span>
-              ) : (
-                <span style={{ fontSize: 13 }}>{val}</span>
-              )}
-            </div>
-          ))
-        )}
+      <div style={{ border: '1px solid #E0E0E0', borderRadius: 12, padding: '10px 14px', marginBottom: 4 }}>
+        <button type="button" onClick={() => setOpen(true)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
+          <span style={{ fontSize: 14 }}>🎙</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Consultation Scribe</span>
+          <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
+            {advised || soapText ? '✓ note ready · summary below' : 'record → SOAP note + patient summary'}
+          </span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>▸</span>
+        </button>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16,
+      ...(embedded ? { border: '1px solid #E0E0E0', borderRadius: 12, padding: 14, marginBottom: 4 } : {}) }}>
       {toastView}
+      {embedded && (
+        <button type="button" onClick={() => setOpen(false)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
+          <span style={{ fontSize: 14 }}>🎙</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Consultation Scribe</span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>▾</span>
+        </button>
+      )}
       <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12, fontSize: 12, color: 'var(--text-light)' }}>
-        Record the consultation. Audio is transcribed and discarded (zero-retention). The transcript is processed into SOAP notes.
+        Record the consultation — it becomes an editable SOAP note below, and a plain-language summary
+        is added to <strong>Patient summary</strong> for the prescription. Audio is transcribed then
+        discarded (zero-retention).
       </div>
 
       {/* Recording controls */}
@@ -2069,35 +2131,21 @@ function ScribePanel({ session }) {
         {processing && <span style={{ fontSize: 13, color: 'var(--secondary)' }}>{processing}</span>}
       </div>
 
-      {/* Transcript */}
-      {transcript && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <h3 style={{ fontSize: 15, color: 'var(--primary)' }}>Transcript</h3>
-            <button className="btn btn-outline" onClick={extractSOAP} disabled={!!processing}
-              style={{ fontSize: 12, minHeight: 28, width: 'auto', padding: '0 12px', marginLeft: 'auto' }}>
-              Extract SOAP Notes
-            </button>
-          </div>
-          <textarea className="input" value={transcript}
-            onChange={e => setTranscript(e.target.value)}
-            rows={8} style={{ fontSize: 13, lineHeight: 1.6 }} />
-        </div>
-      )}
-
-      {/* SOAP Notes */}
-      {soap && (
-        <div style={{ background: '#fff', borderRadius: 12, padding: 16, border: '1px solid #E0E0E0' }}>
-          <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>SOAP Notes</h3>
-          {renderSOAPSection('Subjective', soap.subjective)}
-          {renderSOAPSection('Objective', soap.objective)}
-          {renderSOAPSection('Assessment', soap.assessment)}
-          {renderSOAPSection('Plan', soap.plan)}
-          {soap._note && (
-            <p style={{ fontSize: 11, color: 'var(--text-light)', fontStyle: 'italic', marginTop: 8 }}>{soap._note}</p>
-          )}
-        </div>
-      )}
+      {/* Editable SOAP note (doctor's clinical record — not shown to the patient) */}
+      <div>
+        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>SOAP Note <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>(editable — your clinical record)</span></label>
+        <textarea className="input" value={soapText}
+          onChange={e => setSoapText(e.target.value)}
+          onBlur={() => persistSoap(soapText)}
+          rows={10}
+          placeholder="Record the consultation to auto-generate the SOAP note here, or type it directly…"
+          style={{ fontSize: 13, lineHeight: 1.6, marginTop: 4 }} />
+        {embedded && advised && (
+          <p style={{ fontSize: 11, color: '#1E8449', marginTop: 4 }}>
+            ✓ A plain-language summary was added to <strong>Patient summary</strong> below — review/edit before saving.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

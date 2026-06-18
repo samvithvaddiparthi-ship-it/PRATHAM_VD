@@ -399,6 +399,7 @@ router.get('/consulted', async (req, res) => {
          WHERE s.assigned_doctor_id = $1
            AND s.state = 'COMPLETE'
            AND s.dispatched_at IS NOT NULL
+           AND s.removed_at IS NULL
          ORDER BY s.id, sr.created_at DESC NULLS LAST
        ) t
        ORDER BY t.dispatched_at DESC
