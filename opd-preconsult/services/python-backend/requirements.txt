@@ -12,7 +12,4 @@ Pillow==10.4.0
 redis==5.0.8
 openai==1.57.0
 minio==7.2.7
-av==12.3.0
-truststore==0.10.4
-indic-transliteration==2.3.64
 pytest==8.3.3

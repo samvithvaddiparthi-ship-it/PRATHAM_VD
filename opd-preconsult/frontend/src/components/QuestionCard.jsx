@@ -13,15 +13,10 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [uploading, setUploading] = useState(false);
   const [ocrResult, setOcrResult] = useState(null);
   const [inputError, setInputError] = useState('');
-  const [transcribing, setTranscribing] = useState(false);   // Bhashini round-trip in progress
-  const [correctionOffline, setCorrectionOffline] = useState(false); // Stage-2 LLM was down
-  const [englishText, setEnglishText] = useState('');        // English view of the spoken answer
 
   useEffect(() => {
     setValue(initialValue);
     setInputError('');
-    setEnglishText('');
-    setCorrectionOffline(false);
   }, [question?.id]);
 
   const text = question[`text_${lang}`] || question.text_en;
@@ -41,41 +36,12 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     setOcrResult(null);
   }
 
-  // Voice answer: send the recorded audio to Bhashini (Stage 1 ASR + Stage 2
-  // medical correction) and use the corrected text. The browser's own transcript
-  // (`fallback`) is used only if the server transcription is unavailable. The
-  // clip is stored server-side for doctor playback in the same call.
-  // APPEND each spoken segment to the existing answer (the patient can speak
-  // multiple times and also type). Shows both the local-language text and an
-  // English view.
-  async function handleVoiceResult(blob, durMs) {
+  // Store the patient's spoken audio for THIS question so the doctor can play it
+  // back. Fire-and-forget — a failed upload must never block the interview.
+  function uploadVoiceClip(blob, durMs, transcript) {
     if (!blob) return;
-    setTranscribing(true);
-    setCorrectionOffline(false);
-    setInputError('');
-    let patientName = '';
-    try { patientName = JSON.parse(sessionStorage.getItem('register_form') || '{}').patient_name || ''; } catch {}
-    try {
-      const sessionId = sessionStorage.getItem('session_id');
-      const res = await api.transcribeVoice(blob, { lang, sessionId, questionId: question.id, patientName, durationMs: durMs });
-      const local = (res && res.text || '').trim();
-      if (local) setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${local}` : local);
-      else setInputError(lang === 'hi' ? 'समझ नहीं पाए — कृपया फिर बोलें या टाइप करें।' : lang === 'te' ? 'వినలేకపోయాం — దయచేసి మళ్ళీ చెప్పండి లేదా టైప్ చేయండి.' : "Couldn't catch that — please speak again or type.");
-      const en = (res && res.text_en || '').trim();
-      if (en) setEnglishText(prev => prev ? `${prev} ${en}` : en);
-      if (res && res.stage2_attempted && !res.llm_used) setCorrectionOffline(true);
-    } catch {
-      setInputError(lang === 'hi' ? 'ट्रांसक्रिप्शन विफल — कृपया टाइप करें।' : lang === 'te' ? 'ట్రాన్స్క్రిప్షన్ విఫలమైంది — దయచేసి టైప్ చేయండి.' : 'Transcription failed — please type your answer.');
-    } finally {
-      setTranscribing(false);
-    }
-  }
-
-  function clearAnswer() {
-    setValue('');
-    setEnglishText('');
-    setCorrectionOffline(false);
-    setInputError('');
+    const sessionId = sessionStorage.getItem('session_id');
+    api.uploadAnswerAudio(blob, sessionId, question.id, durMs, transcript).catch(() => {});
   }
 
   async function handleUpload(e) {
@@ -138,13 +104,6 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
       {type === 'FREE_TEXT' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {/* The answer is captured in the patient's OWN language (the field
-              below); the English translation appears under it. */}
-          {lang !== 'en' && (
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-light)', marginBottom: -6 }}>
-              {lang === 'hi' ? 'हिन्दी (आपका उत्तर)' : lang === 'te' ? 'తెలుగు (మీ సమాధానం)' : ''}
-            </div>
-          )}
           <textarea
             className="input"
             rows={3}
@@ -152,34 +111,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
             onChange={e => setValue(e.target.value)}
             placeholder={lang === 'hi' ? 'यहाँ टाइप करें...' : lang === 'te' ? 'ఇక్కడ టైప్ చేయండి...' : 'Type here...'}
           />
-
-          {/* English view of what was said (shown alongside the local language). */}
-          {englishText && lang !== 'en' && (
-            <div style={{ background: '#F4F8FB', border: '1px solid #E1EBF2', borderRadius: 8, padding: '8px 10px' }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-light)', marginBottom: 2 }}>English</div>
-              <div style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.45 }}>{englishText}</div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-            <VoiceButton onResult={handleVoiceResult} />
-            {transcribing && (
-              <span style={{ fontSize: 12, color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 12, height: 12, border: '2px solid #cfe0ec', borderTopColor: 'var(--secondary)', borderRadius: '50%', display: 'inline-block', animation: 'qcspin 0.7s linear infinite' }} />
-                {lang === 'hi' ? 'सुन रहे हैं…' : lang === 'te' ? 'వింటున్నాం…' : 'Transcribing…'}
-              </span>
-            )}
-            {correctionOffline && !transcribing && (
-              <span style={{ fontSize: 11.5, color: '#B9770E', background: '#FCF3CF', borderRadius: 6, padding: '3px 8px', textAlign: 'center', lineHeight: 1.4 }}>
-                {lang === 'hi'
-                  ? '⚠ स्मार्ट मेडिकल सुधार अभी उपलब्ध नहीं — कृपया टेक्स्ट जाँच लें।'
-                  : lang === 'te'
-                  ? '⚠ స్మార్ట్ మెడికల్ సరిదిద్దుబాటు అందుబాటులో లేదు — దయచేసి టెక్స్ట్ సరిచూసుకోండి.'
-                  : '⚠ Smart medical correction is offline — please review the text.'}
-              </span>
-            )}
-          </div>
-          <style>{`@keyframes qcspin { to { transform: rotate(360deg) } }`}</style>
+          <VoiceButton lang={lang} onResult={(v, blob, durMs) => { uploadVoiceClip(blob, durMs, v); setValue(v); submit(v); }} />
 
           {/* Contextual document upload */}
           {uploadCfg && (
@@ -246,14 +178,9 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
               {lang === 'hi' ? 'कोई नहीं' : lang === 'te' ? 'ఏదీ లేదు' : 'None'}
             </button>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-outline" style={{ flex: 1 }} disabled={!value && !englishText} onClick={clearAnswer}>
-              {lang === 'hi' ? 'मिटाएँ' : lang === 'te' ? 'తుడిచివేయి' : 'Clear'}
-            </button>
-            <button className="btn btn-primary" style={{ flex: 2 }} onClick={() => submit()}>
-              {lang === 'hi' ? 'पूर्ण' : lang === 'te' ? 'పూర్తయింది' : 'Done'}
-            </button>
-          </div>
+          <button className="btn btn-primary" onClick={() => submit()}>
+            {lang === 'hi' ? 'अगला' : lang === 'te' ? 'తదుపరి' : 'Next'}
+          </button>
           {inputError && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>{inputError}</p>}
         </div>
       )}

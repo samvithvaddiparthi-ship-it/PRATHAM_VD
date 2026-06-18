@@ -16,48 +16,37 @@ PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 async def transcribe_audio(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
-    lang: str = Form(default="en"),
 ):
     """
-    Transcribe the consultation audio with Bhashini (Stage 1 ASR). For Hindi/
-    Telugu the medical-correction pass (Stage 2) is also applied. Falls back to
-    OpenAI Whisper if Bhashini is unavailable. Audio is held in memory only.
+    Transcribe audio using OpenAI Whisper API.
+    Audio is held in memory only — zero retention after transcription.
     """
     contents = await file.read()
-    transcript_text = ""
 
-    # ── Primary: Bhashini ASR (+ medical correction for hi/te) ──
-    from ..bhashini import asr, medcorrect
-    if asr.have_keys():
-        try:
-            raw, _sid, _ms = asr.transcribe(contents, lang)
-            transcript_text = raw or ""
-            if transcript_text.strip() and lang in ("hi", "te"):
-                try:
-                    transcript_text = medcorrect.correct(transcript_text, lang).get("corrected") or transcript_text
-                except Exception as e:
-                    print(f"[scribe] Stage-2 correction failed: {type(e).__name__}: {e}", flush=True)
-        except Exception as e:
-            print(f"[scribe] Bhashini ASR failed: {type(e).__name__}: {e}", flush=True)
+    try:
+        import openai
+        client = openai.OpenAI()
 
-    # ── Fallback: OpenAI Whisper ──
-    if not transcript_text.strip():
-        try:
-            import openai
-            client = openai.OpenAI()
-            audio_file = io.BytesIO(contents)
-            audio_file.name = file.filename or "recording.webm"
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1", file=audio_file, language=lang if lang in ("en", "hi") else "en",
-            )
-            transcript_text = transcription.text
-        except ImportError:
-            transcript_text = "[Transcription unavailable — Bhashini keys missing and Whisper not configured]"
-        except Exception as e:
-            print(f"[scribe] Whisper fallback error: {type(e).__name__}: {e}", flush=True)
-            if not transcript_text:
-                raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    contents = None
+        # Create an in-memory file-like object for the API
+        audio_file = io.BytesIO(contents)
+        audio_file.name = file.filename or "recording.webm"
+
+        transcription = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="en",
+        )
+
+        transcript_text = transcription.text
+    except ImportError:
+        # Fallback: return placeholder if openai package not installed
+        transcript_text = "[Whisper API not configured — install openai package and set OPENAI_API_KEY]"
+    except Exception as e:
+        print(f"[scribe] Transcription error: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    finally:
+        # Zero-retention: explicitly clear audio from memory
+        contents = None
 
     return {
         "transcript": transcript_text,
