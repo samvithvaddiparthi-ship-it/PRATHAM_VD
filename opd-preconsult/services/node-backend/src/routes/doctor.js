@@ -386,14 +386,22 @@ router.get('/consulted', async (req, res) => {
 
     // Consulted = visits I finished (Save & Generate QR → dispatched_at set).
     // Merely opening/locking a patient does NOT put them here.
+    // A session can have MORE THAN ONE row in session_reports (e.g. the report
+    // was regenerated after late vitals). A plain LEFT JOIN would then emit one
+    // consulted row per report → duplicate cards. DISTINCT ON (s.id) collapses
+    // each session to a single row, keeping its LATEST report.
     const result = await pool.query(
-      `SELECT s.*, sr.doctor_feedback, sr.created_at as report_created_at
-       FROM sessions s
-       LEFT JOIN session_reports sr ON sr.session_id = s.id
-       WHERE s.assigned_doctor_id = $1
-         AND s.state = 'COMPLETE'
-         AND s.dispatched_at IS NOT NULL
-       ORDER BY s.dispatched_at DESC
+      `SELECT * FROM (
+         SELECT DISTINCT ON (s.id)
+                s.*, sr.doctor_feedback, sr.created_at as report_created_at
+         FROM sessions s
+         LEFT JOIN session_reports sr ON sr.session_id = s.id
+         WHERE s.assigned_doctor_id = $1
+           AND s.state = 'COMPLETE'
+           AND s.dispatched_at IS NOT NULL
+         ORDER BY s.id, sr.created_at DESC NULLS LAST
+       ) t
+       ORDER BY t.dispatched_at DESC
        LIMIT 100`,
       [decoded.doctor_id]
     );

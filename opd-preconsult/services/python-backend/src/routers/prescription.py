@@ -24,6 +24,7 @@ class BulkCheckRequest(BaseModel):
     drugs: List[str]
     patient_allergies: List[str] = []
     session_id: Optional[str] = None
+    ai: bool = True   # False = curated drug-drug + allergy only (fast, no LLM) for live auto-checks
 
 
 @router.post("/check-interactions")
@@ -105,7 +106,7 @@ async def check_bulk_interactions(req: BulkCheckRequest):
 
     ai_checked = False
     ai_error = None
-    if unknowns and llm_client.has_llm():
+    if req.ai and unknowns and llm_client.has_llm():
         try:
             findings = _ai_assess(labeled, req.patient_allergies)
             ai_checked = True
@@ -127,7 +128,7 @@ async def check_bulk_interactions(req: BulkCheckRequest):
                     "description": desc,
                     "source": "ai", "unverified": True, "confidence": conf,
                 })
-                # Queue for admin review (the only AI write). Pick the unknown side.
+                # Queue for HIS-admin review (the only AI write). Pick the unknown side.
                 a_known = normalize_with(a, generics, brands) in generics
                 unknown_side, other_side = (b, a) if a_known else (a, b)
                 try:

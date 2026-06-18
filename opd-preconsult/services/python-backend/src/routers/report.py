@@ -184,11 +184,13 @@ async def submit_feedback(session_id: str, feedback: dict):
     return {"stored": True}
 
 
-@router.post("/{session_id}/correction")
-async def save_correction(session_id: str, body: dict):
-    """Store the doctor's correction note for the latest report (preserves the AI
-    original) and flag the report as inaccurate. Empty note clears the correction."""
-    note = (body.get("note") or "").strip()
+@router.post("/{session_id}/edit")
+async def edit_report(session_id: str, body: dict):
+    """Store the doctor's full edited report markdown for the latest report. The AI
+    original (report_md) is preserved untouched; the edited body lives in
+    doctor_correction and is shown as the current report. Flags it inaccurate.
+    An empty body clears the edit (reverts to the AI original)."""
+    edited = (body.get("report_md") or "").strip()
     rows = query(
         "SELECT id FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
         (session_id,),
@@ -199,7 +201,7 @@ async def save_correction(session_id: str, body: dict):
         """UPDATE session_reports
            SET doctor_correction = %s, corrected_at = NOW(), doctor_feedback = 'inaccurate'
            WHERE id = %s""",
-        (note or None, rows[0]["id"]),
+        (edited or None, rows[0]["id"]),
     )
     return {"stored": True}
 

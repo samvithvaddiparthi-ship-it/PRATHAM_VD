@@ -59,7 +59,7 @@ export const api = {
   generateReport: (sessionId) => apiFetch('/api/report/generate', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }),
   getReport: (sessionId) => apiFetch(`/api/report/${sessionId}`),
   submitFeedback: (sessionId, feedback) => apiFetch(`/api/report/${sessionId}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
-  saveReportCorrection: (sessionId, note) => apiFetch(`/api/report/${sessionId}/correction`, { method: 'POST', body: JSON.stringify({ note }) }),
+  saveReportEdit: (sessionId, report_md) => apiFetch(`/api/report/${sessionId}/edit`, { method: 'POST', body: JSON.stringify({ report_md }) }),
 
   // OCR
   uploadDocument: async (file, sessionId, docLabel) => {

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { api, setToken } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
@@ -149,14 +149,20 @@ function DoctorDashboard({ doctor }) {
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
   const [rightTab, setRightTab] = useState('report'); // report | prescribe | scribe
+  // Once the doctor opens Prescribe for the selected patient we keep that panel
+  // MOUNTED (just hidden) while they flip to Report/Scribe, so the saved
+  // prescription + QR survive sub-tab switches instead of being rebuilt fresh.
+  // Reset whenever a different patient is selected (see selectSession).
+  const [prescribeMounted, setPrescribeMounted] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState(null); // { id, val } — inline report-accuracy confirmation
   const [vitals, setVitals] = useState(null);        // selected session's vitals row (null = not loaded/none)
   const [vitalsOpen, setVitalsOpen] = useState(false); // doctor-side "add vitals" accordion expanded?
   const [vitalsSaving, setVitalsSaving] = useState(false);
   const [vitalsErr, setVitalsErr] = useState('');
-  const [correcting, setCorrecting] = useState(false);     // report-correction editor open?
-  const [correctionNote, setCorrectionNote] = useState('');
-  const [savingCorrection, setSavingCorrection] = useState(false);
+  const [editing, setEditing] = useState(false);           // full report-edit editor open?
+  const [editText, setEditText] = useState('');            // working copy of the report markdown
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false); // toggle AI original vs doctor-edited
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
@@ -254,6 +260,7 @@ function DoctorDashboard({ doctor }) {
     setSelected(s);
     setReport(null);
     setRightTab('report');
+    setPrescribeMounted(false);   // fresh Prescribe panel for the newly-opened patient
     setLoading(true);
     // No auto-assign here — locking a queue patient happens explicitly via
     // openPatient() (with the confirm dialog). selectSession just loads a visit.
@@ -267,21 +274,22 @@ function DoctorDashboard({ doctor }) {
     setVitals(null); setVitalsOpen(false); setVitalsErr('');
     api.getVitals(s.id).then(setVitals).catch(() => setVitals(null));
     // Reset the report-correction editor for the new patient.
-    setCorrecting(false); setCorrectionNote('');
+    setEditing(false); setEditText(''); setShowOriginal(false);
   }
 
-  async function saveCorrection() {
+  async function saveReportEdit() {
     if (!selected) return;
-    setSavingCorrection(true);
+    setSavingEdit(true);
     try {
-      await api.saveReportCorrection(selected.id, correctionNote.trim());
-      setReport(await api.getReport(selected.id));   // now carries doctor_correction
-      setCorrecting(false);
+      await api.saveReportEdit(selected.id, editText);
+      setReport(await api.getReport(selected.id));   // now carries the edited body
+      setEditing(false);
+      setShowOriginal(false);
       setFeedbackGiven({ id: selected.id, val: 'inaccurate' });
     } catch {
-      toast('Could not save correction — please try again', 'error');
+      toast('Could not save the edited report — please try again', 'error');
     } finally {
-      setSavingCorrection(false);
+      setSavingEdit(false);
     }
   }
 
@@ -377,6 +385,9 @@ function DoctorDashboard({ doctor }) {
     setActiveLock(null);
     loadQueue();
     loadConsulted();
+    // After Save & Generate QR the visit belongs to Consulted, so jump the left
+    // list there. To revert to "stay on Queue", delete just this one line.
+    setTab('consulted');
   }
 
   // Release a CONSULTED visit back to the active queue. Clears the doctor link +
@@ -940,7 +951,7 @@ function DoctorDashboard({ doctor }) {
                 onClick={() => setRightTab('report')}>Report</button>
               <button className={`btn ${rightTab === 'prescribe' ? 'btn-primary' : 'btn-outline'}`}
                 style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
-                onClick={() => setRightTab('prescribe')}>Prescribe</button>
+                onClick={() => { setRightTab('prescribe'); setPrescribeMounted(true); }}>Prescribe</button>
               <button className={`btn ${rightTab === 'scribe' ? 'btn-primary' : 'btn-outline'}`}
                 style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
                 onClick={() => setRightTab('scribe')}>Scribe</button>
@@ -958,17 +969,23 @@ function DoctorDashboard({ doctor }) {
 
                 {report ? (
                   <>
-                    <div style={{ lineHeight: 1.8, fontSize: 15 }}>
-                      <ReactMarkdown>{report.report_md}</ReactMarkdown>
-                    </div>
-
-                    {/* Doctor's correction note (original AI report above is preserved). */}
-                    {report.doctor_correction && (
-                      <div style={{ marginTop: 16, background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 10, padding: '12px 14px' }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#B9770E', marginBottom: 4 }}>✎ Doctor's correction</div>
-                        <div style={{ fontSize: 14, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{report.doctor_correction}</div>
+                    {/* If the doctor edited the report, that becomes the report shown
+                        (the AI original is preserved and viewable via the toggle). */}
+                    {report.doctor_correction && !showOriginal && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#B9770E', background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 6, padding: '3px 9px' }}>✎ Edited by doctor</span>
+                        <button onClick={() => setShowOriginal(true)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>View original (AI)</button>
                       </div>
                     )}
+                    {report.doctor_correction && showOriginal && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-light)' }}>Original AI report</span>
+                        <button onClick={() => setShowOriginal(false)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>Back to edited</button>
+                      </div>
+                    )}
+                    <div style={{ lineHeight: 1.8, fontSize: 15 }}>
+                      <ReactMarkdown>{(report.doctor_correction && !showOriginal) ? report.doctor_correction : report.report_md}</ReactMarkdown>
+                    </div>
 
                     {/* Vitals not recorded → let the doctor/nurse add them (re-triages + regenerates). */}
                     {!hasVitals(vitals) && (
@@ -993,19 +1010,19 @@ function DoctorDashboard({ doctor }) {
 
                     {tab === 'queue' && (
                       <div style={{ marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
-                        {correcting ? (
+                        {editing ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--red)' }}>Add a correction — the AI report is kept; your note is saved alongside it.</label>
-                            <textarea className="input" rows={3} value={correctionNote}
-                              onChange={e => setCorrectionNote(e.target.value)}
-                              placeholder="What's incorrect, and the correct information…"
-                              style={{ minHeight: 72, resize: 'vertical', lineHeight: 1.5 }} />
+                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Edit the report — your changes replace what's shown; the original AI version is kept for the record.</label>
+                            <textarea className="input" value={editText}
+                              onChange={e => setEditText(e.target.value)}
+                              placeholder="Edit the report text…"
+                              style={{ minHeight: 280, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
                             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                               <button className="btn btn-outline" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
-                                onClick={() => setCorrecting(false)} disabled={savingCorrection}>Cancel</button>
+                                onClick={() => setEditing(false)} disabled={savingEdit}>Cancel</button>
                               <button className="btn btn-primary" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
-                                onClick={saveCorrection} disabled={savingCorrection || !correctionNote.trim()}>
-                                {savingCorrection ? 'Saving…' : 'Save correction'}
+                                onClick={saveReportEdit} disabled={savingEdit || !editText.trim()}>
+                                {savingEdit ? 'Saving…' : 'Save report'}
                               </button>
                             </div>
                           </div>
@@ -1029,7 +1046,7 @@ function DoctorDashboard({ doctor }) {
                           <div style={{ display: 'flex', gap: 12 }}>
                             <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
                             <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
-                              onClick={() => { handleFeedback('inaccurate'); setCorrectionNote(report?.doctor_correction || ''); setCorrecting(true); }}>Incorrect History</button>
+                              onClick={() => { setEditText(report?.doctor_correction || report?.report_md || ''); setShowOriginal(false); setEditing(true); }}>Incorrect History — Edit</button>
                           </div>
                         )}
                       </div>
@@ -1041,8 +1058,12 @@ function DoctorDashboard({ doctor }) {
               </>
             )}
 
-            {rightTab === 'prescribe' && (
-              <PrescriptionPanel session={selected} doctor={doctor} onDispatched={handleDispatched} />
+            {/* Kept mounted (just hidden) once opened so the saved prescription +
+                QR persist when the doctor flips to Report/Scribe and back. */}
+            {prescribeMounted && (
+              <div style={{ display: rightTab === 'prescribe' ? 'block' : 'none' }}>
+                <PrescriptionPanel session={selected} doctor={doctor} onDispatched={handleDispatched} />
+              </div>
             )}
 
             {rightTab === 'scribe' && (
@@ -1092,6 +1113,25 @@ const titleCase = (s) => (s || '').replace(/\b\w/g, c => c.toUpperCase());
 let _rxSeq = 0;
 const rxUid = () => `rx${Date.now().toString(36)}${(_rxSeq++).toString(36)}`;
 const makeItem = (extra = {}) => ({ id: rxUid(), drug_name: '', dose: '', frequency: 'OD', duration: '', instructions: '', ...extra });
+
+// Parse the patient's free-text intake allergy answer (e.g. "Penicillin allergy,
+// insulin allergy", "Sulfa & aspirin") into clean allergen tokens. Drops "no"
+// answers ("None", "Nil", "NKDA", "no known drug allergies") so they don't show
+// as a false allergy. Strips filler words like "allergy"/"allergic to".
+const _ALLERGY_NEGATIVES = new Set([
+  'none', 'nil', 'no', 'na', 'n/a', 'nka', 'nkda', 'nkma', 'nope', '-', '--',
+  'no known', 'not known', 'no allergies', 'no known allergies',
+  'no known drug allergies', 'no drug allergies', 'denies', 'unknown',
+]);
+function parseAllergyText(txt) {
+  const raw = (txt || '').trim();
+  if (!raw || _ALLERGY_NEGATIVES.has(raw.toLowerCase())) return [];
+  return raw
+    .split(/[,;/&\n]|\band\b/i)
+    .map(s => s.replace(/\b(allerg(y|ic)|to|reaction|sensitivity)\b/gi, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter(s => !_ALLERGY_NEGATIVES.has(s.toLowerCase()) && !/^no\b/i.test(s));
+}
 
 // Keep only the leading dose token, dropping composition/ingredient text the OCR
 // sometimes captures: "625mg (500mg Amoxycillin + 125mg Clavulanate)" -> "625mg",
@@ -1182,14 +1222,28 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
 
 function PrescriptionPanel({ session, doctor, onDispatched }) {
   const [items, setItems] = useState(() => [makeItem()]);
-  const [allergies, setAllergies] = useState([]);
+  const [allergies, setAllergies] = useState([]);          // doctor-added (patient_allergies table)
+  const [intakeAllergens, setIntakeAllergens] = useState([]); // parsed from the patient's intake answer
   const [warnings, setWarnings] = useState([]);
   const [interactionChecked, setInteractionChecked] = useState(false);
+  const [unknownDrugs, setUnknownDrugs] = useState([]);   // prescribed drugs not in the formulary
+  const [aiChecked, setAiChecked] = useState(false);      // has the AI advisory run for the current drugs?
   const [aiNote, setAiNote] = useState('');
   const [draftRestored, setDraftRestored] = useState(false);
   const [drugList, setDrugList] = useState(DRUG_LIST); // hardcoded fallback; replaced by /api/drugs
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
+
+  // The allergies the checker + banner use: the patient's intake answer MERGED
+  // with anything the doctor added manually (case-insensitive de-dupe). This is
+  // why a penicillin-allergic patient is flagged even if the doctor never adds it.
+  const allergyList = useMemo(() => {
+    const byKey = new Map();
+    const add = v => { const k = (v || '').trim(); if (k) byKey.set(k.toLowerCase(), k); };
+    intakeAllergens.forEach(add);
+    allergies.forEach(a => add(a.allergen));
+    return [...byKey.values()];
+  }, [allergies, intakeAllergens]);
 
   // Fetch the formulary once (single source of truth in the backend). On any
   // failure we silently keep the bundled DRUG_LIST fallback, so the dropdown
@@ -1326,8 +1380,28 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     if (session?.patient_phone) {
       api.getAllergies(session.patient_phone).then(setAllergies).catch(() => {});
     }
+    // Pull the patient's intake allergy answer (free text) so the Prescribe tab
+    // alerts on it and feeds it to the interaction/allergy checker — even when the
+    // doctor never manually added an allergy.
+    setIntakeAllergens([]);
     if (session?.id) {
-      api.getPrescriptions(session.id).then(setExistingRx).catch(() => {});
+      api.getAnswers(session.id).then(rows => {
+        const row = (Array.isArray(rows) ? rows : []).find(r => /allerg/i.test(r.question_id || ''));
+        const raw = row?.answer_structured?.value || row?.answer_raw || '';
+        setIntakeAllergens(parseAllergyText(raw));
+      }).catch(() => {});
+    }
+    if (session?.id) {
+      api.getPrescriptions(session.id).then(list => {
+        setExistingRx(list);
+        // If this visit was already prescribed (e.g. reopened from Consulted),
+        // show the latest saved prescription + its QR instead of a blank form.
+        // "Write another prescription" in that view clears this back to the form.
+        if (Array.isArray(list) && list.length) {
+          const rx = list[0]; // GET returns newest-first
+          setSaved({ prescription: rx, items: rx.items || [], issued_at: rx.created_at });
+        }
+      }).catch(() => {});
       // Load current medications from session report (OCR-extracted + patient-reported)
       api.getReport(session.id).then(report => {
         const meds = [];
@@ -1382,6 +1456,16 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     setDraftRestored(restored);
   }, [session?.id]);
 
+  // Clear a previous interaction/allergy result so a stale alert never lingers
+  // after the drug set changes (the doctor must re-run "Check Interactions").
+  function resetCheck() {
+    setWarnings([]);
+    setInteractionChecked(false);
+    setUnknownDrugs([]);
+    setAiChecked(false);
+    setAiNote('');
+  }
+
   function addItem() {
     const updated = [...items, makeItem()];
     setItems(updated);
@@ -1391,7 +1475,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   function removeItem(idx) {
     const updated = items.filter((_, i) => i !== idx);
     setItems(updated);
-    setInteractionChecked(false);
+    resetCheck();
     persistDraft(updated, notes);
   }
 
@@ -1399,7 +1483,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     const updated = [...items];
     updated[idx] = { ...updated[idx], [field]: val };
     setItems(updated);
-    if (field === 'drug_name') setInteractionChecked(false);
+    if (field === 'drug_name') resetCheck();
     persistDraft(updated, notes);
   }
 
@@ -1422,24 +1506,42 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     setInteractionChecked(false);
   }
 
-  async function checkInteractions() {
+  // Core checker. `useAi` true → also runs the LLM advisory for drugs not in the
+  // formulary (the manual "Check Interactions" button). The auto-check runs it
+  // false → instant curated drug-drug + allergy checks only (no LLM per keystroke).
+  // Either way the merged allergyList is sent, so allergy contraindications fire.
+  async function runCheck(useAi) {
     const drugs = items.map(i => i.drug_name).filter(Boolean);
-    const allergenList = allergies.map(a => a.allergen);
-    if (drugs.length === 0) return;
-
+    if (drugs.length === 0) {
+      setWarnings([]); setInteractionChecked(false); setAiNote(''); setUnknownDrugs([]); setAiChecked(false);
+      return null;
+    }
     try {
-      const result = await api.checkBulkInteractions({ drugs, patient_allergies: allergenList, session_id: session?.id });
+      const result = await api.checkBulkInteractions({
+        drugs, patient_allergies: allergyList, session_id: session?.id, ai: useAi,
+      });
       setWarnings(result.warnings || []);
-      setAiNote(result.ai_error ? result.ai_error
-        : (result.unknown_drugs?.length && !result.ai_checked) ? 'AI check for unrecognised drugs was unavailable.'
+      setUnknownDrugs(result.unknown_drugs || []);
+      setAiChecked(!!result.ai_checked);
+      setAiNote(useAi
+        ? (result.ai_error ? result.ai_error
+          : (result.unknown_drugs?.length && !result.ai_checked) ? 'AI check for unrecognised drugs was unavailable.'
+          : '')
         : '');
       setInteractionChecked(true);
+      return result;
     } catch {
       setWarnings([]);
       setAiNote('');
       setInteractionChecked(false);
+      return null;
     }
   }
+
+  // Manual full check (includes the AI advisory). The check runs ONLY when the
+  // doctor clicks "Check Interactions" (and again automatically at save time, so
+  // an allergy/interaction still blocks even if they forget to click).
+  const checkInteractions = () => runCheck(true);
 
   async function handleSave() {
     const validItems = items.filter(i => i.drug_name);
@@ -1456,12 +1558,20 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     setSaveError('');
     setShowItemErrors(false);
 
-    // Check for blocks
-    const blocks = warnings.filter(w => w.severity === 'block');
+    // Re-run a fresh curated check at save time so a drug-drug interaction OR an
+    // allergy contraindication blocks the save even if the doctor never clicked
+    // "Check Interactions". (AI advisories are never blocking, so curated is enough.)
+    const fresh = await runCheck(false);
+    const liveWarnings = fresh ? (fresh.warnings || []) : warnings;
+    const blocks = liveWarnings.filter(w => w.severity === 'block');
     if (blocks.length > 0) {
+      const allergyBlocks = blocks.filter(b => b.allergy);
+      const summary = allergyBlocks.length
+        ? `${allergyBlocks.length} allergy contraindication${allergyBlocks.length > 1 ? 's' : ''}`
+        : `${blocks.length} blocked interaction${blocks.length > 1 ? 's' : ''}`;
       if (!(await confirm({
-        title: `${blocks.length} blocked interaction${blocks.length > 1 ? 's' : ''}`,
-        message: 'This prescription has interactions flagged as BLOCKED above. Prescribe anyway only if you have reviewed them and judged it clinically appropriate.',
+        title: summary,
+        message: 'This prescription is flagged as BLOCKED above (see the red alerts). Prescribe anyway only if you have reviewed it and judged it clinically appropriate.',
         confirmLabel: 'Prescribe anyway',
         danger: true,
       }))) return;
@@ -1490,6 +1600,11 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
   // Which current meds are already in the New Prescription (case-insensitive),
   // used to dedupe "Continue all" and to disable it once everything is added.
+  // Drug names that the checker flagged as clashing with a patient allergy — used
+  // to put a red "⚠ allergy" badge right on the offending prescription row.
+  const allergyHits = new Set(
+    warnings.filter(w => w.allergy && w.drug).map(w => String(w.drug).trim().toLowerCase())
+  );
   const rxDrugNames = new Set(items.filter(i => i.drug_name).map(i => i.drug_name.trim().toLowerCase()));
   const namedCurrentMeds = currentMeds.filter(m => m.drug_name);
   const allCurrentAdded = namedCurrentMeds.length > 0 && namedCurrentMeds.every(m => rxDrugNames.has(m.drug_name.trim().toLowerCase()));
@@ -1501,10 +1616,19 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
       {/* The whole prescription form is hidden once saved — at that point the
           consultation is done and only the QR result below is relevant. */}
       {!saved && (<>
-      {/* Allergies */}
-      {allergies.length > 0 && (
-        <div style={{ background: '#FADBD8', borderRadius: 8, padding: 10, fontSize: 13 }}>
-          <strong>Known Allergies:</strong> {allergies.map(a => a.allergen).join(', ')}
+      {/* Allergy banner — always shown so the doctor knows the allergy status at
+          a glance. Red when the patient has any (from intake or doctor-added);
+          neutral green when explicitly none. */}
+      {allergyList.length > 0 ? (
+        <div style={{ background: '#FADBD8', border: '1px solid #E6B0AA', borderRadius: 8, padding: 10, fontSize: 13, color: '#943126' }}>
+          <strong>⚠ Known allergies:</strong> {allergyList.join(', ')}
+          <div style={{ fontSize: 11, color: '#B03A2E', marginTop: 2 }}>
+            Drugs that clash with these are flagged below and blocked on save.
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: '#EAFAF1', border: '1px solid #ABEBC6', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449' }}>
+          ✓ No known drug allergies reported.
         </div>
       )}
 
@@ -1614,43 +1738,53 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           </div>
         )}
 
-        {items.map((item, idx) => (
-          <div key={item.id} style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div style={{ flex: 2, minWidth: 150 }}>
-              {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
-              <DrugCombobox value={item.drug_name}
-                onChange={v => updateItem(idx, 'drug_name', v)}
-                options={drugList}
-                placeholder="Drug name" style={{ minHeight: 34, fontSize: 13 }} />
+        {items.map((item, idx) => {
+          const isAllergyHit = allergyHits.has((item.drug_name || '').trim().toLowerCase());
+          return (
+          <div key={item.id} style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div style={{ flex: 2, minWidth: 150 }}>
+                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
+                <DrugCombobox value={item.drug_name}
+                  onChange={v => updateItem(idx, 'drug_name', v)}
+                  options={drugList}
+                  placeholder="Drug name" style={{ minHeight: 34, fontSize: 13 }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 70 }}>
+                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
+                <input className="input" value={item.dose}
+                  onChange={e => updateItem(idx, 'dose', e.target.value)}
+                  placeholder="e.g. 5mg"
+                  style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.dose || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
+              </div>
+              <div style={{ width: 80 }}>
+                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Freq</label>}
+                <select className="input" value={item.frequency}
+                  onChange={e => updateItem(idx, 'frequency', e.target.value)}
+                  style={{ minHeight: 34, fontSize: 13 }}>
+                  {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 70 }}>
+                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Duration</label>}
+                <input className="input" value={item.duration}
+                  onChange={e => updateItem(idx, 'duration', e.target.value)}
+                  placeholder="e.g. 7 days"
+                  style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.duration || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
+              </div>
+              <button type="button" onClick={() => removeItem(idx)}
+                style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 18, minHeight: 34 }}>
+                ✕
+              </button>
             </div>
-            <div style={{ flex: 1, minWidth: 70 }}>
-              {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
-              <input className="input" value={item.dose}
-                onChange={e => updateItem(idx, 'dose', e.target.value)}
-                placeholder="e.g. 5mg"
-                style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.dose || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
-            </div>
-            <div style={{ width: 80 }}>
-              {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Freq</label>}
-              <select className="input" value={item.frequency}
-                onChange={e => updateItem(idx, 'frequency', e.target.value)}
-                style={{ minHeight: 34, fontSize: 13 }}>
-                {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-            <div style={{ flex: 1, minWidth: 70 }}>
-              {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Duration</label>}
-              <input className="input" value={item.duration}
-                onChange={e => updateItem(idx, 'duration', e.target.value)}
-                placeholder="e.g. 7 days"
-                style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.duration || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
-            </div>
-            <button type="button" onClick={() => removeItem(idx)}
-              style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 18, minHeight: 34 }}>
-              ✕
-            </button>
+            {isAllergyHit && (
+              <div style={{ fontSize: 11, color: '#C0392B', fontWeight: 700, marginTop: 3 }}>
+                ⚠ allergy contraindication
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button type="button" onClick={addItem}
@@ -1699,11 +1833,19 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         </div>
       )}
 
-      {/* No-interaction confirmation */}
+      {/* No-interaction confirmation. Only fully reassuring once any unrecognised
+          drugs have also had the AI advisory run; otherwise nudge to run it. */}
       {interactionChecked && warnings.length === 0 && (
-        <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449', fontWeight: 600 }}>
-          ✓ No negative interactions found.
-        </div>
+        unknownDrugs.length > 0 && !aiChecked ? (
+          <div style={{ background: '#FEF9E7', border: '1px solid #F4D03F', borderRadius: 8, padding: 10, fontSize: 13, color: '#7D6608' }}>
+            No issues among known drugs. <strong>{unknownDrugs.join(', ')}</strong> {unknownDrugs.length > 1 ? 'are' : 'is'} not in the formulary —
+            click <strong>Check Interactions</strong> for an AI allergy/interaction review.
+          </div>
+        ) : (
+          <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449', fontWeight: 600 }}>
+            ✓ No negative interactions found.
+          </div>
+        )
       )}
 
       {/* AI availability note */}
@@ -1752,15 +1894,21 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
           {/* Print / Save PDF */}
           <button className="btn btn-primary" onClick={printPrescription}
-            style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
             🖨 Print / Save PDF
+          </button>
+
+          {/* Back to a blank form to add another prescription for this visit. */}
+          <button className="btn btn-outline" onClick={() => { setSaved(null); setQrUrl(''); setQrError(''); }}
+            style={{ marginBottom: 12 }}>
+            ＋ Write another prescription
           </button>
 
           {/* Human-readable summary of what the QR contains */}
           <div style={{ background: '#fff', borderRadius: 8, padding: 12, textAlign: 'left', marginBottom: 8 }}>
             <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)', marginBottom: 6 }}>
               {saved.prescription?.patient_name || session?.patient_name || 'Patient'} ·{' '}
-              {new Date().toISOString().slice(0, 10)}
+              {new Date(saved.issued_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
             </p>
             {(saved.items || []).map((it, i) => (
               <p key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: 2 }}>

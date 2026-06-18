@@ -20,7 +20,8 @@ def has_llm():
     gem = os.getenv("GEMINI_API_KEY", "").strip()
     ant = os.getenv("ANTHROPIC_API_KEY", "").strip()
     oai = os.getenv("OPENAI_API_KEY", "").strip()
-    return bool(gem) or (bool(ant) and ant != "your_key_here") or bool(oai)
+    grq = os.getenv("GROQ_API_KEY", "").strip()
+    return bool(gem) or bool(grq) or (bool(ant) and ant != "your_key_here") or bool(oai)
 
 
 def has_vision():
@@ -34,10 +35,11 @@ def has_vision():
 def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> str:
     """
     Send system prompt + user content, get plain text response back.
-    Prefers Gemini → OpenAI → Anthropic.
+    Prefers Gemini → Groq → OpenAI → Anthropic.
     Raises Exception on failure — caller should handle.
     """
     gem_key = os.getenv("GEMINI_API_KEY", "").strip()
+    grq_key = os.getenv("GROQ_API_KEY", "").strip()
     oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ant_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
@@ -49,6 +51,13 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
             return _gemini_complete(gem_key, system_prompt, user_content, max_tokens)
         except Exception as e:
             logger.warning(f"Gemini text failed, trying fallback: {e}")
+
+    if grq_key:
+        configured = True
+        try:
+            return _groq_complete(grq_key, system_prompt, user_content, max_tokens)
+        except Exception as e:
+            logger.warning(f"Groq text failed, trying fallback: {e}")
 
     if oai_key:
         configured = True
@@ -156,6 +165,26 @@ def _openai_complete(api_key: str, system_prompt: str, user_content: str, max_to
     client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT)
     response = client.chat.completions.create(
         model="gpt-4o-mini",
+        max_tokens=max_tokens,
+        temperature=0.3,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def _groq_complete(api_key: str, system_prompt: str, user_content: str, max_tokens: int) -> str:
+    """Groq — free, fast, and OpenAI-API-compatible, so we reuse the OpenAI SDK
+    pointed at Groq's endpoint. Model defaults to Llama 3.3 70B; override with
+    GROQ_MODEL. A handy free fallback when the Gemini free-tier quota runs out."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1", timeout=LLM_TIMEOUT)
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=max_tokens,
         temperature=0.3,
         messages=[
