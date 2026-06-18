@@ -1,114 +1,112 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 
-// Records the patient's spoken answer two ways at once:
-//  1) the browser Speech API turns it into TEXT (unchanged behaviour), and
-//  2) MediaRecorder keeps the ACTUAL audio so a doctor can listen back later
-//     (and, later, so Bhashini can re-transcribe it server-side).
-// onResult is called with (transcript, audioBlob, durationMs). audioBlob may be
-// null if the device/browser can't record — text still works as before.
-export default function VoiceButton({ onResult, lang = 'en' }) {
-  const [recording, setRecording] = useState(false);
+// Records the patient's spoken answer as ONE continuous audio clip (MediaRecorder)
+// with PAUSE buffering — pause and resume append to the SAME recording, never a
+// new clip. On Stop the single blob is handed to the parent, which sends it to
+// Bhashini (Stage 1 ASR + Stage 2 medical correction). onResult(audioBlob, durationMs).
+export default function VoiceButton({ onResult }) {
+  const [status, setStatus] = useState('idle'); // idle | recording | paused
   const [supported, setSupported] = useState(true);
-  const recRef = useRef(null);        // SpeechRecognition
-  const mediaRef = useRef(null);      // MediaRecorder
-  const streamRef = useRef(null);     // mic MediaStream (for cleanup)
+  const mediaRef = useRef(null);
+  const streamRef = useRef(null);
   const chunksRef = useRef([]);
-  const startRef = useRef(0);
-  const transcriptRef = useRef('');
-
-  const langMap = { en: 'en-IN', hi: 'hi-IN', te: 'te-IN' };
+  const accumRef = useRef(0);    // total active (un-paused) ms
+  const segStartRef = useRef(0); // start of the current active segment
 
   useEffect(() => {
-    setSupported('webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
+    setSupported(typeof MediaRecorder !== 'undefined' && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
 
-  function cleanupStream() {
+  function cleanup() {
     try { streamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
     streamRef.current = null;
   }
 
-  // Build the audio blob (if any) and hand everything back to the parent.
   function finish() {
-    const transcript = transcriptRef.current;
-    const durationMs = startRef.current ? Date.now() - startRef.current : null;
     const chunks = chunksRef.current;
-    if (transcript) {
-      const blob = chunks.length ? new Blob(chunks, { type: mediaRef.current?.mimeType || 'audio/webm' }) : null;
-      onResult(transcript, blob, durationMs);
-    }
+    const blob = chunks.length ? new Blob(chunks, { type: mediaRef.current?.mimeType || 'audio/webm' }) : null;
+    const dur = accumRef.current || null;
+    cleanup();
     chunksRef.current = [];
-    transcriptRef.current = '';
-    startRef.current = 0;
+    accumRef.current = 0;
+    if (blob) onResult(blob, dur);
   }
 
-  async function startAudioCapture() {
-    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+  async function start() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mr = new MediaRecorder(stream);
       chunksRef.current = [];
+      accumRef.current = 0;
       mr.ondataavailable = e => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
-      mr.onstop = () => { cleanupStream(); finish(); };
+      mr.onstop = () => finish();
       mediaRef.current = mr;
       mr.start();
+      segStartRef.current = Date.now();
+      setStatus('recording');
     } catch {
-      // Mic capture blocked/unavailable — fall back to transcript only.
-      mediaRef.current = null;
+      setSupported(false);
     }
   }
 
-  function stopAll() {
-    try { recRef.current?.stop(); } catch {}
-    // Stopping the recorder triggers onstop → finish(). If there's no recorder,
-    // finish() directly so the transcript still flows through.
-    if (mediaRef.current && mediaRef.current.state !== 'inactive') {
-      try { mediaRef.current.stop(); } catch { cleanupStream(); finish(); }
-    } else {
-      cleanupStream();
-      finish();
+  function pause() {
+    const mr = mediaRef.current;
+    if (mr && mr.state === 'recording') {
+      try { mr.pause(); } catch {}
+      accumRef.current += Date.now() - segStartRef.current;
+      setStatus('paused');
     }
   }
 
-  async function toggle() {
-    if (!supported) return;
-
-    if (recording) {
-      setRecording(false);
-      stopAll();
-      return;
+  function resume() {
+    const mr = mediaRef.current;
+    if (mr && mr.state === 'paused') {
+      try { mr.resume(); } catch {}
+      segStartRef.current = Date.now();
+      setStatus('recording');
     }
+  }
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const rec = new SpeechRecognition();
-    rec.lang = langMap[lang] || 'en-IN';
-    rec.continuous = false;
-    rec.interimResults = false;
-    transcriptRef.current = '';
+  function stop() {
+    const mr = mediaRef.current;
+    if (mr && mr.state === 'recording') accumRef.current += Date.now() - segStartRef.current;
+    setStatus('idle');
+    if (mr && mr.state !== 'inactive') { try { mr.stop(); } catch { finish(); } }
+    else finish();
+  }
 
-    rec.onresult = (e) => {
-      transcriptRef.current = e.results[0][0].transcript;
-      setRecording(false);
-      stopAll();
-    };
-    rec.onerror = () => { setRecording(false); stopAll(); };
-    rec.onend = () => { /* result/stop path handles finishing */ };
+  if (!supported) {
+    return (
+      <button className="voice-btn" disabled title="Microphone is not available in this browser"
+        style={{ opacity: 0.4, cursor: 'not-allowed' }}>🎤</button>
+    );
+  }
 
-    recRef.current = rec;
-    startRef.current = Date.now();
-    await startAudioCapture();   // start mic capture first, then recognition
-    rec.start();
-    setRecording(true);
+  const pill = (bg) => ({
+    display: 'inline-flex', alignItems: 'center', gap: 6, background: bg, color: '#fff',
+    border: 'none', borderRadius: 22, padding: '10px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+  });
+
+  if (status === 'idle') {
+    return <button className="voice-btn" onClick={start} type="button" title="Tap to speak" aria-label="Record voice input">🎤</button>;
   }
 
   return (
-    <button className={`voice-btn ${recording ? 'recording' : ''}`} onClick={toggle} type="button"
-      disabled={!supported}
-      title={supported ? 'Tap to speak' : 'Voice input is not supported in this browser'}
-      aria-label={supported ? 'Record voice input' : 'Voice input not supported in this browser'}
-      style={!supported ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}>
-      🎤
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {status === 'recording' ? (
+        <button type="button" onClick={pause} style={pill('var(--secondary)')} aria-label="Pause recording">⏸ Pause</button>
+      ) : (
+        <button type="button" onClick={resume} style={pill('var(--accent)')} aria-label="Resume recording">▶ Resume</button>
+      )}
+      <button type="button" onClick={stop} style={pill('var(--red)')} aria-label="Stop recording">⏹ Stop</button>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-light)' }}>
+        <span style={{ width: 9, height: 9, borderRadius: '50%', background: status === 'recording' ? 'var(--red)' : '#bbb',
+          display: 'inline-block', animation: status === 'recording' ? 'vbpulse 1s infinite' : 'none' }} />
+        {status === 'recording' ? 'Recording' : 'Paused'}
+      </span>
+      <style>{`@keyframes vbpulse { 0%,100%{opacity:1} 50%{opacity:.3} }`}</style>
+    </div>
   );
 }
