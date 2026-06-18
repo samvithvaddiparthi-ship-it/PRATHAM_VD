@@ -1153,10 +1153,12 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
   const wrapRef = useRef(null);
 
   const q = (value || '').trim().toLowerCase();
-  const matches = (q
+  // Show the WHOLE formulary (the panel is scrollable). No slice cap, so the list
+  // isn't truncated alphabetically and reflects every drug the API returns —
+  // including ones added via the HIS admin dashboard.
+  const matches = q
     ? options.filter(d => d.includes(q))
-    : options
-  ).slice(0, 50);
+    : options;
 
   // Close when clicking outside the widget.
   useEffect(() => {
