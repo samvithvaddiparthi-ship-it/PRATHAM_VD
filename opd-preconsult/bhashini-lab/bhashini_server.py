@@ -54,8 +54,9 @@ async def transcribe(file: UploadFile = File(...), lang: str = Form(default="hi"
                      correct: bool = Form(default=True), patient_name: str = Form(default="")):
     """Two-stage transcription:
        Stage 1 — Bhashini ASR (raw transcript)
-       Stage 2 — medical-domain correction, validation, confidence (Hindi only;
-                 other langs return Stage-1 text unchanged).
+       Stage 2 — medical-domain correction, validation, confidence for English,
+                 Hindi and Telugu (drug/lab lexicon match, patient-name mapping
+                 from credentials, de-stutter, and LLM medical-context validation).
     Audio is held in memory only."""
     contents = await file.read()
     try:
@@ -69,8 +70,11 @@ async def transcribe(file: UploadFile = File(...), lang: str = Form(default="hi"
             "changes": [], "uncertain": [], "stage2_ms": 0,
             "llm_used": False, "corrected_applied": False}
 
-    # Stage 2 medical correction runs for Hindi and Telugu. Skip if disabled/empty.
-    if correct and lang in ("hi", "te") and raw.strip():
+    # Stage 2 medical correction runs for English, Hindi and Telugu. The same
+    # betterment strategies apply to English: drug/lab proper-noun matching from
+    # the medication list, patient-name mapping from credentials, de-stutter, and
+    # LLM medical-context validation. Skip if disabled/empty.
+    if correct and lang in ("en", "hi", "te") and raw.strip():
         try:
             c = medcorrect.correct(raw, lang, patient_name=patient_name)
             resp.update({k: c[k] for k in
