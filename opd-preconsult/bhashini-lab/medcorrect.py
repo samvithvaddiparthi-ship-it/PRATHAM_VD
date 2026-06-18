@@ -244,17 +244,45 @@ def collapse_repeats(text: str, lang: str):
     return " ".join(out), changes
 
 
+# Phrases that INTRODUCE the patient's own name. The credential is only snapped
+# onto a token that FOLLOWS one of these cues — so an ordinary word that merely
+# sounds like the name (and isn't being used as a name) is never rewritten. Each
+# cue is a token sequence; Latin cues match case-insensitively, native cues exact.
+NAME_CUES = [
+    # English
+    ["my", "name", "is"], ["name", "is"], ["my", "name's"], ["name's"],
+    ["i", "am"], ["i'm"], ["this", "is"], ["myself"], ["call", "me"],
+    # Hindi (romanised + Devanagari)
+    ["mera", "naam"], ["naam"], ["मेरा", "नाम"], ["नाम"],
+    # Telugu (romanised + Telugu)
+    ["na", "peru"], ["naa", "peru"], ["peru"], ["నా", "పేరు"], ["పేరు"],
+]
+
+
+def _name_candidate_starts(toks):
+    """Token indices that come RIGHT AFTER a name-introduction cue — the only
+    positions where a name replacement is allowed."""
+    low = [t.lower().strip(".,!?;:।") for t in toks]
+    starts = set()
+    for cue in NAME_CUES:
+        n = len(cue)
+        for i in range(len(low) - n + 1):
+            if low[i:i + n] == cue and i + n < len(toks):
+                starts.add(i + n)
+    return sorted(starts)
+
+
 def apply_name(text: str, patient_name: str, lang: str):
     """Snap a mis-heard spoken name to the registered credential — but ONLY when
-    it's clearly the same name. Works ACROSS SCRIPTS: a Devanagari/Telugu spoken
-    name is romanised and compared to a Latin credential. When matched, the name
-    is rendered in the TRANSCRIPT's script (Option B) — a Latin credential is
-    transliterated to the language's script (Devanagari/Telugu) before insertion.
+    (a) the word is clearly the same name (fuzzy match clears the cutoff), AND
+    (b) it actually appears in a NAME context, i.e. right after a cue like
+    "my name is" / "mera naam" / "నా పేరు". Without a name cue, nothing is
+    touched — so a random word that merely sounds like the name is left alone.
 
-    Scans 1- and 2-token spans, picks the best match, and replaces only if it
-    clears the cutoff (lower for cross-script, since romanisation is lossy). A
-    name very different from the credential (e.g. the patient's surname) clears
-    nothing and is left exactly as spoken."""
+    Works ACROSS SCRIPTS: a Devanagari/Telugu spoken name is romanised and
+    compared to a Latin credential; on match it is rendered in the TRANSCRIPT's
+    script (Option B). A name very different from the credential (e.g. a surname)
+    clears nothing and is left exactly as spoken."""
     changes = []
     name = (patient_name or "").strip()
     name_key = _romanize(name)
@@ -263,8 +291,11 @@ def apply_name(text: str, patient_name: str, lang: str):
     name_is_indic = _script_of(name) is not None
 
     toks = text.split(" ")
+    starts = _name_candidate_starts(toks)
+    if not starts:
+        return text, changes   # no "my name is…" cue → never rewrite anything
     best = None  # (margin, ratio, i, j, span, cross)
-    for i in range(len(toks)):
+    for i in starts:
         for j in (i + 1, i + 2):
             if j > len(toks):
                 continue
