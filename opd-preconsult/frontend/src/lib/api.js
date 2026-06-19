@@ -92,6 +92,24 @@ export const api = {
   getAnswerAudio: (sessionId) => apiFetch(`/api/audio/session/${sessionId}`),
   answerAudioUrl: (clipId) => `${BASE}/api/audio/clip/${clipId}`,
 
+  // Bhashini transcription — returns the transcript in the SPOKEN language
+  // (no translation). Also stores the clip (WAV) for doctor playback.
+  transcribeVoice: async (blob, { lang, sessionId, questionId, patientName, durationMs } = {}) => {
+    const fd = new FormData();
+    fd.append('file', blob, `answer_${questionId || 'q'}.webm`);
+    fd.append('lang', lang);
+    if (patientName) fd.append('patient_name', patientName);
+    if (sessionId) fd.append('session_id', sessionId);
+    if (questionId) fd.append('question_id', questionId);
+    if (durationMs != null) fd.append('duration_ms', String(Math.round(durationMs)));
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/api/transcribe`, { method: 'POST', headers, body: fd });
+    if (!res.ok) throw new Error('transcription failed');
+    return res.json();
+  },
+  transcribeHealth: () => apiFetch('/api/transcribe/health'),
+
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),
   doctorQueue: () => apiFetch('/api/doctor/queue'),

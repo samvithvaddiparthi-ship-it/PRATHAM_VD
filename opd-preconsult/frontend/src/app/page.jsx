@@ -14,11 +14,14 @@ function HomeContent() {
   const [showScanner, setShowScanner] = useState(false);
 
   useEffect(() => {
+    // Optional ?lang=hi|te|en lets a bypass link jump straight into a language.
+    const urlLang = searchParams.get('lang');
+    if (urlLang && ['en', 'hi', 'te'].includes(urlLang)) setLang(urlLang);
     const qr = searchParams.get('qr');
-    if (qr) handleQR(qr);
+    if (qr) handleQR(qr, urlLang);
   }, [searchParams]);
 
-  async function handleQR(payload) {
+  async function handleQR(payload, langOverride) {
     setShowScanner(false);
     setLoading(true);
     setError('');
@@ -28,7 +31,8 @@ function HomeContent() {
       sessionStorage.setItem('token', result.token);
       sessionStorage.setItem('session_id', result.session.id);
       sessionStorage.setItem('department', result.session.department);
-      sessionStorage.setItem('lang', lang);
+      const chosen = (langOverride && ['en', 'hi', 'te'].includes(langOverride)) ? langOverride : lang;
+      sessionStorage.setItem('lang', chosen);
       router.push('/patient/register');
     } catch (err) {
       setError(err.message);

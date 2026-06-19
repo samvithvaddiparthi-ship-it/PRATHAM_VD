@@ -13,10 +13,12 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [uploading, setUploading] = useState(false);
   const [ocrResult, setOcrResult] = useState(null);
   const [inputError, setInputError] = useState('');
+  const [transcribing, setTranscribing] = useState(false);   // Bhashini round-trip in progress
 
   useEffect(() => {
     setValue(initialValue);
     setInputError('');
+    setTranscribing(false);
   }, [question?.id]);
 
   const text = question[`text_${lang}`] || question.text_en;
@@ -36,13 +38,42 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     setOcrResult(null);
   }
 
-  // Store the patient's spoken audio for THIS question so the doctor can play it
-  // back. Fire-and-forget — a failed upload must never block the interview.
-  function uploadVoiceClip(blob, durMs, transcript) {
+  // Voice answer → Bhashini transcription in the SPOKEN language (Hindi stays
+  // Hindi, Telugu stays Telugu). The text is APPENDED so the patient can speak
+  // multiple times and also type. The clip is stored server-side for the doctor.
+  async function handleVoiceResult(blob, durMs) {
     if (!blob) return;
-    const sessionId = sessionStorage.getItem('session_id');
-    api.uploadAnswerAudio(blob, sessionId, question.id, durMs, transcript).catch(() => {});
+    setTranscribing(true);
+    setInputError('');
+    let patientName = '';
+    try { patientName = JSON.parse(sessionStorage.getItem('register_form') || '{}').patient_name || ''; } catch {}
+    try {
+      const sessionId = sessionStorage.getItem('session_id');
+      const res = await api.transcribeVoice(blob, { lang, sessionId, questionId: question.id, patientName, durationMs: durMs });
+      const t = (res && res.text || '').trim();
+      if (t) setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${t}` : t);
+      else setInputError(lang === 'hi' ? 'समझ नहीं पाए — कृपया फिर बोलें या टाइप करें।' : lang === 'te' ? 'వినలేకపోయాం — దయచేసి మళ్ళీ చెప్పండి లేదా టైప్ చేయండి.' : "Couldn't catch that — please speak again or type.");
+    } catch {
+      setInputError(lang === 'hi' ? 'ट्रांसक्रिप्शन विफल — कृपया टाइप करें।' : lang === 'te' ? 'ట్రాన్స్క్రిప్షన్ విఫలమైంది — దయచేసి టైప్ చేయండి.' : 'Transcription failed — please type your answer.');
+    } finally {
+      setTranscribing(false);
+    }
   }
+
+  function clearAnswer() {
+    setValue('');
+    setInputError('');
+  }
+
+  const vLabels = {
+    speak: lang === 'hi' ? 'बोलने के लिए दबाएँ' : lang === 'te' ? 'మాట్లాడటానికి నొక్కండి' : 'Tap to speak',
+    recording: lang === 'hi' ? 'रिकॉर्डिंग' : lang === 'te' ? 'రికార్డింగ్' : 'Recording',
+    paused: lang === 'hi' ? 'रुका हुआ' : lang === 'te' ? 'ఆపివేయబడింది' : 'Paused',
+    pause: lang === 'hi' ? 'रोकें' : lang === 'te' ? 'ఆపు' : 'Pause',
+    resume: lang === 'hi' ? 'जारी रखें' : lang === 'te' ? 'కొనసాగించు' : 'Resume',
+    stop: lang === 'hi' ? 'पूर्ण' : lang === 'te' ? 'పూర్తి' : 'Done',
+    noMic: lang === 'hi' ? 'माइक्रोफ़ोन उपलब्ध नहीं' : lang === 'te' ? 'మైక్రోఫోన్ అందుబాటులో లేదు' : 'Microphone not available',
+  };
 
   async function handleUpload(e) {
     const file = e.target.files?.[0];
@@ -104,14 +135,30 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
       {type === 'FREE_TEXT' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {lang !== 'en' && (
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.3, color: 'var(--primary)' }}>
+              {lang === 'hi' ? '🗣️ हिन्दी में आपका उत्तर' : '🗣️ తెలుగులో మీ సమాధానం'}
+            </div>
+          )}
           <textarea
             className="input"
             rows={3}
             value={value}
             onChange={e => setValue(e.target.value)}
-            placeholder={lang === 'hi' ? 'यहाँ टाइप करें...' : lang === 'te' ? 'ఇక్కడ టైప్ చేయండి...' : 'Type here...'}
+            placeholder={lang === 'hi' ? 'बोलें या यहाँ टाइप करें...' : lang === 'te' ? 'మాట్లాడండి లేదా ఇక్కడ టైప్ చేయండి...' : 'Speak or type here...'}
           />
-          <VoiceButton lang={lang} onResult={(v, blob, durMs) => { uploadVoiceClip(blob, durMs, v); setValue(v); submit(v); }} />
+
+          {/* Microphone control */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, margin: '2px 0' }}>
+            <VoiceButton onResult={handleVoiceResult} labels={vLabels} />
+            {transcribing && (
+              <span style={{ fontSize: 13, color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ width: 13, height: 13, border: '2px solid #cfe0ec', borderTopColor: 'var(--secondary)', borderRadius: '50%', display: 'inline-block', animation: 'qcspin 0.7s linear infinite' }} />
+                {lang === 'hi' ? 'लिख रहे हैं…' : lang === 'te' ? 'రాస్తున్నాం…' : 'Transcribing…'}
+              </span>
+            )}
+          </div>
+          <style>{`@keyframes qcspin { to { transform: rotate(360deg) } }`}</style>
 
           {/* Contextual document upload */}
           {uploadCfg && (
@@ -178,9 +225,15 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
               {lang === 'hi' ? 'कोई नहीं' : lang === 'te' ? 'ఏదీ లేదు' : 'None'}
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => submit()}>
-            {lang === 'hi' ? 'अगला' : lang === 'te' ? 'తదుపరి' : 'Next'}
-          </button>
+          {/* Clear + Done — equal size */}
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="btn btn-outline" style={{ flex: 1, minHeight: 46 }} disabled={!value} onClick={clearAnswer}>
+              {lang === 'hi' ? 'मिटाएँ' : lang === 'te' ? 'తుడిచివేయి' : 'Clear'}
+            </button>
+            <button className="btn btn-primary" style={{ flex: 1, minHeight: 46 }} onClick={() => submit()}>
+              {lang === 'hi' ? 'पूर्ण' : lang === 'te' ? 'పూర్తయింది' : 'Done'}
+            </button>
+          </div>
           {inputError && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>{inputError}</p>}
         </div>
       )}

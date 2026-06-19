@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import llm, triage, report, ocr, prescription, scribe, drugs, audio
+from .routers import llm, triage, report, ocr, prescription, scribe, drugs, audio, transcribe
 from .llm_client import LLMUnavailable
 from . import drug_repo
 
@@ -43,6 +43,7 @@ app.include_router(prescription.router)
 app.include_router(scribe.router)
 app.include_router(drugs.router)
 app.include_router(audio.router)
+app.include_router(transcribe.router)
 
 @app.on_event("startup")
 def _init_drug_formulary():

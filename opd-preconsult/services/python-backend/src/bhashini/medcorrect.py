@@ -22,8 +22,8 @@ import difflib
 from pathlib import Path
 from datetime import datetime, timezone
 
-import llm
-from medical_lexicon import (EN_TERMS, DRUGS, LAB_TESTS, DOSAGE_CODES, UNITS,
+from . import _llm as llm
+from .lexicon import (EN_TERMS, DRUGS, LAB_TESTS, DOSAGE_CODES, UNITS,
                              terms_for, confusion_map_for)
 
 LOG_PATH = Path(__file__).parent / "logs" / "transcripts.jsonl"
