@@ -2,10 +2,12 @@
 import { useState, useEffect } from 'react';
 import VoiceButton from './VoiceButton';
 import { api } from '../lib/api';
+import { t } from '../lib/i18n';
 
-// Questions that support contextual document uploads
+// Questions that support contextual document uploads. `labelKey` is resolved
+// against i18n so the button text follows the patient's chosen language.
 const UPLOAD_CONFIG = {
-  q_surgery_detail: { label: 'Upload Discharge Summary', docType: 'discharge_summary' },
+  q_surgery_detail: { labelKey: 'upload_discharge', docType: 'discharge_summary' },
 };
 
 export default function QuestionCard({ question, lang, onAnswer, initialValue = '' }) {
@@ -29,7 +31,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   function submit(val) {
     const answer = val || value;
     if (!answer && question.required) {
-      setInputError('Please enter your response before continuing.');
+      setInputError(t('err_response_required', lang));
       return;
     }
     setInputError('');
@@ -98,7 +100,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
         setValue(prev => prev ? `${prev}\n${result.raw_text.slice(0, 300)}` : result.raw_text.slice(0, 300));
       }
     } catch (err) {
-      setInputError('Upload failed: ' + (err.message || 'Unknown error'));
+      setInputError(t('upload_failed', lang) + ': ' + (err.message || 'Unknown error'));
     } finally {
       setUploading(false);
     }
@@ -171,7 +173,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
                 borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13,
                 opacity: uploading ? 0.6 : 1,
               }}>
-                {uploading ? 'Processing...' : uploadCfg.label}
+                {uploading ? t('processing', lang) : t(uploadCfg.labelKey, lang)}
                 <input type="file" accept="image/*" capture="environment"
                   onChange={handleUpload} disabled={uploading}
                   style={{ display: 'none' }} />
@@ -182,13 +184,13 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
           {/* OCR Results display */}
           {ocrResult && ocrResult.structured?.medications?.length > 0 && (
             <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 12 }}>
-              <strong>Extracted medications:</strong>
+              <strong>{t('extracted_medications', lang)}</strong>
               <table style={{ width: '100%', marginTop: 6, fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #A9DFBF' }}>
-                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>Drug</th>
-                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>Dose</th>
-                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>Freq</th>
+                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>{t('col_drug', lang)}</th>
+                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>{t('col_dose', lang)}</th>
+                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>{t('col_freq', lang)}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -206,7 +208,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
           {ocrResult && ocrResult.structured?.lab_values?.length > 0 && (
             <div style={{ background: '#FEF9E7', borderRadius: 8, padding: 10, fontSize: 12 }}>
-              <strong>Extracted lab values:</strong>
+              <strong>{t('extracted_lab_values', lang)}</strong>
               {ocrResult.structured.lab_values.map((l, i) => (
                 <span key={i} style={{
                   display: 'inline-block', margin: '4px 4px 0 0', padding: '2px 8px',
@@ -214,7 +216,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
                   background: l.is_abnormal ? '#FADBD8' : '#D5F5E3',
                   color: l.is_abnormal ? '#C0392B' : '#1E8449',
                 }}>
-                  {l.test}: {l.value} {l.is_abnormal ? '(abnormal)' : ''}
+                  {l.test}: {l.value} {l.is_abnormal ? `(${t('abnormal', lang)})` : ''}
                 </span>
               ))}
             </div>

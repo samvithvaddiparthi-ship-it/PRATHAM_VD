@@ -165,7 +165,7 @@ export default function Interview() {
           style={{ background: '#fff', color: 'var(--red)', marginTop: 32, maxWidth: 280 }}
           onClick={() => { setTriageAlert(null); loadNext(sessionId); }}
         >
-          Continue Questions
+          {t('continue_questions', lang)}
         </button>
       </div>
     );
@@ -174,7 +174,7 @@ export default function Interview() {
   if (loading) {
     return (
       <div className="screen" style={{ justifyContent: 'center', alignItems: 'center' }}>
-        <p>Loading...</p>
+        <p>{t('loading', lang)}</p>
       </div>
     );
   }
@@ -192,7 +192,7 @@ export default function Interview() {
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}
       <button className="btn btn-outline" onClick={handleGoBack} style={{ fontSize: 13, marginTop: 12 }}>
-        ← Go Back
+        ← {t('go_back', lang)}
       </button>
     </div>
   );

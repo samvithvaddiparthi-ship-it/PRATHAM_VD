@@ -48,7 +48,7 @@ export default function Done() {
       setVitals(v);
       setOpen(false);
     } catch (err) {
-      setVErr('Could not save vitals: ' + (err.message || 'Unknown error') + '. Please try again.');
+      setVErr(t('could_not_save_vitals', lang) + ': ' + (err.message || 'Unknown error') + '. ' + t('try_again', lang));
     } finally {
       setSaving(false);
     }
@@ -71,7 +71,7 @@ export default function Done() {
 
         {session?.queue_slot && (
           <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 16, width: '100%' }}>
-            <p style={{ fontSize: 14, color: 'var(--text-light)' }}>Queue Number</p>
+            <p style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('queue_number', lang)}</p>
             <p style={{ fontSize: 36, fontWeight: 700, color: 'var(--primary)' }}>{session.queue_slot}</p>
           </div>
         )}
@@ -86,10 +86,10 @@ export default function Done() {
               <span style={{ fontSize: 22, lineHeight: 1 }}>{recorded ? '✅' : '🩺'}</span>
               <span style={{ flex: 1 }}>
                 <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: recorded ? 'var(--green)' : 'var(--primary)' }}>
-                  {recorded ? 'Vitals recorded' : 'Add your vitals'}
+                  {recorded ? t('vitals_recorded', lang) : t('add_vitals', lang)}
                 </span>
                 <span style={{ display: 'block', fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>
-                  {recorded ? 'Tap to update' : 'Optional · a nurse can help'}
+                  {recorded ? t('tap_to_update', lang) : t('vitals_optional', lang)}
                 </span>
               </span>
               <span style={{ color: 'var(--text-light)', fontSize: 12, transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
@@ -97,14 +97,14 @@ export default function Done() {
             {open && (
               <div style={{ padding: '0 16px 16px', borderTop: '1px solid #E0E0E0' }}>
                 <p style={{ fontSize: 12, color: 'var(--text-light)', margin: '12px 0' }}>
-                  Adding these updates the summary your doctor sees.
+                  {t('vitals_update_note', lang)}
                 </p>
                 <VitalsForm
                   lang={lang}
                   loading={saving}
                   error={vErr}
-                  submitLabel={recorded ? 'Update vitals' : 'Save vitals'}
-                  loadingLabel="Saving…"
+                  submitLabel={recorded ? t('update_vitals', lang) : t('save_vitals', lang)}
+                  loadingLabel={t('saving', lang)}
                   onSubmit={saveVitals}
                 />
               </div>

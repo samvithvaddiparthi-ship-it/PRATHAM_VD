@@ -49,7 +49,7 @@ export default function Vitals() {
       await api.generateReport(sessionId);  // also sets state = COMPLETE
       router.push('/patient/done');
     } catch (err) {
-      setError('Could not submit: ' + (err.message || 'Unknown error') + '. Please try again.');
+      setError(t('could_not_submit', lang) + ': ' + (err.message || 'Unknown error') + '. ' + t('try_again', lang));
       setLoading(false);
     }
   }
@@ -82,19 +82,19 @@ export default function Vitals() {
 
   const protocolBanner = (requiredVitals.length > 0 || requiredTests.length > 0) ? (
     <div style={{ background: '#fff3cd', border: '1px solid #ffc107', borderRadius: 8, padding: 10, fontSize: 13 }}>
-      <strong>Protocol Required:</strong>
-      {requiredVitals.length > 0 && <div>Vitals: {requiredVitals.join(', ')}</div>}
-      {requiredTests.length > 0 && <div>Tests: {requiredTests.join(', ')}</div>}
+      <strong>{t('protocol_required', lang)}</strong>
+      {requiredVitals.length > 0 && <div>{t('protocol_vitals', lang)} {requiredVitals.join(', ')}</div>}
+      {requiredTests.length > 0 && <div>{t('protocol_tests', lang)} {requiredTests.join(', ')}</div>}
     </div>
   ) : null;
 
   const footer = (
     <>
       <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', margin: 0 }}>
-        A nurse can record your vitals later — you won't lose your place.
+        {t('nurse_later', lang)}
       </p>
       <button type="button" className="btn btn-outline" onClick={handleGoBack} disabled={loading} style={{ fontSize: 13 }}>
-        ← Go Back
+        ← {t('go_back', lang)}
       </button>
     </>
   );
@@ -111,7 +111,7 @@ export default function Vitals() {
           loading={loading}
           error={error}
           submitLabel={t('submit', lang)}
-          loadingLabel="Generating Report..."
+          loadingLabel={t('generating_report', lang)}
           onSubmit={finish}
           showSkip
           onSkip={handleSkip}

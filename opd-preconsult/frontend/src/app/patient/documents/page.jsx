@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
-import { t } from '../../../lib/i18n';
+import { t, tf } from '../../../lib/i18n';
 
 const DOC_TYPES = [
   { value: 'prescription', label_en: 'Prescription', label_hi: 'प्रिस्क्रिप्शन', label_te: 'ప్రిస్క్రిప్షన్' },
@@ -39,7 +39,7 @@ export default function Documents() {
       const result = await api.uploadDocument(file, sessionId, selectedType);
       setDocs(prev => [...prev, { ...result, type: selectedType, confirmed: false }]);
     } catch (err) {
-      setError('Upload failed: ' + (err.message || 'Unknown error'));
+      setError(t('upload_failed', lang) + ': ' + (err.message || 'Unknown error'));
     } finally {
       setLoading(false);
       e.target.value = '';
@@ -73,7 +73,7 @@ export default function Documents() {
 
         {/* Document type selector */}
         <div>
-          <label style={{ fontSize: 13, color: 'var(--text-light)', marginBottom: 4, display: 'block' }}>Document type</label>
+          <label style={{ fontSize: 13, color: 'var(--text-light)', marginBottom: 4, display: 'block' }}>{t('doc_type', lang)}</label>
           <select className="input" value={selectedType} onChange={e => setSelectedType(e.target.value)}>
             {DOC_TYPES.map(dt => (
               <option key={dt.value} value={dt.value}>{langKey(dt)}</option>
@@ -83,7 +83,7 @@ export default function Documents() {
 
         {/* Upload button */}
         <label className="btn btn-secondary" style={{ position: 'relative' }}>
-          {loading ? 'Processing...' : `📎 ${t('upload', lang)}`}
+          {loading ? t('processing', lang) : `📎 ${t('upload', lang)}`}
           <input
             type="file"
             accept="image/*,application/pdf"
@@ -102,7 +102,7 @@ export default function Documents() {
         {/* Uploaded documents list */}
         {docs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <p style={{ fontWeight: 600, fontSize: 14 }}>{docs.length} document{docs.length > 1 ? 's' : ''} uploaded</p>
+            <p style={{ fontWeight: 600, fontSize: 14 }}>{tf(docs.length === 1 ? 'docs_uploaded_one' : 'docs_uploaded_many', lang, { n: docs.length })}</p>
 
             {docs.map((doc, idx) => (
               <div key={idx} style={{
@@ -118,17 +118,17 @@ export default function Documents() {
                     fontSize: 11, fontWeight: 600,
                     color: (doc.confidence || 0) >= 0.8 ? '#1E8449' : (doc.confidence || 0) >= 0.5 ? '#B9770E' : '#C0392B',
                   }}>
-                    {(doc.confidence_source || doc.structured?.confidence_source) === 'text_scan' ? 'Text-scan confidence' : 'AI confidence'}: {Math.round((doc.confidence || 0) * 100)}%
+                    {(doc.confidence_source || doc.structured?.confidence_source) === 'text_scan' ? t('confidence_text_scan', lang) : t('confidence_ai', lang)}: {Math.round((doc.confidence || 0) * 100)}%
                   </span>
-                  {doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ Confirmed</span>}
+                  {doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ {t('confirmed', lang)}</span>}
                 </div>
 
                 {/* Warn when AI extraction was unavailable and we fell back to basic text scan */}
                 {doc.structured?.extraction_source === 'regex_fallback' && (
                   <div style={{ background: '#FFF4E5', border: '1px solid #FFB74D', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-                    <p style={{ fontSize: 12, color: '#E65100', fontWeight: 600 }}>⚠ AI extraction unavailable</p>
+                    <p style={{ fontSize: 12, color: '#E65100', fontWeight: 600 }}>⚠ {t('ai_unavailable_title', lang)}</p>
                     <p style={{ fontSize: 11, color: '#E65100' }}>
-                      Only a basic text scan was used — some medications or values may be missing or wrong. Please check carefully.
+                      {t('ai_unavailable_body', lang)}
                     </p>
                   </div>
                 )}
@@ -136,7 +136,7 @@ export default function Documents() {
                 {/* Medications */}
                 {doc.structured?.medications?.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Medications:</p>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>{t('medications_label', lang)}</p>
                     {doc.structured.medications.map((m, i) => (
                       <p key={i} style={{ fontSize: 13, marginLeft: 8 }}>
                         • {m.name}{m.dose ? ` ${m.dose}` : ''}{m.frequency ? ` · ${m.frequency}` : ''}{m.duration ? ` · ${m.duration}` : ''}
@@ -149,7 +149,7 @@ export default function Documents() {
                 {/* Lab values */}
                 {doc.structured?.lab_values?.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Lab Results:</p>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>{t('lab_results_label', lang)}</p>
                     {doc.structured.lab_values.map((l, i) => (
                       <p key={i} style={{ fontSize: 13, marginLeft: 8, color: l.is_abnormal ? 'var(--red)' : 'inherit' }}>
                         • {l.test}: {l.value} {l.unit || ''}{l.is_abnormal ? ' ⚠' : ''}
@@ -174,14 +174,14 @@ export default function Documents() {
                       style={{ flex: 1, minHeight: 40, fontSize: 13 }}
                       onClick={() => handleConfirm(idx)}
                     >
-                      ✓ Correct
+                      ✓ {t('correct', lang)}
                     </button>
                     <button
                       className="btn btn-outline"
                       style={{ flex: 1, minHeight: 40, fontSize: 13, borderColor: 'var(--red)', color: 'var(--red)' }}
                       onClick={() => handleReject(idx)}
                     >
-                      ✗ Remove
+                      ✗ {t('remove', lang)}
                     </button>
                   </div>
                 )}
@@ -193,7 +193,7 @@ export default function Documents() {
         <div style={{ flex: 1 }} />
         {skipWarning && (
           <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>
-            No documents uploaded. Click Next again to continue without uploading.
+            {t('skip_no_docs', lang)}
           </p>
         )}
         <button className="btn btn-primary" onClick={() => {
@@ -204,7 +204,7 @@ export default function Documents() {
           {t('next', lang)}
         </button>
         <button className="btn btn-outline" onClick={() => router.push('/patient/consent')} style={{ fontSize: 13 }}>
-          ← Go Back
+          ← {t('go_back', lang)}
         </button>
       </div>
     </div>

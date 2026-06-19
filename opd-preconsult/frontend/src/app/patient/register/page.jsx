@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
-import { t } from '../../../lib/i18n';
+import { t, tf } from '../../../lib/i18n';
 
 export default function Register() {
   const router = useRouter();
@@ -55,28 +55,34 @@ export default function Register() {
     e.preventDefault();
     setError('');
 
+    // Name required
+    if (!String(form.patient_name).trim()) {
+      setError(t('err_name', lang));
+      return;
+    }
+
     // Phone validation — must be 10 digits (Indian mobile number)
     const phone = form.patient_phone.replace(/\s+/g, '');
     if (!/^[6-9]\d{9}$/.test(phone)) {
-      setError('Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.');
+      setError(t('err_phone', lang));
       return;
     }
 
     // Gender required
     if (!form.patient_gender) {
-      setError('Please select a gender.');
+      setError(t('err_gender', lang));
       return;
     }
 
     // Age required
     if (String(form.patient_age).trim() === '') {
-      setError('Please enter the age.');
+      setError(t('err_age_required', lang));
       return;
     }
     // Age cap
     const age = parseInt(form.patient_age);
     if (Number.isNaN(age) || age < 0 || age > 120) {
-      setError('Age must be between 0 and 120.');
+      setError(t('err_age_range', lang));
       return;
     }
 
@@ -124,22 +130,22 @@ export default function Register() {
         <div className="card" style={{ gap: 18, textAlign: 'center' }}>
           <div style={{ fontSize: 48 }}>{isReturning ? '👋' : '🎉'}</div>
           <h2 style={{ color: 'var(--primary)', overflowWrap: 'anywhere' }}>
-            {isReturning ? `Welcome back, ${form.patient_name}!` : `Welcome, ${form.patient_name}!`}
+            {`${isReturning ? t('welcome_back', lang) : t('welcome_first', lang)}, ${form.patient_name}!`}
           </h2>
           <p style={{ color: 'var(--text-light)', lineHeight: 1.5 }}>
             {isReturning ? (
               <>
-                We found <strong>{welcomeBack.count}</strong> previous {welcomeBack.count === 1 ? 'visit' : 'visits'} linked to this mobile number.
-                {last && <> Your last visit was on <strong>{formatVisit(last.created_at)}</strong>.</>}
+                {tf('wb_found', lang, { n: welcomeBack.count, visits: welcomeBack.count === 1 ? t('visit_singular', lang) : t('visit_plural', lang) })}
+                {last && <> {tf('wb_last_visit', lang, { date: formatVisit(last.created_at) })}</>}
               </>
             ) : (
-              <>This looks like your first visit with us — or a new mobile number. We'll guide you through a few quick steps to prepare your details for the doctor. <span style={{ display: 'block', marginTop: 8, fontSize: 13 }}>If you've visited before, please double-check your mobile number.</span></>
+              <>{t('wb_first', lang)} <span style={{ display: 'block', marginTop: 8, fontSize: 13 }}>{t('wb_first_note', lang)}</span></>
             )}
           </p>
 
           {isReturning && welcomeBack.logins.length > 0 && (
             <div style={{ background: '#F8F9FA', borderRadius: 12, padding: 14, textAlign: 'left' }}>
-              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)', marginBottom: 8 }}>Recent visits</p>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)', marginBottom: 8 }}>{t('wb_recent', lang)}</p>
               {welcomeBack.logins.map((v, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0', borderTop: i ? '1px solid #ECECEC' : 'none' }}>
                   <span>{formatVisit(v.created_at)}</span>
@@ -158,7 +164,7 @@ export default function Register() {
               cannot reorder pages no matter how many times it's clicked. The
               entered form data is preserved. */}
           <button className="btn btn-outline" onClick={() => { setWelcomeBack(null); sessionStorage.removeItem('welcome_back'); }} style={{ fontSize: 13 }}>
-            ← Go Back
+            ← {t('go_back', lang)}
           </button>
         </div>
       </div>
@@ -170,21 +176,23 @@ export default function Register() {
       <div className="progress-dots">
         <span className="dot active" /><span className="dot" /><span className="dot" /><span className="dot" /><span className="dot" />
       </div>
-      <form className="card" style={{ gap: 16 }} onSubmit={handleSubmit}>
+      {/* noValidate — we run our own i18n validation (red text) instead of the
+          browser's native popups, which always render in the browser's language. */}
+      <form className="card" style={{ gap: 16 }} onSubmit={handleSubmit} noValidate>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('register', lang)}</h2>
 
         <div>
           <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('name', lang)} *</label>
-          <input className="input" required maxLength={40} value={form.patient_name} onChange={e => setForm({ ...form, patient_name: e.target.value.slice(0, 40) })} />
+          <input className="input" maxLength={40} value={form.patient_name} onChange={e => setForm({ ...form, patient_name: e.target.value.slice(0, 40) })} />
         </div>
         <div>
           <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('phone', lang)} *</label>
-          <input className="input" type="tel" required value={form.patient_phone} onChange={e => setForm({ ...form, patient_phone: e.target.value })} />
+          <input className="input" type="tel" value={form.patient_phone} onChange={e => setForm({ ...form, patient_phone: e.target.value })} />
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)} *</label>
-            <input className="input" type="number" min="0" max="120" required value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
+            <input className="input" type="number" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
           </div>
           <div style={{ flex: 1 }}>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)}</label>
@@ -203,7 +211,7 @@ export default function Register() {
           {loading ? '...' : t('next', lang)}
         </button>
         <button type="button" className="btn btn-outline" onClick={() => router.push('/')} style={{ fontSize: 13 }}>
-          ← Go Back
+          ← {t('go_back', lang)}
         </button>
       </form>
     </div>

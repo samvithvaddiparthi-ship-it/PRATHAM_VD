@@ -74,7 +74,7 @@ export default function VitalsForm({
 
       {showSkip && (
         <button type="button" className="btn btn-secondary" onClick={onSkip} disabled={loading} style={{ fontSize: 14 }}>
-          Skip vitals for now
+          {t('skip_vitals', lang)}
         </button>
       )}
 

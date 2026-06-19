@@ -33,7 +33,7 @@ export default function Consent() {
           {t('consent_agree', lang)}
         </button>
         <button className="btn btn-outline" onClick={() => router.push('/patient/register')} style={{ fontSize: 13 }}>
-          ← Go Back
+          ← {t('go_back', lang)}
         </button>
       </div>
     </div>
