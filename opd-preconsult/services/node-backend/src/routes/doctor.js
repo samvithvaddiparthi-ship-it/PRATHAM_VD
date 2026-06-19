@@ -416,17 +416,18 @@ router.get('/consulted', async (req, res) => {
 // All sessions with doctor info — for HIS/admin dashboard
 router.get('/all-sessions', async (req, res) => {
   try {
-    const { department, doctor_id, state } = req.query;
+    const { department, doctor_id, state, triage } = req.query;
     let q = `SELECT s.*, d.name as doctor_name, d.department as doctor_dept,
              sr.doctor_feedback, sr.created_at as report_created_at
              FROM sessions s
              LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
              LEFT JOIN session_reports sr ON sr.session_id = s.id
-             WHERE s.created_at > NOW() - INTERVAL '7 days'`;
+             WHERE 1=1`;
     const params = [];
     if (department) { params.push(department); q += ` AND s.department = $${params.length}`; }
     if (doctor_id) { params.push(doctor_id); q += ` AND s.assigned_doctor_id = $${params.length}`; }
     if (state) { params.push(state); q += ` AND s.state = $${params.length}`; }
+    if (triage) { params.push(triage); q += ` AND s.triage_level = $${params.length}`; }
     q += ' ORDER BY s.created_at DESC LIMIT 200';
     const result = await pool.query(q, params);
     res.json(result.rows);

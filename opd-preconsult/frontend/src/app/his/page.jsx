@@ -1,10 +1,38 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
+
+// Registration date+time for a session, e.g. "19 Jun, 2:45 PM".
+function fmtDateTime(ts) {
+  if (!ts) return '';
+  try {
+    // Keep the time and am/pm together (non-breaking space) so "12:15 am" never
+    // splits across two lines in a narrow cell.
+    return new Date(ts).toLocaleString(undefined, {
+      day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
+    }).replace(/(\d)\s*([AaPp][Mm])\b/, '$1 $2');
+  } catch { return ''; }
+}
+
+// Consultation duration = doctor lock (consulted_at) → Save & Generate QR
+// (dispatched_at). Returns a compact "1h 5m" / "12m 30s" / "45s", or null when
+// the consultation hasn't both started and finished.
+function consultDuration(s) {
+  if (!s.consulted_at || !s.dispatched_at) return null;
+  const ms = new Date(s.dispatched_at) - new Date(s.consulted_at);
+  if (!(ms > 0)) return null;
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
 
 export default function HISPage() {
   const [tab, setTab] = useState('sessions');
@@ -14,15 +42,19 @@ export default function HISPage() {
   const [selected, setSelected] = useState(null);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [filters, setFilters] = useState({ department: '', doctor_id: '', state: '' });
+  const [filters, setFilters] = useState({ department: '', doctor_id: '', triage: '', state: '' });
+  const [showFilters, setShowFilters] = useState(false);   // filter popover open?
+  const [search, setSearch] = useState('');                // name / phone search
   const { toast, toastView } = useToast();
+  // Monotonic request id — only the most recently issued all-sessions response
+  // is allowed to update state, so a slow/older request (or an overlapping poll)
+  // can never paint stale rows over a freshly-filtered list.
+  const loadSeq = useRef(0);
 
+  // Static lists only need to load once.
   useEffect(() => {
-    loadData();
     loadDoctors();
     loadDepts();
-    const interval = setInterval(loadData, 15000);
-    return () => clearInterval(interval);
   }, []);
 
   async function loadDoctors() {
@@ -33,15 +65,29 @@ export default function HISPage() {
     try { setDepts(await api.getDepartments()); } catch {}
   }
 
-  useEffect(() => { loadData(); }, [filters]);
+  // Load the patient list AND set up the 15s auto-refresh inside the SAME effect
+  // that depends on `filters`. This recreates the interval whenever the filters
+  // change, so the polling closure always reads the CURRENT filters. Previously
+  // the interval was created once on mount and kept a stale `loadData` closure
+  // bound to the initial (empty) filters — so every 15s it silently reverted the
+  // filtered view back to "all/unassigned". (The "glitch" you saw.)
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 15000);
+    return () => clearInterval(interval);
+  }, [filters]);
 
   async function loadData() {
+    const seq = ++loadSeq.current;
     try {
       const params = {};
       if (filters.department) params.department = filters.department;
       if (filters.doctor_id) params.doctor_id = filters.doctor_id;
+      if (filters.triage) params.triage = filters.triage;
       if (filters.state) params.state = filters.state;
-      setSessions(await api.allSessions(params));
+      const rows = await api.allSessions(params);
+      // Drop the result if a newer request has been issued since.
+      if (seq === loadSeq.current) setSessions(rows);
     } catch {}
   }
 
@@ -85,18 +131,13 @@ export default function HISPage() {
     }
   }
 
-  // Stats
-  const byDoctor = {};
-  sessions.forEach(s => {
-    const dname = s.doctor_name || 'Unassigned';
-    if (!byDoctor[dname]) byDoctor[dname] = { total: 0, complete: 0, active: 0, red: 0 };
-    byDoctor[dname].total++;
-    if (s.state === 'COMPLETE') byDoctor[dname].complete++;
-    else byDoctor[dname].active++;
-    if (s.triage_level === 'RED') byDoctor[dname].red++;
-  });
-
-  const departments = [...new Set(sessions.map(s => s.department).filter(Boolean))];
+  // Client-side name/phone search over the (already filtered) sessions.
+  const q = search.trim().toLowerCase();
+  const visibleSessions = q
+    ? sessions.filter(s =>
+        (s.patient_name || '').toLowerCase().includes(q) ||
+        (s.patient_phone || '').toLowerCase().includes(q))
+    : sessions;
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: 16, minHeight: '100vh' }}>
@@ -111,7 +152,7 @@ export default function HISPage() {
             onClick={() => setTab('sessions')}>Patients</button>
           <button className={`btn ${tab === 'doctors' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('doctors')}>Manage Doctors</button>
+            onClick={() => setTab('doctors')}>Doctors</button>
           <button className={`btn ${tab === 'questions' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('questions')}>Questionnaires</button>
@@ -133,7 +174,7 @@ export default function HISPage() {
       {tab === 'formulary' ? (
         <FormularyManager />
       ) : tab === 'doctors' ? (
-        <DoctorsManager doctors={doctors} depts={depts} onChange={loadDoctors} />
+        <DoctorInfo doctors={doctors} depts={depts} onChange={loadDoctors} />
       ) : tab === 'questions' ? (
         <QuestionsManager depts={depts} />
       ) : tab === 'departments' ? (
@@ -144,61 +185,203 @@ export default function HISPage() {
         <AnalyticsDashboard />
       ) : (<>
 
-      {/* Doctor Summary Cards */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        {Object.entries(byDoctor).map(([name, stats]) => (
-          <div key={name} style={{
-            background: '#fff', borderRadius: 12, padding: 16, minWidth: 200, flex: '1 1 200px',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.06)', cursor: 'pointer',
-            border: filters.doctor_id && doctors.find(d => d.name === name)?.id === filters.doctor_id ? '2px solid var(--secondary)' : '1px solid #E0E0E0'
-          }}
-            onClick={() => {
-              const doc = doctors.find(d => d.name === name);
-              setFilters(f => ({ ...f, doctor_id: f.doctor_id === doc?.id ? '' : (doc?.id || '') }));
-            }}>
-            <p style={{ fontWeight: 600, fontSize: 14 }}>{name}</p>
-            <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 13 }}>
-              <span><strong>{stats.total}</strong> total</span>
-              <span style={{ color: 'var(--green)' }}><strong>{stats.complete}</strong> done</span>
-              <span style={{ color: 'var(--secondary)' }}><strong>{stats.active}</strong> active</span>
-              {stats.red > 0 && <span style={{ color: 'var(--red)' }}><strong>{stats.red}</strong> RED</span>}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Filters — a single "Filter" button opens a popover holding every filter
+          (Department, Doctor, Triage, State) with a Clear button at the bottom.
+          The Doctor list is scoped to the chosen Department so they can't
+          contradict; changing department drops an out-of-dept doctor. */}
+      {(() => {
+        const fieldLabel = { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 6, display: 'block' };
+        const selectStyle = { width: '100%', height: 40 };
+        const activeCount = [filters.department, filters.doctor_id, filters.triage, filters.state].filter(Boolean).length;
+        const doctorOptions = doctors.filter(d => !filters.department || d.department === filters.department);
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <select className="input" style={{ width: 160 }} value={filters.department}
-          onChange={e => setFilters(f => ({ ...f, department: e.target.value }))}>
-          <option value="">All Departments</option>
-          {depts.map(d => <option key={d.code} value={d.code}>{d.name} ({d.code})</option>)}
-        </select>
-        <select className="input" style={{ width: 200 }} value={filters.doctor_id}
-          onChange={e => setFilters(f => ({ ...f, doctor_id: e.target.value }))}>
-          <option value="">All Doctors</option>
-          {doctors.map(d => <option key={d.id} value={d.id}>{d.name} ({d.department})</option>)}
-        </select>
-        <select className="input" style={{ width: 160 }} value={filters.state}
-          onChange={e => setFilters(f => ({ ...f, state: e.target.value }))}>
-          <option value="">All States</option>
-          <option value="COMPLETE">Completed</option>
-          <option value="INTERVIEW">In Interview</option>
-          <option value="VITALS">Vitals</option>
-          <option value="CONSENTED">Consented</option>
-          <option value="REGISTERED">Registered</option>
-          <option value="INIT">Init</option>
-        </select>
-        {(filters.department || filters.doctor_id || filters.state) && (
-          <button style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13 }}
-            onClick={() => setFilters({ department: '', doctor_id: '', state: '' })}>
-            Clear filters
-          </button>
-        )}
-        <span style={{ fontSize: 13, color: 'var(--text-light)', alignSelf: 'center', marginLeft: 8 }}>
-          {sessions.length} patient{sessions.length !== 1 ? 's' : ''}
-        </span>
-      </div>
+        const onDeptChange = (code) => setFilters(f => {
+          const next = { ...f, department: code };
+          if (code && f.doctor_id) {
+            const doc = doctors.find(d => d.id === f.doctor_id);
+            if (doc && doc.department !== code) next.doctor_id = '';
+          }
+          return next;
+        });
+
+        const XIcon = ({ size = 14 }) => (
+          <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.4" strokeLinecap="round" style={{ display: 'block' }}>
+            <line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" />
+          </svg>
+        );
+
+        // ── Ghost prediction: the best name that STARTS WITH the query; its
+        // tail is shown as greyed inline text and accepted with Tab / →. ──
+        const sq = search.trim().toLowerCase();
+        const names = [...new Set(sessions.map(s => s.patient_name).filter(Boolean))];
+        const ghost = sq ? (names.find(n => n.toLowerCase().startsWith(sq)) || '') : '';
+        const ghostTail = ghost && ghost.toLowerCase() !== sq ? ghost.slice(search.length) : '';
+        // Suggestion list (name or phone match), de-duped by name, max 6.
+        const seen = new Set();
+        const suggestions = sq ? sessions.filter(s => {
+          const hit = (s.patient_name || '').toLowerCase().includes(sq) || (s.patient_phone || '').toLowerCase().includes(sq);
+          if (!hit) return false;
+          const key = (s.patient_name || '') + '|' + (s.patient_phone || '');
+          if (seen.has(key)) return false; seen.add(key); return true;
+        }).slice(0, 6) : [];
+
+        const acceptGhost = () => { if (ghostTail) setSearch(ghost); };
+
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
+            {/* Patient search with inline ghost-text prediction + suggestions */}
+            <div style={{ position: 'relative', width: 300 }}>
+              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)', pointerEvents: 'none', display: 'flex' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              </span>
+              {/* ghost overlay — mirrors typed text (transparent) then grey tail */}
+              {ghostTail && (
+                <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
+                  display: 'flex', alignItems: 'center', fontSize: 14, whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+                  <span style={{ color: 'transparent' }}>{search}</span>
+                  <span style={{ color: '#A0AEC0' }}>{ghostTail}</span>
+                </div>
+              )}
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => {
+                  if ((e.key === 'Tab' || e.key === 'ArrowRight') && ghostTail) { e.preventDefault(); acceptGhost(); }
+                  if (e.key === 'Escape') setSearch('');
+                }}
+                placeholder="Search patient name or phone…"
+                style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
+                  border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 14, background: 'transparent',
+                  outline: 'none', position: 'relative' }}
+              />
+              {search && (
+                <button onClick={() => setSearch('')} title="Clear search"
+                  style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex', padding: 4 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                    <line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" />
+                  </svg>
+                </button>
+              )}
+              {suggestions.length > 0 && (
+                <div style={{ position: 'absolute', top: 46, left: 0, right: 0, zIndex: 41, background: '#fff',
+                  borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', border: '1px solid #E2E8F0', overflow: 'hidden' }}>
+                  {suggestions.map(s => (
+                    <button key={s.id} onClick={() => { setSearch(s.patient_name || s.patient_phone || ''); selectSession(s); }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                        gap: 8, padding: '9px 12px', background: 'none', border: 'none', borderBottom: '1px solid #F2F2F2',
+                        cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                      onMouseEnter={e => { e.currentTarget.style.background = '#F5F9FC'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
+                      <span style={{ fontWeight: 600 }}>{s.patient_name || 'Unregistered'}</span>
+                      <span style={{ color: 'var(--text-light)', fontSize: 12 }}>{s.patient_phone || ''} · {s.department}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowFilters(s => !s)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 8, height: 40, padding: '0 16px',
+                  background: activeCount ? 'var(--secondary)' : '#fff', color: activeCount ? '#fff' : 'var(--primary)',
+                  border: `1px solid ${activeCount ? 'var(--secondary)' : '#CBD5E0'}`, borderRadius: 10,
+                  fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                </svg>
+                Filter
+                {activeCount > 0 && (
+                  <span style={{ background: activeCount ? 'rgba(255,255,255,0.25)' : 'var(--secondary)',
+                    color: '#fff', borderRadius: 10, minWidth: 20, height: 20, padding: '0 6px',
+                    fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {activeCount}
+                  </span>
+                )}
+              </button>
+
+              {showFilters && (
+                <>
+                  {/* click-away backdrop */}
+                  <div onClick={() => setShowFilters(false)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{
+                    position: 'absolute', top: 48, left: 0, zIndex: 41, width: 300,
+                    background: '#fff', borderRadius: 14, padding: 16,
+                    boxShadow: '0 8px 28px rgba(0,0,0,0.16)', border: '1px solid #E2E8F0',
+                    display: 'flex', flexDirection: 'column', gap: 14,
+                  }}>
+                    <div>
+                      <label style={fieldLabel}>Department</label>
+                      <select className="input" style={selectStyle} value={filters.department}
+                        onChange={e => onDeptChange(e.target.value)}>
+                        <option value="">All Departments</option>
+                        {depts.map(d => <option key={d.code} value={d.code}>{d.name} ({d.code})</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={fieldLabel}>Doctor</label>
+                      <select className="input" style={selectStyle} value={filters.doctor_id}
+                        onChange={e => setFilters(f => ({ ...f, doctor_id: e.target.value }))}>
+                        <option value="">{filters.department ? 'All Doctors in dept.' : 'All Doctors'}</option>
+                        {doctorOptions.map(d => <option key={d.id} value={d.id}>{d.name} ({d.department})</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={fieldLabel}>Triage</label>
+                      <select className="input" style={selectStyle} value={filters.triage}
+                        onChange={e => setFilters(f => ({ ...f, triage: e.target.value }))}>
+                        <option value="">All Triage</option>
+                        <option value="RED">Severe</option>
+                        <option value="AMBER">Moderate</option>
+                        <option value="GREEN">Mild</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={fieldLabel}>State</label>
+                      <select className="input" style={selectStyle} value={filters.state}
+                        onChange={e => setFilters(f => ({ ...f, state: e.target.value }))}>
+                        <option value="">All States</option>
+                        <option value="COMPLETE">Completed</option>
+                        <option value="INTERVIEW">In Interview</option>
+                        <option value="VITALS">Vitals</option>
+                        <option value="CONSENTED">Consented</option>
+                        <option value="REGISTERED">Registered</option>
+                        <option value="INIT">Init</option>
+                      </select>
+                    </div>
+
+                    {/* Clear filters — bottom of the popover */}
+                    <button
+                      onClick={() => setFilters({ department: '', doctor_id: '', triage: '', state: '' })}
+                      disabled={activeCount === 0}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                        height: 40, marginTop: 2, width: '100%', borderRadius: 10,
+                        background: activeCount ? '#FDEDEC' : '#F1F3F5', color: activeCount ? '#C0392B' : '#A0A0A0',
+                        border: `1px solid ${activeCount ? '#F1B0A8' : '#E2E2E2'}`,
+                        fontSize: 13, fontWeight: 600, cursor: activeCount ? 'pointer' : 'default', transition: 'background 0.12s',
+                      }}>
+                      <XIcon /> Clear filters
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+              {visibleSessions.length}
+              <span style={{ color: 'var(--text-light)', fontWeight: 400 }}> patient{visibleSessions.length !== 1 ? 's' : ''}</span>
+            </span>
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'flex', gap: 16 }}>
         {/* Patient Table */}
@@ -210,12 +393,13 @@ export default function HISPage() {
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Dept</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Triage</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>State</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Consult Time</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Doctor</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Assign / Reassign</th>
               </tr>
             </thead>
             <tbody>
-              {sessions.map(s => (
+              {visibleSessions.map(s => (
                 <tr key={s.id} onClick={() => selectSession(s)}
                   style={{ cursor: 'pointer', borderBottom: '1px solid #F0F0F0',
                     background: selected?.id === s.id ? '#EBF5FB' : 'transparent' }}>
@@ -224,6 +408,11 @@ export default function HISPage() {
                     <br /><span style={{ color: 'var(--text-light)', fontSize: 11 }}>
                       {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · #{s.queue_slot || '-'}
                     </span>
+                    {s.created_at && (
+                      <><br /><span style={{ color: 'var(--text-light)', fontSize: 11 }}>
+                        🗓 {fmtDateTime(s.created_at)}
+                      </span></>
+                    )}
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 13 }}>{s.department}</td>
                   <td style={{ padding: '10px 12px' }}><TriageBadge level={s.triage_level} /></td>
@@ -233,6 +422,14 @@ export default function HISPage() {
                       background: s.state === 'COMPLETE' ? '#D5F5E3' : s.state === 'INTERVIEW' ? '#D6EAF8' : '#F8F9FA',
                       color: s.state === 'COMPLETE' ? '#1E8449' : 'var(--text)'
                     }}>{s.state}</span>
+                  </td>
+                  <td style={{ padding: '10px 12px', fontSize: 13 }}>
+                    {(() => {
+                      const dur = consultDuration(s);
+                      if (dur) return <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>⏱ {dur}</span>;
+                      if (s.consulted_at && !s.dispatched_at) return <span style={{ color: 'var(--amber)', fontSize: 11 }}>In progress</span>;
+                      return <span style={{ color: 'var(--text-light)', fontSize: 11 }}>—</span>;
+                    })()}
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 13 }}>
                     {s.doctor_name || <span style={{ color: 'var(--amber)', fontSize: 11 }}>Unassigned</span>}
@@ -254,8 +451,10 @@ export default function HISPage() {
               ))}
             </tbody>
           </table>
-          {sessions.length === 0 && (
-            <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32 }}>No sessions match filters</p>
+          {visibleSessions.length === 0 && (
+            <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32 }}>
+              {q ? `No patients match “${search}”` : 'No sessions match filters'}
+            </p>
           )}
         </div>
 
@@ -289,69 +488,322 @@ export default function HISPage() {
 }
 
 
-function DoctorsManager({ doctors, depts = [], onChange }) {
-  const [form, setForm] = useState({ name: '', department: 'CARD', phone: '', pin: '' });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+// Format a millisecond duration as "1h 5m" / "12m" / "45s" / "—".
+function fmtMs(ms) {
+  if (!(ms > 0)) return '—';
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${sec}s`;
+}
+
+// Doctors tab — unified hub: per-doctor workload stats + management (add new,
+// view full details, deactivate). Reads the full (unfiltered) session list once
+// and derives per-doctor metrics client-side; clicking a doctor opens a detail
+// drawer, and "+ Add Doctor" opens a modal. `onChange` refreshes the doctor list.
+function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');   // doctor name / department search
+  const [selected, setSelected] = useState(null);   // doctor detail drawer
+  const [showAdd, setShowAdd] = useState(false);     // add-doctor modal
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    if (form.pin.length < 4 || form.pin.length > 6) {
-      setError('PIN must be 4-6 digits');
-      return;
-    }
-    setSaving(true);
-    try {
-      const created = await api.createDoctor(form);
-      setSuccess(`Added ${created.name} (${created.department})`);
-      setForm({ name: '', department: form.department, phone: '', pin: '' });
-      onChange();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await api.allSessions({});
+        if (alive) setSessions(rows || []);
+      } catch { /* ignore */ }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   async function handleDeactivate(doctor) {
     if (!(await confirm({
       title: `Deactivate ${doctor.name}?`,
       message: "They won't be able to log in, but all historical data is kept.",
-      confirmLabel: 'Deactivate',
-      danger: true,
+      confirmLabel: 'Deactivate', danger: true,
     }))) return;
     try {
       await api.deactivateDoctor(doctor.id);
+      setSelected(null);
       onChange();
     } catch (err) {
       toast('Failed: ' + err.message, 'error');
     }
   }
 
-  const active = doctors.filter(d => d.is_active);
-  const inactive = doctors.filter(d => !d.is_active);
+  // Build per-doctor stats keyed by doctor id.
+  const stats = {};
+  doctors.forEach(d => {
+    stats[d.id] = { total: 0, completed: 0, active: 0, severe: 0, durMs: [], lastAt: null };
+  });
+  sessions.forEach(s => {
+    const id = s.assigned_doctor_id;
+    if (!id || !stats[id]) return;            // skip unassigned / unknown
+    const st = stats[id];
+    st.total++;
+    if (s.dispatched_at) st.completed++; else st.active++;
+    if (s.triage_level === 'RED') st.severe++;
+    if (s.consulted_at && s.dispatched_at) {
+      const ms = new Date(s.dispatched_at) - new Date(s.consulted_at);
+      if (ms > 0) st.durMs.push(ms);
+    }
+    if (s.dispatched_at && (!st.lastAt || new Date(s.dispatched_at) > new Date(st.lastAt))) {
+      st.lastAt = s.dispatched_at;
+    }
+  });
+
+  const totals = doctors.reduce((acc, d) => {
+    const st = stats[d.id];
+    acc.total += st.total; acc.completed += st.completed; acc.active += st.active; acc.severe += st.severe;
+    return acc;
+  }, { total: 0, completed: 0, active: 0, severe: 0 });
+
+  const th = { padding: '11px 14px', textAlign: 'left', fontSize: 12, fontWeight: 700, letterSpacing: 0.3, whiteSpace: 'nowrap' };
+  const td = { padding: '11px 14px', fontSize: 13, whiteSpace: 'nowrap' };
+  const numChip = (n, color) => (
+    <span style={{ fontWeight: 700, color: n ? color : 'var(--text-light)' }}>{n}</span>
+  );
+
+  if (loading) return <p style={{ color: 'var(--text-light)', padding: 24 }}>Loading doctor stats…</p>;
+
+  // ── Search + ghost prediction over doctor name / department ──
+  const dq = search.trim().toLowerCase();
+  const filteredDoctors = dq
+    ? doctors.filter(d => (d.name || '').toLowerCase().includes(dq) || (d.department || '').toLowerCase().includes(dq))
+    : doctors;
+  const docNames = [...new Set(doctors.map(d => d.name).filter(Boolean))];
+  const ghost = dq ? (docNames.find(n => n.toLowerCase().startsWith(dq)) || '') : '';
+  const ghostTail = ghost && ghost.toLowerCase() !== dq ? ghost.slice(search.length) : '';
+
+  const avgMsFor = (d) => { const st = stats[d.id]; return st && st.durMs.length ? st.durMs.reduce((a, b) => a + b, 0) / st.durMs.length : 0; };
 
   return (
-    <div style={{ display: 'flex', gap: 16 }}>
+    <div>
       {dialog}
       {toastView}
-      {/* Add doctor form */}
-      <div style={{ width: 360, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: 'fit-content' }}>
-        <h3 style={{ fontSize: 16, marginBottom: 16, color: 'var(--primary)' }}>Add New Doctor</h3>
+      {/* Search + Add Doctor */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <div style={{ position: 'relative', width: 300 }}>
+          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)', pointerEvents: 'none', display: 'flex' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
+          {ghostTail && (
+            <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
+              display: 'flex', alignItems: 'center', fontSize: 14, whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+              <span style={{ color: 'transparent' }}>{search}</span>
+              <span style={{ color: '#A0AEC0' }}>{ghostTail}</span>
+            </div>
+          )}
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => {
+              if ((e.key === 'Tab' || e.key === 'ArrowRight') && ghostTail) { e.preventDefault(); setSearch(ghost); }
+              if (e.key === 'Escape') setSearch('');
+            }}
+            placeholder="Search doctor name or department…"
+            style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
+              border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 14, background: 'transparent', outline: 'none' }}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} title="Clear search"
+              style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex', padding: 4 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                <line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowAdd(true)}
+          style={{ marginLeft: 'auto', height: 40, width: 'auto', padding: '0 18px', fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          + Add Doctor
+        </button>
+      </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Summary strip */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          ['Doctors', doctors.length, 'var(--primary)'],
+          ['Patients assigned', totals.total, 'var(--text)'],
+          ['Completed', totals.completed, 'var(--green)'],
+          ['Active', totals.active, 'var(--secondary)'],
+        ].map(([label, val, color]) => (
+          <div key={label} style={{ background: '#fff', borderRadius: 12, padding: '12px 18px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.06)', minWidth: 120 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color }}>{val}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <thead>
+            <tr style={{ background: 'var(--primary)', color: '#fff' }}>
+              <th style={th}>Doctor</th>
+              <th style={th}>Department</th>
+              <th style={{ ...th, textAlign: 'center' }}>Total</th>
+              <th style={{ ...th, textAlign: 'center' }}>Completed</th>
+              <th style={{ ...th, textAlign: 'center' }}>Active</th>
+              <th style={{ ...th, textAlign: 'center' }}>Avg. Consult</th>
+              <th style={th}>Last Consult</th>
+              <th style={{ ...th, textAlign: 'center' }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredDoctors.length === 0 && (
+              <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: 'var(--text-light)', padding: 28 }}>
+                {dq ? `No doctors match “${search}”` : 'No doctors found'}
+              </td></tr>
+            )}
+            {filteredDoctors.map(d => {
+              const st = stats[d.id];
+              return (
+                <tr key={d.id} onClick={() => setSelected(d)}
+                  style={{ borderBottom: '1px solid #F0F0F0', cursor: 'pointer', opacity: d.is_active ? 1 : 0.55,
+                    background: selected?.id === d.id ? '#EBF5FB' : 'transparent' }}>
+                  <td style={{ ...td, fontWeight: 600 }}>{d.name}</td>
+                  <td style={td}><span style={{ fontSize: 12, color: 'var(--text-light)' }}>{d.department || '—'}</span></td>
+                  <td style={{ ...td, textAlign: 'center' }}>{numChip(st.total, 'var(--text)')}</td>
+                  <td style={{ ...td, textAlign: 'center' }}>{numChip(st.completed, 'var(--green)')}</td>
+                  <td style={{ ...td, textAlign: 'center' }}>{numChip(st.active, 'var(--secondary)')}</td>
+                  <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{fmtMs(avgMsFor(d))}</td>
+                  <td style={td}><span style={{ fontSize: 12, color: 'var(--text-light)' }}>{st.lastAt ? fmtDateTime(st.lastAt) : '—'}</span></td>
+                  <td style={{ ...td, textAlign: 'center' }}>
+                    <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11,
+                      background: d.is_active ? '#D5F5E3' : '#F8F9FA', color: d.is_active ? '#1E8449' : 'var(--text-light)' }}>
+                      {d.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Doctor detail drawer */}
+      {selected && (() => {
+        const st = stats[selected.id] || { total: 0, completed: 0, active: 0, severe: 0, durMs: [], lastAt: null };
+        const cell = (label, val, color, small) => (
+          <div style={{ background: '#F8FAFC', borderRadius: 10, padding: '10px 12px' }}>
+            <div style={{ fontSize: small ? 14 : 18, fontWeight: 700, color: color || 'var(--text)' }}>{val}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
+          </div>
+        );
+        return (
+          <>
+            <div onClick={() => setSelected(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 50 }} />
+            <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 380, background: '#fff', zIndex: 51,
+              boxShadow: '-6px 0 24px rgba(0,0,0,0.15)', padding: 22, overflowY: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ fontSize: 18, color: 'var(--primary)' }}>{selected.name}</h3>
+                  <span style={{ fontSize: 12, color: 'var(--text-light)' }}>{selected.department}</span>
+                </div>
+                <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+                </button>
+              </div>
+
+              {/* Identity */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+                {[['Phone', selected.phone || '—'], ['Department', selected.department || '—']].map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: 'var(--text-light)' }}>{k}</span>
+                    <span style={{ fontWeight: 600 }}>{v}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-light)' }}>Status</span>
+                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: selected.is_active ? '#D5F5E3' : '#F8F9FA', color: selected.is_active ? '#1E8449' : 'var(--text-light)' }}>
+                    {selected.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Stats */}
+              <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Workload (all-time)</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                {cell('Total', st.total)}
+                {cell('Completed', st.completed, 'var(--green)')}
+                {cell('Active', st.active, 'var(--secondary)')}
+                {cell('Avg. Consult', fmtMs(avgMsFor(selected)))}
+                {cell('Last Consult', st.lastAt ? fmtDateTime(st.lastAt) : '—', null, true)}
+              </div>
+
+              {selected.is_active && (
+                <button onClick={() => handleDeactivate(selected)}
+                  style={{ marginTop: 18, width: '100%', height: 42, borderRadius: 10, background: '#FDEDEC', color: '#C0392B', border: '1px solid #F1B0A8', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  Deactivate doctor
+                </button>
+              )}
+            </div>
+          </>
+        );
+      })()}
+
+      {/* Add-doctor modal */}
+      {showAdd && (
+        <AddDoctorModal depts={depts} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onChange(); }} />
+      )}
+      <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 10 }}>
+        All-time stats. “Avg. Consult” is the mean time from a doctor locking a patient to clicking Save &amp; Generate QR.
+      </p>
+    </div>
+  );
+}
+
+// Add-doctor modal — opened from the Doctors hub. Clean centered card overlay.
+function AddDoctorModal({ depts = [], onClose, onAdded }) {
+  const [form, setForm] = useState({ name: '', department: depts.find(d => d.is_active)?.code || 'CARD', phone: '', pin: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (form.pin.length < 4 || form.pin.length > 6) { setError('PIN must be 4-6 digits'); return; }
+    setSaving(true);
+    try {
+      await api.createDoctor(form);
+      onAdded();
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+        width: 400, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Add New Doctor</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Name *</label>
             <input className="input" required value={form.name}
-              onChange={e => setForm({ ...form, name: e.target.value })}
-              placeholder="Dr. Ravi Kumar" />
+              onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Ravi Kumar" />
           </div>
-
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Department *</label>
             <select className="input" value={form.department}
@@ -361,77 +813,29 @@ function DoctorsManager({ doctors, depts = [], onChange }) {
               ))}
             </select>
           </div>
-
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Phone *</label>
             <input className="input" type="tel" required value={form.phone}
-              onChange={e => setForm({ ...form, phone: e.target.value })}
-              placeholder="9876500099" />
+              onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
           </div>
-
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>PIN (4-6 digits) *</label>
-            <input className="input" type="password" inputMode="numeric" maxLength={6} required
-              value={form.pin}
+            <input className="input" type="password" inputMode="numeric" maxLength={6} required value={form.pin}
               onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
               placeholder="••••" style={{ letterSpacing: 4 }} />
           </div>
 
           {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
-          {success && <p style={{ color: 'var(--green)', fontSize: 13 }}>{success}</p>}
 
-          <button className="btn btn-primary" type="submit" disabled={saving}>
-            {saving ? 'Adding...' : 'Add Doctor'}
-          </button>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button type="button" className="btn btn-outline" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
+              {saving ? 'Adding...' : 'Add Doctor'}
+            </button>
+          </div>
         </form>
       </div>
-
-      {/* Doctors list */}
-      <div style={{ flex: 1 }}>
-        <h3 style={{ fontSize: 16, marginBottom: 12, color: 'var(--primary)' }}>
-          Doctors ({active.length} active{inactive.length > 0 ? `, ${inactive.length} inactive` : ''})
-        </h3>
-
-        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-          <thead>
-            <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 13 }}>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Name</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Department</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Phone</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Status</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {doctors.map(d => (
-              <tr key={d.id} style={{ borderBottom: '1px solid #F0F0F0', opacity: d.is_active ? 1 : 0.5 }}>
-                <td style={{ padding: '10px 12px', fontSize: 13, fontWeight: 600 }}>{d.name}</td>
-                <td style={{ padding: '10px 12px', fontSize: 13 }}>{d.department}</td>
-                <td style={{ padding: '10px 12px', fontSize: 13 }}>{d.phone}</td>
-                <td style={{ padding: '10px 12px', fontSize: 13 }}>
-                  <span style={{
-                    padding: '2px 8px', borderRadius: 4, fontSize: 11,
-                    background: d.is_active ? '#D5F5E3' : '#F8F9FA',
-                    color: d.is_active ? '#1E8449' : 'var(--text-light)'
-                  }}>{d.is_active ? 'Active' : 'Inactive'}</span>
-                </td>
-                <td style={{ padding: '10px 12px' }}>
-                  {d.is_active && (
-                    <button onClick={() => handleDeactivate(d)}
-                      style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
-                      Deactivate
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {doctors.length === 0 && (
-          <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32 }}>No doctors yet</p>
-        )}
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -577,25 +981,29 @@ function QuestionsManager({ depts = [] }) {
 
         <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>{questions.length} questions (sorted by flow order)</p>
 
-        {questions.map((q, idx) => (
-          <div key={q.id} onClick={() => startEdit(q)}
-            style={{
-              background: editing?.id === q.id ? '#EBF5FB' : '#fff',
-              border: editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0',
-              borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
-            }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
-              <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{q.id}</span>
-              <span style={{ fontSize: 10, background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
-              {q.triage_flag && (
-                <span style={{ fontSize: 10, background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: '#fff', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
-              )}
+        {/* Independent scroll for the question list — the dept selector and count
+            above stay put while only this list scrolls. */}
+        <div style={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto', paddingRight: 6 }}>
+          {questions.map((q, idx) => (
+            <div key={q.id} onClick={() => startEdit(q)}
+              style={{
+                background: editing?.id === q.id ? '#EBF5FB' : '#fff',
+                border: editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0',
+                borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{q.id}</span>
+                <span style={{ fontSize: 10, background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
+                {q.triage_flag && (
+                  <span style={{ fontSize: 10, background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: '#fff', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
+                )}
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
+              {q.next_default && <p style={{ fontSize: 10, color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
             </div>
-            <p style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
-            {q.next_default && <p style={{ fontSize: 10, color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Right: editor form */}
