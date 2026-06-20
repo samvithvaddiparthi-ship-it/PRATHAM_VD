@@ -287,7 +287,7 @@ function DoctorDashboard({ doctor }) {
     setReport(null);
     setSearch('');
     if (t === 'consulted') loadConsulted();
-    if (t === 'queue') loadQueue();
+    else loadQueue();   // queue + consulting both derive from the queue fetch
   }
 
   async function selectSession(s) {
@@ -409,6 +409,7 @@ function DoctorDashboard({ doctor }) {
       setExpanded(e => ({ ...e, [p.phone]: true }));
       markSeen(p.latest.id);
       selectSession(p.latest);
+      setTab('consulting');   // patient is now in-progress → move to the Consulting tab
       loadQueue();
     } else if (res.locked) {
       toast(res.message || `Being consulted by ${res.locked_by || 'another doctor'}`, 'error');
@@ -530,7 +531,7 @@ function DoctorDashboard({ doctor }) {
     setRefreshing(true);
     const started = Date.now();
     try {
-      await (tab === 'queue' ? loadQueue() : loadConsulted());
+      await (tab === 'consulted' ? loadConsulted() : loadQueue());
     } finally {
       const remaining = 500 - (Date.now() - started);
       setTimeout(() => setRefreshing(false), Math.max(0, remaining));
@@ -549,7 +550,6 @@ function DoctorDashboard({ doctor }) {
     window.location.reload();
   }
 
-  const currentList = tab === 'queue' ? sessions : consulted;
 
   // Mandatory report review before prescribing: the doctor must record a verdict
   // (Report Accurate, or Inaccurate via saving an edit) before the Prescribe tab
@@ -558,7 +558,7 @@ function DoctorDashboard({ doctor }) {
   const reportReviewed = !report
     || !!report.doctor_feedback
     || (feedbackGiven?.id === selected?.id && (feedbackGiven?.val === 'accurate' || feedbackGiven?.val === 'inaccurate'));
-  const prescribeLocked = tab === 'queue' && !!selected && !reportReviewed;
+  const prescribeLocked = tab !== 'consulted' && !!selected && !reportReviewed;
   // Queue tree: show patients with a "filled now" visit (completed in the last
   // 24h) — i.e. patients who are actually here now — plus any patient already
   // pinned this session (they appeared with a recent fill, so they stay visible
@@ -566,7 +566,14 @@ function DoctorDashboard({ doctor }) {
   // recent fill (never pinned) does not show up.
   // Queue excludes DISPATCHED patients (finished via Save & Generate QR — they
   // move to Consulted). Locked-but-not-finished patients stay (shown in-progress).
-  const patients = groupByPatient(sessions).filter(p => (p.filledNow || pinned[p.phone]) && !p.dispatched);
+  // Split the active (non-dispatched) patients into WAITING (Queue) and
+  // IN-PROGRESS (Consulting). A patient a doctor has opened (consulted_at set) is
+  // being consulted → Consulting tab; everyone else openable → Queue. This keeps
+  // the Queue from filling up with patients already under consultation.
+  const allActive = groupByPatient(sessions).filter(p => !p.dispatched);
+  const waitingPatients = allActive.filter(p => (p.filledNow || pinned[p.phone]) && !p.consultedAt);
+  const consultingPatients = allActive.filter(p => !!p.consultedAt);
+  const patients = tab === 'consulting' ? consultingPatients : waitingPatients; // active tab's list
   // Consulted: a flat list of INDIVIDUAL consulted visits (NOT grouped per
   // patient). Every form a patient filled and the doctor consulted is its own
   // entry — so a returning patient who fills the form again appears as a new,
@@ -591,9 +598,9 @@ function DoctorDashboard({ doctor }) {
 
   // Shadow (ghost) prediction: complete the search with the best match from the
   // active tab's list — name first, then phone — whose value STARTS WITH input.
-  const searchSource = tab === 'queue'
-    ? patients.map(p => ({ name: p.name, phone: p.phone }))
-    : consultedList.map(s => ({ name: s.patient_name || '', phone: s.patient_phone || '' }));
+  const searchSource = tab === 'consulted'
+    ? consultedList.map(s => ({ name: s.patient_name || '', phone: s.patient_phone || '' }))
+    : patients.map(p => ({ name: p.name, phone: p.phone }));
   const suggestion = (() => {
     if (!q) return '';
     for (const e of searchSource) if ((e.name || '').toLowerCase().startsWith(q)) return e.name;
@@ -614,13 +621,6 @@ function DoctorDashboard({ doctor }) {
     if (s.triage_level) acc[s.triage_level] = (acc[s.triage_level] || 0) + 1;
     return acc;
   }, { RED: 0, AMBER: 0, GREEN: 0 });
-
-  // "Waiting" = queue patients the doctor hasn't opened/consulted yet. Once a
-  // patient's current visit is consulted (it has consulted_at / a doctor), they
-  // still appear in the tree for reference but count as "seen", not "waiting".
-  const isConsulted = p => !!(p.latest && (p.latest.consulted_at || p.latest.assigned_doctor_id));
-  const waitingCount = patients.filter(p => !isConsulted(p)).length;
-  const seenInQueueCount = patients.length - waitingCount;
 
   // "Consulted today" count.
   const todayStr = now.toDateString();
@@ -652,14 +652,18 @@ function DoctorDashboard({ doctor }) {
           <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>Logout</button>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs: Waiting → In-progress → Done */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
           <button className={`btn ${tab === 'queue' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: 1, fontSize: 13, minHeight: 36 }} onClick={() => switchTab('queue')}>
-            Queue ({patients.length})
+            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('queue')}>
+            Queue ({waitingPatients.length})
+          </button>
+          <button className={`btn ${tab === 'consulting' ? 'btn-primary' : 'btn-outline'}`}
+            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulting')}>
+            Consulting ({consultingPatients.length})
           </button>
           <button className={`btn ${tab === 'consulted' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: 1, fontSize: 13, minHeight: 36 }} onClick={() => switchTab('consulted')}>
+            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulted')}>
             Consulted
           </button>
         </div>
@@ -691,12 +695,14 @@ function DoctorDashboard({ doctor }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px 7px', borderBottom: '1px solid #e6ebf1', marginBottom: 10 }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
             {tab === 'queue'
-              ? <>{waitingCount} waiting{seenInQueueCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {seenInQueueCount} seen</span>}</>
+              ? <>{filteredPatients.length} waiting</>
+              : tab === 'consulting'
+              ? <>{filteredPatients.length} in consultation</>
               : <>{filteredConsulted.length} consulted{consultedTodayCount > 0 && <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {consultedTodayCount} today</span>}</>}
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             {(() => {
-              const counts = tab === 'queue' ? triageCounts : consultedTriageCounts;
+              const counts = tab === 'consulted' ? consultedTriageCounts : triageCounts;
               return ['RED', 'AMBER', 'GREEN'].some(l => counts[l] > 0) && (
                 <span style={{ display: 'inline-flex', gap: 9, fontSize: 12 }}>
                   {['RED', 'AMBER', 'GREEN'].filter(l => counts[l] > 0).map(l => (
@@ -724,8 +730,8 @@ function DoctorDashboard({ doctor }) {
             height, with its own vertical scrollbar (the rest of the panel and
             the right report pane stay fixed). */}
         <div className="scrolly" style={{ flex: 1, minHeight: 0, marginRight: -6, paddingRight: 6 }}>
-        {tab === 'queue' && (!queueLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredPatients.length || 4, 6))} />}
-        {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.map(p => {
+        {(tab === 'queue' || tab === 'consulting') && (!queueLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredPatients.length || 4, 6))} />}
+        {(tab === 'queue' || tab === 'consulting') && queueLoaded && !refreshing && filteredPatients.map(p => {
           const assignedToMe = !!(p.lockedById && p.lockedById === doctor.id);
           // "Locked by me" = an ACTIVE consultation I've opened (consulted_at set),
           // not a patient merely assigned/handed to me (those stay in the queue).
@@ -823,9 +829,11 @@ function DoctorDashboard({ doctor }) {
             </div>
           );
         })}
-        {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.length === 0 && (
+        {(tab === 'queue' || tab === 'consulting') && queueLoaded && !refreshing && filteredPatients.length === 0 && (
           <p style={{ color: 'var(--text-light)', padding: 16, textAlign: 'center' }}>
-            {q ? `No patients match “${search.trim()}”` : 'No patients yet'}
+            {q ? `No patients match “${search.trim()}”`
+              : tab === 'consulting' ? 'No patients currently being consulted'
+              : 'No patients waiting'}
           </p>
         )}
 
@@ -889,11 +897,13 @@ function DoctorDashboard({ doctor }) {
         )}
         {!selected && (
           <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
-            <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'queue' ? '🩺' : '📋'}</div>
+            <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'consulted' ? '📋' : tab === 'consulting' ? '🩺' : '🩺'}</div>
             <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: '0 0 6px' }}>No patient selected</p>
             <p style={{ fontSize: 13, margin: 0 }}>
               {tab === 'queue'
                 ? 'Pick a patient from the queue to view their pre-consult report.'
+                : tab === 'consulting'
+                ? 'Pick a patient you are consulting to continue, or open a new one from the Queue.'
                 : 'Pick a consulted visit to review its report and prescription.'}
             </p>
           </div>
@@ -912,7 +922,7 @@ function DoctorDashboard({ doctor }) {
                 {/* Queue: reassign — to another department's general queue, or to
                     a specific doctor (searchable). Release lives on the Consulted
                     side. */}
-                {tab === 'queue' && selected.assigned_doctor_id && (
+                {tab !== 'consulted' && selected.assigned_doctor_id && (
                   <div style={{ position: 'relative' }}>
                     <button onClick={() => setReassignOpen(o => !o)} title="Reassign this patient"
                       style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
@@ -1115,7 +1125,7 @@ function DoctorDashboard({ doctor }) {
                       </div>
                     )}
 
-                    {tab === 'queue' && (
+                    {tab !== 'consulted' && (
                       <div style={{ marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
                         {editing ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
