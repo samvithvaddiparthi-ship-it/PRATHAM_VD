@@ -44,7 +44,7 @@ export default function Interview() {
       const { history: pastEntries } = await api.getInterviewHistory(sid);
       // q_visit_type is auto-answered behind the scenes (the patient never sees
       // that question), so keep it out of the visible Go Back history.
-      const visible = pastEntries.filter(e => e.question.id !== 'q_visit_type');
+      const visible = pastEntries.filter(e => !e.question.id.endsWith('_visit_type'));
       setHistory(visible.map(e => e.question));
       setAnswers(Object.fromEntries(pastEntries.map(e => [e.question.id, e.answer_raw])));
     } catch (err) {
@@ -63,7 +63,7 @@ export default function Interview() {
         // q_visit_type is resolved server-side and never returned here, but keep
         // the guard so it can never slip into the visible Go Back history.
         setQuestion(prev => {
-          if (prev && prev.id !== 'q_visit_type') setHistory(h => [...h, prev]);
+          if (prev && !prev.id.endsWith('_visit_type')) setHistory(h => [...h, prev]);
           return res.question;
         });
         setFuture([]); // clear future when we get a fresh question from server

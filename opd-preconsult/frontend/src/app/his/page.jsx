@@ -351,9 +351,7 @@ export default function HISPage() {
                         <option value="COMPLETE">Completed</option>
                         <option value="INTERVIEW">In Interview</option>
                         <option value="VITALS">Vitals</option>
-                        <option value="CONSENTED">Consented</option>
                         <option value="REGISTERED">Registered</option>
-                        <option value="INIT">Init</option>
                       </select>
                     </div>
 
@@ -862,7 +860,9 @@ function QuestionsManager({ depts = [] }) {
   useEffect(() => { loadQuestions(); }, [dept]);
 
   async function loadQuestions() {
-    try { setQuestions(await api.getQuestions(dept)); } catch {}
+    // TERMINAL nodes are vestigial DAG sinks, not real questions — the patient's
+    // "done" is the /patient/done page. Hide them from the editor list.
+    try { setQuestions((await api.getQuestions(dept)).filter(q => q.q_type !== 'TERMINAL')); } catch {}
   }
 
   function startNew() {
@@ -979,21 +979,37 @@ function QuestionsManager({ depts = [] }) {
             onClick={startNew}>+ Add Question</button>
         </div>
 
-        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>{questions.length} questions (sorted by flow order)</p>
+        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+          {questions.length} questions (sorted by flow order) ·
+          <span style={{ color: '#7C5BA6', fontWeight: 600 }}> BASE</span> = shared intake, then department flow
+        </p>
 
         {/* Independent scroll for the question list — the dept selector and count
             above stay put while only this list scrolls. */}
         <div style={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto', paddingRight: 6 }}>
-          {questions.map((q, idx) => (
-            <div key={q.id} onClick={() => startEdit(q)}
+          {questions.map((q, idx) => {
+            const prev = questions[idx - 1];
+            const dagStart = !q.is_base && (idx === 0 || prev?.is_base);
+            return (
+            <div key={q.id}>
+            {dagStart && (
+              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', margin: '10px 2px 4px' }}>
+                — Department questions —
+              </p>
+            )}
+            <div onClick={() => startEdit(q)}
               style={{
-                background: editing?.id === q.id ? '#EBF5FB' : '#fff',
+                background: editing?.id === q.id ? '#EBF5FB' : (q.is_base ? '#FAF8FD' : '#fff'),
                 border: editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0',
+                borderLeft: q.is_base ? '3px solid #9B7FC4' : (editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0'),
                 borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
               }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontSize: 11, color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{q.id}</span>
+                {q.is_base && (
+                  <span style={{ fontSize: 10, background: '#7C5BA6', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>BASE</span>
+                )}
                 <span style={{ fontSize: 10, background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
                 {q.triage_flag && (
                   <span style={{ fontSize: 10, background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: '#fff', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
@@ -1002,7 +1018,9 @@ function QuestionsManager({ depts = [] }) {
               <p style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
               {q.next_default && <p style={{ fontSize: 10, color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
             </div>
-          ))}
+            </div>
+            );
+          })}
         </div>
       </div>
 

@@ -99,9 +99,11 @@ router.post('/register', authMiddleware, async (req, res) => {
 router.post('/consent', authMiddleware, async (req, res) => {
   try {
     const { session_id } = req.session_data;
+    // Record consent without introducing a separate CONSENTED state — the
+    // session stays REGISTERED until the interview begins (then -> INTERVIEW).
+    // CONSENTED is no longer used as a state anywhere.
     const result = await pool.query(
-      `UPDATE sessions SET consent_given = true, consent_at = NOW(),
-       state = 'CONSENTED', updated_at = NOW()
+      `UPDATE sessions SET consent_given = true, consent_at = NOW(), updated_at = NOW()
        WHERE id = $1 RETURNING *`,
       [session_id]
     );

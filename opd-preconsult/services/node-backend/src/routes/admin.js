@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
+const { baseNodesForDept } = require('../seed/baseTemplate');
 
 const router = Router();
 
@@ -32,6 +33,19 @@ router.post('/departments', async (req, res) => {
       'INSERT INTO departments (code, name) VALUES ($1, $2) RETURNING *',
       [cleanCode, name]
     );
+
+    // Seed the shared base intake questions for the new department so it starts
+    // with the common template; DAG questions are added on top in HIS.
+    for (const node of baseNodesForDept(cleanCode)) {
+      await pool.query(
+        `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, next_default, next_rules, sort_order, is_base)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO NOTHING`,
+        [node.id, node.department, node.text_en, node.text_hi, node.text_te, node.q_type,
+         node.options_json ? JSON.stringify(node.options_json) : null, node.required,
+         node.next_default, node.next_rules, node.sort_order, true]
+      );
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Department code already exists' });
@@ -85,14 +99,14 @@ router.get('/questions/:department', async (req, res) => {
 router.post('/questions', async (req, res) => {
   try {
     const { id, department, text_en, text_hi, text_te, q_type, options_json, required,
-            triage_flag, triage_answer, next_default, next_rules, sort_order } = req.body;
+            triage_flag, triage_answer, next_default, next_rules, sort_order, is_base } = req.body;
 
     const result = await pool.query(
-      `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, next_default, next_rules, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, next_default, next_rules, sort_order, is_base)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [id, department, text_en, text_hi, text_te, q_type, options_json ? JSON.stringify(options_json) : null,
        required !== false, triage_flag || null, triage_answer || null, next_default || null,
-       next_rules ? JSON.stringify(next_rules) : null, sort_order || 0]
+       next_rules ? JSON.stringify(next_rules) : null, sort_order || 0, is_base === true]
     );
     res.json(result.rows[0]);
   } catch (err) {

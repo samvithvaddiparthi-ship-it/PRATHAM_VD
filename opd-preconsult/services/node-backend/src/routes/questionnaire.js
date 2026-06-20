@@ -18,38 +18,70 @@ router.get('/schema/:department', async (req, res) => {
   }
 });
 
-// Walk the DAG from its entry node, following the path determined by
-// recorded answers. Stops at the first node that has no recorded answer —
-// that's the "current" question — and returns the path walked so far.
+// The logical role of a base question, derived from its id suffix after
+// `_base_` (e.g. q_card_base_visit_type -> "visit_type"). Lets the conditional
+// flow (auto visit-type, progress-only-for-returning) survive text edits in HIS.
+function roleOf(node) {
+  if (!node || !node.is_base) return null;
+  const i = node.id.indexOf('_base_');
+  return i >= 0 ? node.id.slice(i + 6) : null;
+}
+
+// Walk the interview in two phases and return the path taken plus the current
+// (first unanswered) question. Intentionally order-independent — it checks
+// whether *each specific node* has an answer rather than replaying answers by
+// timestamp, so "Go Back" + rewind/resubmit can never scramble the order.
 //
-// This is intentionally order-independent: it looks up whether *each specific
-// node along the path* has an answer, rather than chronologically replaying
-// session_answers by created_at. Chronological replay breaks the moment
-// "Go Back" + rewind/resubmit is involved, because re-confirming an earlier
-// answer re-inserts it with a fresh timestamp that can sort *after* later
-// answers — scrambling the replay order and surfacing an unrelated question.
+//   Phase 1 — BASE: the shared intake questions (is_base), walked LINEARLY by
+//     sort_order. `visit_type` is hidden/auto; `progress` is skipped entirely
+//     unless this is a follow-up. This is the "simple line" with direct go-back.
+//   Phase 2 — DAG: the department-specific questions (non-base), walked by
+//     next_default / next_rules from the lowest-sort_order entry node.
 async function walkDag(session_id, department) {
-  const [answeredResult, dagResult] = await Promise.all([
+  const [answeredResult, nodesResult] = await Promise.all([
     pool.query('SELECT question_id, answer_raw, answer_structured FROM session_answers WHERE session_id = $1', [session_id]),
     pool.query('SELECT * FROM questionnaire_nodes WHERE department = $1 AND is_active = true ORDER BY sort_order', [department]),
   ]);
   const answeredByQuestion = Object.fromEntries(answeredResult.rows.map(a => [a.question_id, a]));
-  const nodes = Object.fromEntries(dagResult.rows.map(n => [n.id, n]));
-  const startNode = dagResult.rows[0];
+  const nodes = Object.fromEntries(nodesResult.rows.map(n => [n.id, n]));
+
+  const baseNodes = nodesResult.rows.filter(n => n.is_base);
+  const dagNodes = nodesResult.rows.filter(n => !n.is_base && n.q_type !== 'TERMINAL');
+
+  // Is this a follow-up? Decided by the (auto-resolved) visit_type answer.
+  const visitNode = baseNodes.find(n => roleOf(n) === 'visit_type');
+  const visitAns = visitNode ? answeredByQuestion[visitNode.id]?.answer_raw : null;
+  const isFollowup = visitAns === 'followup';
 
   const path = [];
-  let currentId = startNode ? startNode.id : null;
+
+  // ── Phase 1: base (linear) ──
+  for (const node of baseNodes) {
+    if (roleOf(node) === 'progress' && !isFollowup) continue; // only for returning patients
+    const ans = answeredByQuestion[node.id];
+    if (!ans) {
+      const totalBase = baseNodes.filter(b => roleOf(b) !== 'visit_type' && (roleOf(b) !== 'progress' || isFollowup)).length;
+      return { path, current: node, total: totalBase + dagNodes.length };
+    }
+    path.push({ question: node, answer: ans });
+  }
+
+  // ── Phase 2: department DAG ──
+  let currentId = dagNodes.length ? dagNodes[0].id : null;
   const visited = new Set();
   while (currentId && nodes[currentId] && !visited.has(currentId)) {
     visited.add(currentId);
+    const node = nodes[currentId];
+    if (node.q_type === 'TERMINAL') { currentId = null; break; }
     const ans = answeredByQuestion[currentId];
     if (!ans) break;
-    path.push({ question: nodes[currentId], answer: ans });
-    currentId = resolveNext(nodes[currentId], ans.answer_raw, ans.answer_structured);
+    path.push({ question: node, answer: ans });
+    currentId = resolveNext(node, ans.answer_raw, ans.answer_structured);
   }
 
-  const current = (currentId && nodes[currentId] && currentId !== 'q_done') ? nodes[currentId] : null;
-  return { path, current, total: dagResult.rows.length - 1 };
+  const totalBase = baseNodes.filter(b => roleOf(b) !== 'visit_type' && (roleOf(b) !== 'progress' || isFollowup)).length;
+  const current = (currentId && nodes[currentId] && nodes[currentId].q_type !== 'TERMINAL') ? nodes[currentId] : null;
+  return { path, current, total: totalBase + dagNodes.length };
 }
 
 // Get next question for a session
@@ -63,12 +95,12 @@ router.get('/next/:session_id', authMiddleware, async (req, res) => {
 
     let walk = await walkDag(session_id, department);
 
-    // The "first visit or follow-up?" question (q_visit_type) is never shown to
-    // the patient — we resolve it automatically and authoritatively from their
-    // history: if this phone has ANY prior COMPLETED visit it's a follow-up,
+    // The "first visit or follow-up?" question (base, role=visit_type) is never
+    // shown to the patient — we resolve it automatically and authoritatively from
+    // their history: if this phone has ANY prior COMPLETED visit it's a follow-up,
     // otherwise a first visit. Determining it here (server-side, from live data)
     // rather than from a client flag avoids stale/cross-patient classification.
-    if (walk.current && walk.current.id === 'q_visit_type') {
+    if (walk.current && roleOf(walk.current) === 'visit_type') {
       const prior = await pool.query(
         `SELECT 1 FROM sessions WHERE patient_phone = $1 AND id <> $2 AND state = 'COMPLETE' LIMIT 1`,
         [patient_phone, session_id]
@@ -76,9 +108,9 @@ router.get('/next/:session_id', authMiddleware, async (req, res) => {
       const answer = prior.rows.length ? 'followup' : 'first';
       await pool.query(
         `INSERT INTO session_answers (session_id, question_id, answer_raw, answer_structured, input_mode)
-         VALUES ($1, 'q_visit_type', $2, $3, 'auto')
+         VALUES ($1, $2, $3, $4, 'auto')
          ON CONFLICT DO NOTHING`,
-        [session_id, answer, JSON.stringify({ value: answer })]
+        [session_id, walk.current.id, answer, JSON.stringify({ value: answer })]
       );
       walk = await walkDag(session_id, department);
     }

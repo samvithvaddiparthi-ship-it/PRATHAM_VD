@@ -480,7 +480,7 @@ router.get('/all-sessions', async (req, res) => {
              FROM sessions s
              LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
              LEFT JOIN session_reports sr ON sr.session_id = s.id
-             WHERE 1=1`;
+             WHERE s.state NOT IN ('INIT', 'CONSENTED')`;
     const params = [];
     if (department) { params.push(department); q += ` AND s.department = $${params.length}`; }
     if (doctor_id) { params.push(doctor_id); q += ` AND s.assigned_doctor_id = $${params.length}`; }
