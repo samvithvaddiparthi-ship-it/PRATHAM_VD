@@ -31,6 +31,9 @@ function HomeContent() {
       sessionStorage.setItem('token', result.token);
       sessionStorage.setItem('session_id', result.session.id);
       sessionStorage.setItem('department', result.session.department);
+      // Remember the QR payload so the flow can transparently re-mint a session
+      // if the server-side one is missing (e.g. DB reset) instead of dead-ending.
+      sessionStorage.setItem('qr', payload);
       const chosen = (langOverride && ['en', 'hi', 'te'].includes(langOverride)) ? langOverride : lang;
       sessionStorage.setItem('lang', chosen);
       router.push('/patient/register');

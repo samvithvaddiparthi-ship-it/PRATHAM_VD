@@ -87,7 +87,9 @@ export default function Register() {
     }
 
     setLoading(true);
-    try {
+
+    // Submit the registration and show the post-submit welcome card.
+    const doRegister = async () => {
       const res = await api.register({
         ...form,
         patient_phone: phone,
@@ -104,8 +106,32 @@ export default function Register() {
       setWelcomeBack(wb);
       sessionStorage.setItem('welcome_back', JSON.stringify({ session_id: sessionStorage.getItem('session_id'), ...wb }));
       setLoading(false);
-      return;
+    };
+
+    try {
+      await doRegister();
     } catch (err) {
+      // The server-side session is gone (e.g. the DB was reset between scanning
+      // and registering). Transparently re-mint a fresh session from the QR we
+      // remembered, then retry once — so the patient never dead-ends.
+      if (/session not found/i.test(err.message || '')) {
+        const qr = sessionStorage.getItem('qr');
+        if (qr) {
+          try {
+            const scan = await api.scan(qr);
+            setToken(scan.token);
+            sessionStorage.setItem('token', scan.token);
+            sessionStorage.setItem('session_id', scan.session.id);
+            sessionStorage.setItem('department', scan.session.department);
+            await doRegister();
+            return;
+          } catch { /* fall through to restart */ }
+        }
+        setError(t('err_session_expired', lang));
+        setLoading(false);
+        setTimeout(() => router.push('/'), 1500);
+        return;
+      }
       setError(err.message);
       setLoading(false);
     }

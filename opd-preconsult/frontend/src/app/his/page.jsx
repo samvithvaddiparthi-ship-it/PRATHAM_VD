@@ -1701,9 +1701,20 @@ function AnalyticsDashboard() {
 }
 
 
+// Short, scannable summary of a longer text (first sentence, else clipped at a
+// word boundary) — used to collapse the verbose AI descriptions in the queue.
+function gist(text, n = 130) {
+  const s = (text || '').trim();
+  if (s.length <= n) return s;
+  const dot = s.indexOf('. ');
+  if (dot > 0 && dot <= n) return s.slice(0, dot + 1);
+  return s.slice(0, n).replace(/\s+\S*$/, '') + '…';
+}
+
 // ── Drug Formulary manager: AI review queue + curated drugs/interactions ──────
 function FormularyManager() {
   const [queue, setQueue] = useState([]);
+  const [qExpanded, setQExpanded] = useState(() => new Set()); // queue rows showing full description
   const [drugs, setDrugs] = useState([]);
   const [inter, setInter] = useState([]);
   const [classInter, setClassInter] = useState([]);
@@ -1793,7 +1804,26 @@ function FormularyManager() {
                   <td style={td}><strong>{q.unknown_drug}</strong></td>
                   <td style={td}>{q.other_drug}</td>
                   <td style={td}>{sev(q.ai_severity)}</td>
-                  <td style={{ ...td, maxWidth: 320 }}>{q.ai_description}</td>
+                  <td style={{ ...td, maxWidth: 340 }}>
+                    {(() => {
+                      const full = q.ai_description || '';
+                      const open = qExpanded.has(q.id);
+                      const short = gist(full);
+                      const collapsible = short !== full;
+                      return (
+                        <>
+                          {open || !collapsible ? full : short}
+                          {collapsible && (
+                            <button type="button"
+                              onClick={() => setQExpanded(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; })}
+                              style={{ marginLeft: 6, background: 'none', border: 'none', color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                              {open ? 'Show less' : 'Show more'}
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td style={td}>{q.ai_confidence != null ? Math.round(q.ai_confidence * 100) + '%' : '—'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     <button onClick={() => approve(q)} style={{ background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', marginRight: 6 }}>Approve</button>

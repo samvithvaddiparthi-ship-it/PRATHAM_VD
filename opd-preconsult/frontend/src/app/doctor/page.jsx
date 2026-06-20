@@ -550,6 +550,15 @@ function DoctorDashboard({ doctor }) {
   }
 
   const currentList = tab === 'queue' ? sessions : consulted;
+
+  // Mandatory report review before prescribing: the doctor must record a verdict
+  // (Report Accurate, or Inaccurate via saving an edit) before the Prescribe tab
+  // unlocks. Persists via the saved doctor_feedback, so a reviewed patient stays
+  // unlocked when reopened. If there's no report at all, don't trap them.
+  const reportReviewed = !report
+    || !!report.doctor_feedback
+    || (feedbackGiven?.id === selected?.id && (feedbackGiven?.val === 'accurate' || feedbackGiven?.val === 'inaccurate'));
+  const prescribeLocked = tab === 'queue' && !!selected && !reportReviewed;
   // Queue tree: show patients with a "filled now" visit (completed in the last
   // 24h) — i.e. patients who are actually here now — plus any patient already
   // pinned this session (they appeared with a recent fill, so they stay visible
@@ -1047,8 +1056,12 @@ function DoctorDashboard({ doctor }) {
                 style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
                 onClick={() => setRightTab('report')}>Report</button>
               <button className={`btn ${rightTab === 'prescribe' ? 'btn-primary' : 'btn-outline'}`}
-                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
-                onClick={() => { setRightTab('prescribe'); setPrescribeMounted(true); }}>Prescribe</button>
+                title={prescribeLocked ? 'Mark the report Accurate or Inaccurate first' : 'Prescribe'}
+                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px', opacity: prescribeLocked ? 0.5 : 1, cursor: prescribeLocked ? 'not-allowed' : 'pointer' }}
+                onClick={() => {
+                  if (prescribeLocked) { toast('Review the report first — mark it Accurate or Inaccurate.', 'error'); return; }
+                  setRightTab('prescribe'); setPrescribeMounted(true);
+                }}>{prescribeLocked ? '🔒 ' : ''}Prescribe</button>
             </div>
 
             {rightTab === 'report' && (
@@ -1137,11 +1150,18 @@ function DoctorDashboard({ doctor }) {
                             </button>
                           </div>
                         ) : (
-                          <div style={{ display: 'flex', gap: 12 }}>
-                            <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
-                            <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
-                              onClick={() => { setEditText(report?.doctor_correction || report?.report_md || ''); setShowOriginal(false); setEditing(true); }}>Incorrect History — Edit</button>
-                          </div>
+                          <>
+                            {prescribeLocked && (
+                              <p style={{ fontSize: 12, color: '#B9770E', fontWeight: 600, marginBottom: 8 }}>
+                                ⚠ Review this report before prescribing — mark it Accurate, or Inaccurate (then save your edit).
+                              </p>
+                            )}
+                            <div style={{ display: 'flex', gap: 12 }}>
+                              <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => handleFeedback('accurate')}>Report Accurate</button>
+                              <button className="btn btn-outline" style={{ flex: 1, borderColor: 'var(--red)', color: 'var(--red)' }}
+                                onClick={() => { setEditText(report?.doctor_correction || report?.report_md || ''); setShowOriginal(false); setEditing(true); }}>Incorrect History — Edit</button>
+                            </div>
+                          </>
                         )}
                       </div>
                     )}
@@ -1344,11 +1364,32 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
   );
 }
 
+// One interaction/allergy/AI warning row, shown in full. Visibility of the whole
+// list is controlled by the single dropdown in the Warnings block.
+function WarningRow({ w }) {
+  const ai = w.source === 'ai';
+  const bg = ai ? '#EAF3FB' : (w.severity === 'block' ? '#FADBD8' : '#FFF3CD');
+  const fg = ai ? '#1B4F72' : (w.severity === 'block' ? '#C0392B' : '#856404');
+  const label = ai ? 'AI-ASSESSED · UNVERIFIED' : (w.severity === 'block' ? 'BLOCKED' : 'WARNING');
+  return (
+    <div style={{ background: bg, padding: 10, fontSize: 13, borderBottom: '1px solid rgba(0,0,0,0.1)', borderLeft: ai ? '3px solid #2E86AB' : 'none' }}>
+      <strong style={{ color: fg }}>{label}{ai && w.severity === 'block' ? ' (severe)' : ''}:</strong>{' '}
+      {w.description}
+      {w.drug_a && w.drug_b && <span style={{ color: 'var(--text-light)' }}> ({w.drug_a} + {w.drug_b})</span>}
+      {w.drug && w.allergy && <span style={{ color: 'var(--text-light)' }}> ({w.drug} / allergy: {w.allergy})</span>}
+      {ai && typeof w.confidence === 'number' && (
+        <span style={{ color: 'var(--text-light)' }}> · confidence {Math.round(w.confidence * 100)}%</span>
+      )}
+    </div>
+  );
+}
+
 function PrescriptionPanel({ session, doctor, onDispatched }) {
   const [items, setItems] = useState(() => [makeItem()]);
   const [allergies, setAllergies] = useState([]);          // doctor-added (patient_allergies table)
   const [intakeAllergens, setIntakeAllergens] = useState([]); // parsed from the patient's intake answer
   const [warnings, setWarnings] = useState([]);
+  const [warnOpen, setWarnOpen] = useState(false);   // the single Warnings dropdown open?
   const [interactionChecked, setInteractionChecked] = useState(false);
   const [unknownDrugs, setUnknownDrugs] = useState([]);   // prescribed drugs not in the formulary
   const [aiChecked, setAiChecked] = useState(false);      // has the AI advisory run for the current drugs?
@@ -1368,6 +1409,13 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     allergies.forEach(a => add(a.allergen));
     return [...byKey.values()];
   }, [allergies, intakeAllergens]);
+
+  // The Warnings dropdown auto-opens when there's a block/allergy (so critical
+  // alerts are never hidden) and collapses when there are only warnings/AI
+  // advisories. The doctor can still toggle it either way.
+  useEffect(() => {
+    setWarnOpen(warnings.some(w => w.severity === 'block'));
+  }, [warnings]);
 
   // Fetch the formulary once (single source of truth in the backend). On any
   // failure we silently keep the bundled DRUG_LIST fallback, so the dropdown
@@ -1935,40 +1983,44 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         </div>
       </div>
 
-      {/* Warnings */}
-      {warnings.length > 0 && (
-        <div style={{ borderRadius: 8, overflow: 'hidden' }}>
-          {warnings.map((w, i) => {
-            const ai = w.source === 'ai';
-            const bg = ai ? '#EAF3FB' : (w.severity === 'block' ? '#FADBD8' : '#FFF3CD');
-            const fg = ai ? '#1B4F72' : (w.severity === 'block' ? '#C0392B' : '#856404');
-            const label = ai ? 'AI-ASSESSED · UNVERIFIED' : (w.severity === 'block' ? 'BLOCKED' : 'WARNING');
-            return (
-              <div key={i} style={{
-                background: bg, padding: 10, fontSize: 13,
-                borderBottom: '1px solid rgba(0,0,0,0.1)',
-                borderLeft: ai ? '3px solid #2E86AB' : 'none',
-              }}>
-                <strong style={{ color: fg }}>
-                  {label}{ai && w.severity === 'block' ? ' (severe)' : ''}:
-                </strong>{' '}
-                {w.description}
-                {w.drug_a && w.drug_b && <span style={{ color: 'var(--text-light)' }}> ({w.drug_a} + {w.drug_b})</span>}
-                {w.drug && w.allergy && <span style={{ color: 'var(--text-light)' }}> ({w.drug} / allergy: {w.allergy})</span>}
-                {ai && typeof w.confidence === 'number' && (
-                  <span style={{ color: 'var(--text-light)' }}> · confidence {Math.round(w.confidence * 100)}%</span>
+      {/* Warnings — bold summary banner the doctor can't miss, then each alert.
+          Curated block/warn/allergy show in full; verbose AI advisories collapse. */}
+      {warnings.length > 0 && (() => {
+        const nBlock = warnings.filter(w => w.severity === 'block' && w.source !== 'ai').length;
+        const nWarn = warnings.filter(w => w.severity === 'warn' && w.source !== 'ai').length;
+        const nAi = warnings.filter(w => w.source === 'ai').length;
+        const parts = [];
+        if (nBlock) parts.push(`${nBlock} BLOCKED`);
+        if (nWarn) parts.push(`${nWarn} warning${nWarn > 1 ? 's' : ''}`);
+        if (nAi) parts.push(`${nAi} AI advisory${nAi > 1 ? '(s)' : ''}`);
+        const tone = nBlock ? { bg: '#FADBD8', bd: '#C0392B', fg: '#922B21' }
+          : nWarn ? { bg: '#FCF3CF', bd: '#D4AC0D', fg: '#7D6608' }
+          : { bg: '#EAF3FB', bd: '#2E86AB', fg: '#1B4F72' };
+        return (
+          <div style={{ borderRadius: 8, overflow: 'hidden', border: `2px solid ${tone.bd}` }}>
+            {/* Single dropdown header for the whole warnings list. */}
+            <button type="button" onClick={() => setWarnOpen(o => !o)}
+              style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none',
+                background: tone.bg, color: tone.fg, fontWeight: 800, fontSize: 14,
+                padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>⚠</span>
+              <span>{parts.join('  ·  ')}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 13 }}>{warnOpen ? '▾ Hide' : '▸ View'}</span>
+            </button>
+            {warnOpen && (
+              <>
+                {warnings.map((w, i) => <WarningRow key={i} w={w} />)}
+                {nAi > 0 && (
+                  <div style={{ background: '#F4F8FB', padding: '7px 10px', fontSize: 11, color: 'var(--text-light)' }}>
+                    ⓘ AI-assessed items are for a drug not in the formulary — advisory only, do not block, and have been
+                    sent to the HIS admin for review. Verify against a clinical reference before relying on them.
+                  </div>
                 )}
-              </div>
-            );
-          })}
-          {warnings.some(w => w.source === 'ai') && (
-            <div style={{ background: '#F4F8FB', padding: '7px 10px', fontSize: 11, color: 'var(--text-light)' }}>
-              ⓘ AI-assessed items are for a drug not in the formulary — advisory only, do not block, and have been
-              sent to the HIS admin for review. Verify against a clinical reference before relying on them.
-            </div>
-          )}
-        </div>
-      )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* No-interaction confirmation. Only fully reassuring once any unrecognised
           drugs have also had the AI advisory run; otherwise nudge to run it. */}

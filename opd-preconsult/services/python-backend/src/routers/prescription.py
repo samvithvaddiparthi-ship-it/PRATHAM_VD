@@ -54,7 +54,9 @@ AI_SYSTEM = (
     "\"severity\": \"none\"|\"warn\"|\"block\", \"mechanism\": string, "
     "\"recommendation\": string, \"confidence\": number 0..1}. "
     "Use 'block' only for dangerous/contraindicated combinations, 'warn' for caution. "
-    "Omit any pair whose severity is 'none'. Use the exact drug names as written."
+    "Omit any pair whose severity is 'none'. Use the exact drug names as written. "
+    "Be TERSE: 'mechanism' and 'recommendation' must each be ONE short sentence "
+    "(max ~120 characters), no preamble, no repetition — written for a busy clinician."
 )
 
 
