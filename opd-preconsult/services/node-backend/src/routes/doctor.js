@@ -194,6 +194,23 @@ router.post('/open/:session_id', async (req, res) => {
     const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
+    // One active consultation per doctor: block opening a new patient while another
+    // is still open (consulted, not yet dispatched). A patient merely reassigned to
+    // me has consulted_at = NULL, so it doesn't count until I actually open it.
+    const active = await pool.query(
+      `SELECT id FROM sessions
+        WHERE assigned_doctor_id = $1 AND consulted_at IS NOT NULL
+          AND dispatched_at IS NULL AND id <> $2
+        LIMIT 1`,
+      [decoded.doctor_id, req.params.session_id]
+    );
+    if (active.rows.length) {
+      return res.status(409).json({
+        error: 'busy',
+        message: 'Finish your current consultation (Save & Generate QR) before opening another patient.',
+      });
+    }
+
     const result = await pool.query(
       `UPDATE sessions
           SET assigned_doctor_id = $1,
@@ -332,42 +349,83 @@ router.post('/release/:session_id', async (req, res) => {
   }
 });
 
-// Reassign session to a different doctor (or unassign if target_doctor_id is null/empty)
+// Reassign a session. Three modes by body:
+//   { target_doctor_id }  → assign to that doctor AND move the visit into THAT
+//                           doctor's department (the queue is department-filtered,
+//                           so a cross-dept reassign must move the department too).
+//   { department }        → move to that department's GENERAL queue (unassigned).
+//   {}  / null            → unassign (back to the current department's general pool).
+// In every assign/move case we clear the handoff stamps (consulted_at, dispatched_at)
+// so the receiving doctor sees a fresh entry. Triage is preserved.
 router.post('/reassign/:session_id', async (req, res) => {
   try {
-    const { target_doctor_id } = req.body;
+    const { target_doctor_id, department } = req.body;
 
-    // If null/empty, unassign
-    if (!target_doctor_id) {
-      const result = await pool.query(
-        `UPDATE sessions SET assigned_doctor_id = NULL, updated_at = NOW() WHERE id = $1 RETURNING *`,
+    // ── Reassign to a specific doctor (+ follow their department) ──
+    if (target_doctor_id) {
+      const doc = await pool.query('SELECT id, name, department FROM doctors WHERE id = $1 AND is_active = true', [target_doctor_id]);
+      if (!doc.rows.length) return res.status(404).json({ error: 'Target doctor not found' });
+      const dept = doc.rows[0].department;
+
+      // Name of the doctor handing this patient over (the session's current owner),
+      // recorded so the receiving doctor sees "Assigned to you by Dr. X".
+      const fromRow = await pool.query(
+        `SELECT d.name FROM sessions s JOIN doctors d ON d.id = s.assigned_doctor_id WHERE s.id = $1`,
         [req.params.session_id]
+      );
+      const fromName = fromRow.rows[0]?.name || null;
+
+      const result = await pool.query(
+        `UPDATE sessions SET assigned_doctor_id = $1, department = $2,
+                reassigned_by = $3, reassigned_at = NOW(),
+                consulted_at = NULL, dispatched_at = NULL, updated_at = NOW()
+         WHERE id = $4 RETURNING *`,
+        [target_doctor_id, dept, fromName, req.params.session_id]
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
 
       await pool.query(
-        `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_unassigned', 'admin', '{}')`,
-        [req.params.session_id]
+        `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_reassigned', 'admin', $2)`,
+        [req.params.session_id, JSON.stringify({ target_doctor: doc.rows[0].name, target_id: target_doctor_id, department: dept })]
       );
       return res.json(result.rows[0]);
     }
 
-    // Verify target doctor exists
-    const doc = await pool.query('SELECT id, name, department FROM doctors WHERE id = $1 AND is_active = true', [target_doctor_id]);
-    if (!doc.rows.length) return res.status(404).json({ error: 'Target doctor not found' });
+    // ── Reassign to another department's GENERAL queue (no specific doctor) ──
+    if (department) {
+      const dep = await pool.query('SELECT code FROM departments WHERE code = $1', [department]);
+      if (!dep.rows.length) return res.status(404).json({ error: 'Department not found' });
 
+      const result = await pool.query(
+        `UPDATE sessions SET department = $1, assigned_doctor_id = NULL,
+                reassigned_by = NULL, reassigned_at = NULL,
+                consulted_at = NULL, dispatched_at = NULL, updated_at = NOW()
+         WHERE id = $2 RETURNING *`,
+        [department, req.params.session_id]
+      );
+      if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+
+      await pool.query(
+        `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_dept_reassigned', 'admin', $2)`,
+        [req.params.session_id, JSON.stringify({ department })]
+      );
+      return res.json(result.rows[0]);
+    }
+
+    // ── Neither provided → unassign (stay in current department's pool) ──
     const result = await pool.query(
-      `UPDATE sessions SET assigned_doctor_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [target_doctor_id, req.params.session_id]
+      `UPDATE sessions SET assigned_doctor_id = NULL,
+              reassigned_by = NULL, reassigned_at = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.session_id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
 
     await pool.query(
-      `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_reassigned', 'admin', $2)`,
-      [req.params.session_id, JSON.stringify({ target_doctor: doc.rows[0].name, target_id: target_doctor_id })]
+      `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_unassigned', 'admin', '{}')`,
+      [req.params.session_id]
     );
-
-    res.json(result.rows[0]);
+    return res.json(result.rows[0]);
   } catch (err) {
     console.error('reassign error:', err);
     res.status(500).json({ error: 'Internal server error' });

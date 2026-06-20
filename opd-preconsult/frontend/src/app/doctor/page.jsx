@@ -54,6 +54,10 @@ function groupByPatient(list) {
       dispatched: !!latest.dispatched_at,            // finished (Save & QR) → leaves queue
       lockedById: latest.dispatched_at ? null : (latest.assigned_doctor_id || null),
       lockedByName: latest.dispatched_at ? null : (latest.doctor_name || null),
+      // consulted_at is stamped only when a doctor actively OPENS a patient (and
+      // cleared on reassign). It — not mere assignment — marks an active
+      // consultation, so a patient just handed to me isn't counted as "open".
+      consultedAt: latest.dispatched_at ? null : (latest.consulted_at || null),
       triage: filledNow ? latest.triage_level : null,
     });
   }
@@ -181,10 +185,14 @@ function DoctorDashboard({ doctor }) {
   const [audioOpen, setAudioOpen] = useState(false);            // patient-audio panel toggle (in the header, not a workflow tab)
   const [activeLock, setActiveLock] = useState(null);           // phone of the patient I've opened & not yet dispatched
   const [switchBlocked, setSwitchBlocked] = useState(false);    // tried to open another patient before finishing → red flash + message
+  const [departments, setDepartments] = useState([]);           // all departments (for cross-dept reassign)
+  const [reassignOpen, setReassignOpen] = useState(false);      // reassign popover toggle
 
   useEffect(() => {
     loadQueue();
-    api.listDoctors(doctor.department).then(setDoctors).catch(() => {});
+    // ALL active doctors (any dept) + departments — for cross-department reassign.
+    api.listDoctors().then(setDoctors).catch(() => {});
+    api.getDepartments().then(setDepartments).catch(() => {});
     const interval = setInterval(loadQueue, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -227,10 +235,36 @@ function DoctorDashboard({ doctor }) {
   // restores the lock after a browser reload and clears it once I finish/abandon
   // — so I can never get stuck, and can never hold two at once.
   useEffect(() => {
-    const mine = groupByPatient(sessions).find(p => p.lockedById === doctor.id && !p.dispatched);
+    // My active consultation = a patient assigned to me that I've OPENED
+    // (consulted_at set). A patient merely reassigned to me (consulted_at null)
+    // is NOT an active consultation, so it never holds the single-consult lock.
+    const mine = groupByPatient(sessions).find(p => p.lockedById === doctor.id && p.consultedAt && !p.dispatched);
     if (mine && activeLock !== mine.phone) setActiveLock(mine.phone);
     else if (!mine && activeLock) setActiveLock(null);
   }, [sessions]);
+
+  // One-time toast when a patient is reassigned TO me (specific-doctor handoff).
+  // Seeds silently on the first real queue load so pre-existing handoffs don't
+  // toast on page open; only genuinely new, unacknowledged handoffs notify.
+  const handoffNotifiedRef = useRef(null);
+  useEffect(() => {
+    if (!queueLoaded) return;
+    // Pending handoff to me = assigned to me, has a "reassigned_by", and I haven't
+    // opened it yet (consulted_at null). Cleared automatically once I open it.
+    const mine = sessions.filter(s =>
+      s.assigned_doctor_id === doctor.id && s.reassigned_by && !s.consulted_at && !s.dispatched_at);
+    if (handoffNotifiedRef.current === null) {
+      handoffNotifiedRef.current = new Set(mine.map(s => s.id));
+      return;
+    }
+    for (const s of mine) {
+      if (!handoffNotifiedRef.current.has(s.id)) {
+        handoffNotifiedRef.current.add(s.id);
+        toast(`⇄ ${s.patient_name || 'A patient'} was assigned to you by ${s.reassigned_by}`, 'success');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, queueLoaded]);
 
   function markSeen(visitId) {
     setSeenNew(prev => {
@@ -261,6 +295,7 @@ function DoctorDashboard({ doctor }) {
     setReport(null);
     setRightTab('report');
     setPrescribeMounted(false);   // fresh Prescribe panel for the newly-opened patient
+    setReassignOpen(false);       // close any open reassign popover
     setLoading(true);
     // No auto-assign here — locking a queue patient happens explicitly via
     // openPatient() (with the confirm dialog). selectSession just loads a visit.
@@ -339,15 +374,19 @@ function DoctorDashboard({ doctor }) {
   // lock. While I hold a lock on someone, clicking a DIFFERENT patient is blocked
   // (red flash + message) until I finish them with Save & Generate QR.
   async function openPatient(p) {
-    const lockedByMe = (p.lockedById && p.lockedById === doctor.id) || activeLock === p.phone;
+    // ACTIVE consultation I already hold = assigned to me AND opened (consulted_at
+    // set), or the optimistic activeLock. A patient merely reassigned to me
+    // (consulted_at null) is NOT yet open — it must go through the lock flow below,
+    // so it still counts against the "one consultation at a time" rule.
+    const activelyMine = (p.lockedById === doctor.id && p.consultedAt) || activeLock === p.phone;
     const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
 
-    // Already mine → just toggle the tree open/closed, no confirm.
-    if (lockedByMe) {
+    // Already my open consultation → just toggle the tree open/closed, no confirm.
+    if (activelyMine) {
       setExpanded(e => ({ ...e, [p.phone]: !e[p.phone] }));
       return;
     }
-    // I'm mid-consultation with someone else → block the switch.
+    // I'm mid-consultation with someone else → block opening a second one.
     if (activeLock && activeLock !== p.phone) {
       setSwitchBlocked(true);
       return;
@@ -372,7 +411,7 @@ function DoctorDashboard({ doctor }) {
       selectSession(p.latest);
       loadQueue();
     } else if (res.locked) {
-      toast(`Being consulted by ${res.locked_by || 'another doctor'}`, 'error');
+      toast(res.message || `Being consulted by ${res.locked_by || 'another doctor'}`, 'error');
       loadQueue();
     } else {
       toast('Could not open patient — please try again.', 'error');
@@ -419,12 +458,39 @@ function DoctorDashboard({ doctor }) {
     }
   }
 
-  async function handleReassign(targetId) {
-    if (!selected || !targetId) return;
-    await api.doctorReassign(selected.id, targetId);
-    setSelected(null);
-    setReport(null);
-    loadQueue();
+  // Reassign the selected queue patient to a specific doctor (their department
+  // follows, so the visit lands in that doctor's queue).
+  async function handleReassignDoctor(doc) {
+    if (!selected || !doc) return;
+    if (!(await confirm({
+      title: 'Reassign patient?',
+      message: `Reassign ${selected.patient_name || 'this patient'} to ${doc.name} (${doc.department}). They'll move to that doctor's queue and leave yours.`,
+      confirmLabel: 'Reassign',
+    }))) return;
+    try {
+      await api.doctorReassign(selected.id, doc.id);
+      setReassignOpen(false); setSelected(null); setReport(null); loadQueue();
+      toast(`Reassigned to ${doc.name}`, 'success');
+    } catch (err) {
+      toast('Reassign failed: ' + (err.message || 'unknown error'), 'error');
+    }
+  }
+
+  // Reassign the selected queue patient to another department's general queue.
+  async function handleReassignDept(dept) {
+    if (!selected || !dept) return;
+    if (!(await confirm({
+      title: 'Send to another department?',
+      message: `Move ${selected.patient_name || 'this patient'} to the ${dept.name} general queue. They'll leave your queue and any ${dept.name} doctor can pick them up.`,
+      confirmLabel: 'Move to ' + dept.name,
+    }))) return;
+    try {
+      await api.doctorReassignDept(selected.id, dept.code);
+      setReassignOpen(false); setSelected(null); setReport(null); loadQueue();
+      toast(`Moved to ${dept.name} queue`, 'success');
+    } catch (err) {
+      toast('Reassign failed: ' + (err.message || 'unknown error'), 'error');
+    }
   }
 
   // Permanently delete the selected patient entry (guarded by the checkbox
@@ -483,7 +549,6 @@ function DoctorDashboard({ doctor }) {
     window.location.reload();
   }
 
-  const otherDoctors = doctors.filter(d => d.id !== doctor.id);
   const currentList = tab === 'queue' ? sessions : consulted;
   // Queue tree: show patients with a "filled now" visit (completed in the last
   // 24h) — i.e. patients who are actually here now — plus any patient already
@@ -652,8 +717,13 @@ function DoctorDashboard({ doctor }) {
         <div className="scrolly" style={{ flex: 1, minHeight: 0, marginRight: -6, paddingRight: 6 }}>
         {tab === 'queue' && (!queueLoaded || refreshing) && <SkeletonRows n={Math.max(3, Math.min(filteredPatients.length || 4, 6))} />}
         {tab === 'queue' && queueLoaded && !refreshing && filteredPatients.map(p => {
-          const lockedByMe = (p.lockedById && p.lockedById === doctor.id) || activeLock === p.phone;
+          const assignedToMe = !!(p.lockedById && p.lockedById === doctor.id);
+          // "Locked by me" = an ACTIVE consultation I've opened (consulted_at set),
+          // not a patient merely assigned/handed to me (those stay in the queue).
+          const lockedByMe = (assignedToMe && p.consultedAt) || activeLock === p.phone;
           const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
+          // Pending handoff: reassigned to me and not yet opened — shows the alert chip.
+          const pendingHandoff = assignedToMe && p.latest.reassigned_by && !p.consultedAt;
           // Only the patient I currently hold shows its visit tree — others can't
           // be expanded/peeked (opening = locking, which requires the confirm).
           const isOpen = lockedByMe && !!expanded[p.phone];
@@ -673,6 +743,11 @@ function DoctorDashboard({ doctor }) {
                   )}
                   {lockedByMe && (
                     <p style={{ fontSize: 10.5, color: 'var(--secondary)', fontWeight: 600, marginTop: 2 }}>● You're consulting</p>
+                  )}
+                  {pendingHandoff && (
+                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10.5, fontWeight: 700, color: '#0D47A1', background: '#E3F2FD', border: '1px solid #64B5F6', borderRadius: 4, padding: '3px 7px' }}>
+                      ⇄ Assigned to you by {p.latest.reassigned_by}
+                    </span>
                   )}
                 </div>
                 <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', gap: 6 }}>
@@ -825,15 +900,37 @@ function DoctorDashboard({ doctor }) {
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
                 <TriageBadge level={selected.triage_level} />
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', position: 'relative' }}>
-                {/* Queue: reassign to another doctor (Release lives on the
-                    Consulted side now — releasing returns a consulted visit to
-                    the active queue). */}
-                {tab === 'queue' && selected.assigned_doctor_id && otherDoctors.length > 0 && (
-                  <select onChange={e => { if (e.target.value) handleReassign(e.target.value); e.target.value = ''; }}
-                    style={{ border: '1px solid #ccc', borderRadius: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}>
-                    <option value="">Reassign to...</option>
-                    {otherDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
+                {/* Queue: reassign — to another department's general queue, or to
+                    a specific doctor (searchable). Release lives on the Consulted
+                    side. */}
+                {tab === 'queue' && selected.assigned_doctor_id && (
+                  <div style={{ position: 'relative' }}>
+                    <button onClick={() => setReassignOpen(o => !o)} title="Reassign this patient"
+                      style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                      ⇄ Reassign ▾
+                    </button>
+                    {reassignOpen && (
+                      <>
+                        <div onClick={() => setReassignOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+                        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 10, boxShadow: '0 6px 18px rgba(0,0,0,0.15)', zIndex: 20, width: 280, padding: 12 }}>
+                          {/* 1) To a different department → general queue */}
+                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a department (general queue)</label>
+                          <select defaultValue="" onChange={e => { const d = departments.find(x => x.code === e.target.value); e.target.value = ''; if (d) handleReassignDept(d); }}
+                            style={{ width: '100%', border: '1px solid #ccc', borderRadius: 8, padding: '6px 8px', fontSize: 13, cursor: 'pointer', marginBottom: 12 }}>
+                            <option value="">Choose department…</option>
+                            {departments.filter(d => d.code !== selected.department).map(d => (
+                              <option key={d.code} value={d.code}>{d.name}</option>
+                            ))}
+                          </select>
+
+                          {/* 2) To a specific doctor → searchable, scrollable */}
+                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a specific doctor</label>
+                          <DoctorPicker doctors={doctors.filter(d => d.id !== doctor.id && d.is_active !== false)}
+                            onPick={handleReassignDoctor} />
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
 
                 {/* Consulted: release this visit back to the active queue. */}
@@ -1141,6 +1238,37 @@ function primaryDose(s) {
 // Searchable drug dropdown: filters DRUG_LIST as you type, supports keyboard
 // (↑/↓/Enter/Esc) and click selection, closes on click-away. Free text is still
 // allowed (whatever is typed is the value) so doctors aren't limited to the list.
+// Searchable, scrollable doctor picker (shows a few rows, type to filter by name
+// or department). Used in the reassign popover. Picking calls onPick(doctor).
+function DoctorPicker({ doctors, onPick }) {
+  const [q, setQ] = useState('');
+  const query = q.trim().toLowerCase();
+  const matches = query
+    ? doctors.filter(d => (d.name || '').toLowerCase().includes(query) || (d.department || '').toLowerCase().includes(query))
+    : doctors;
+  return (
+    <div>
+      <input className="input" value={q} onChange={e => setQ(e.target.value)}
+        placeholder="Search doctor or department…" autoComplete="off"
+        style={{ fontSize: 13, minHeight: 32 }} />
+      <div style={{ border: '1px solid #D5D8DC', borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: 'auto' }}>
+        {matches.length === 0 && (
+          <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-light)' }}>No doctors match.</div>
+        )}
+        {matches.map(d => (
+          <div key={d.id}
+            onMouseDown={(e) => { e.preventDefault(); onPick(d); }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#EBF5FB'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}
+            style={{ padding: '7px 10px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #F0F0F0' }}>
+            {d.name} <span style={{ color: 'var(--text-light)', fontSize: 11 }}>· {d.department}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
