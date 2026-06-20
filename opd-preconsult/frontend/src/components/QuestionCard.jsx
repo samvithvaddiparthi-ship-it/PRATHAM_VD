@@ -16,12 +16,24 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [ocrResult, setOcrResult] = useState(null);
   const [inputError, setInputError] = useState('');
   const [transcribing, setTranscribing] = useState(false);   // Bhashini round-trip in progress
+  const [detectedLang, setDetectedLang] = useState('');      // language detected from speech
+  const [translation, setTranslation] = useState('');        // English translation (NMT)
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [translating, setTranslating] = useState(false);
 
   useEffect(() => {
     setValue(initialValue);
     setInputError('');
     setTranscribing(false);
+    setDetectedLang('');
+    setTranslation(''); setShowTranslation(false); setTranslating(false);
   }, [question?.id]);
+
+  // Any edit/new transcription invalidates a previously-fetched translation.
+  function resetTranslation() { setTranslation(''); setShowTranslation(false); }
+
+  // Friendly name for a detected language code.
+  const langName = (code) => ({ en: 'English', hi: 'हिन्दी (Hindi)', te: 'తెలుగు (Telugu)' }[code] || code);
 
   const text = question[`text_${lang}`] || question.text_en;
   const options = question.options_json || [];
@@ -53,7 +65,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
       const sessionId = sessionStorage.getItem('session_id');
       const res = await api.transcribeVoice(blob, { lang, sessionId, questionId: question.id, patientName, durationMs: durMs });
       const t = (res && res.text || '').trim();
-      if (t) setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${t}` : t);
+      if (t) { setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${t}` : t); setDetectedLang(res.lang || ''); resetTranslation(); }
       else setInputError(lang === 'hi' ? 'समझ नहीं पाए — कृपया फिर बोलें या टाइप करें।' : lang === 'te' ? 'వినలేకపోయాం — దయచేసి మళ్ళీ చెప్పండి లేదా టైప్ చేయండి.' : "Couldn't catch that — please speak again or type.");
     } catch {
       setInputError(lang === 'hi' ? 'ट्रांसक्रिप्शन विफल — कृपया टाइप करें।' : lang === 'te' ? 'ట్రాన్స్క్రిప్షన్ విఫలమైంది — దయచేసి టైప్ చేయండి.' : 'Transcription failed — please type your answer.');
@@ -65,6 +77,24 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   function clearAnswer() {
     setValue('');
     setInputError('');
+    setDetectedLang('');
+    resetTranslation();
+  }
+
+  // Fetch (once) and toggle the English translation of the native transcript.
+  async function handleShowTranslation() {
+    if (showTranslation) { setShowTranslation(false); return; }
+    if (translation) { setShowTranslation(true); return; }
+    setTranslating(true);
+    try {
+      const r = await api.translateText(value, detectedLang);
+      setTranslation((r && r.english) || '');
+      setShowTranslation(true);
+    } catch {
+      setInputError(lang === 'hi' ? 'अनुवाद उपलब्ध नहीं।' : lang === 'te' ? 'అనువాదం అందుబాటులో లేదు.' : 'Translation unavailable.');
+    } finally {
+      setTranslating(false);
+    }
   }
 
   const vLabels = {
@@ -146,9 +176,29 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
             className="input"
             rows={3}
             value={value}
-            onChange={e => setValue(e.target.value)}
+            onChange={e => { setValue(e.target.value); resetTranslation(); }}
             placeholder={lang === 'hi' ? 'बोलें या यहाँ टाइप करें...' : lang === 'te' ? 'మాట్లాడండి లేదా ఇక్కడ టైప్ చేయండి...' : 'Speak or type here...'}
           />
+
+          {/* Show English translation — only when the answer is in Hindi/Telugu.
+              On-demand Bhashini NMT (no LLM); fetched once then toggled. */}
+          {detectedLang && detectedLang !== 'en' && value.trim() && (
+            <div>
+              <button type="button" onClick={handleShowTranslation} disabled={translating}
+                style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600, padding: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {translating ? (lang === 'hi' ? 'अनुवाद हो रहा है…' : lang === 'te' ? 'అనువదిస్తోంది…' : 'Translating…')
+                  : showTranslation ? (lang === 'hi' ? '🌐 अनुवाद छिपाएँ' : lang === 'te' ? '🌐 అనువాదాన్ని దాచు' : '🌐 Hide translation')
+                  : (lang === 'hi' ? '🌐 अंग्रेज़ी अनुवाद दिखाएँ' : lang === 'te' ? '🌐 ఆంగ్ల అనువాదం చూపించు' : '🌐 Show English translation')}
+              </button>
+              {showTranslation && translation && (
+                <div style={{ marginTop: 8, background: '#F5F9FC', border: '1px solid #E1EBF2', borderRadius: 10, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', marginBottom: 4 }}>English</div>
+                  <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.4 }}>{translation}</div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Microphone control */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, margin: '2px 0' }}>
@@ -157,6 +207,12 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
               <span style={{ fontSize: 13, color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ width: 13, height: 13, border: '2px solid #cfe0ec', borderTopColor: 'var(--secondary)', borderRadius: '50%', display: 'inline-block', animation: 'qcspin 0.7s linear infinite' }} />
                 {lang === 'hi' ? 'लिख रहे हैं…' : lang === 'te' ? 'రాస్తున్నాం…' : 'Transcribing…'}
+              </span>
+            )}
+            {!transcribing && detectedLang && (
+              <span style={{ fontSize: 12, color: 'var(--text-light)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block' }} />
+                {lang === 'hi' ? 'पहचानी गई भाषा' : lang === 'te' ? 'గుర్తించిన భాష' : 'Detected language'}: <strong style={{ color: 'var(--text)' }}>{langName(detectedLang)}</strong>
               </span>
             )}
           </div>

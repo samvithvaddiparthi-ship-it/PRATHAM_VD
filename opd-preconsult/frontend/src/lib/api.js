@@ -109,6 +109,17 @@ export const api = {
     return res.json();
   },
   transcribeHealth: () => apiFetch('/api/transcribe/health'),
+  // On-demand Bhashini NMT translation of a native transcript to English.
+  translateText: async (text, sourceLang) => {
+    const fd = new FormData();
+    fd.append('text', text);
+    fd.append('source_lang', sourceLang);
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/api/transcribe/translate`, { method: 'POST', headers, body: fd });
+    if (!res.ok) throw new Error('translation failed');
+    return res.json();
+  },
 
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),

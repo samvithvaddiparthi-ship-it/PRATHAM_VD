@@ -57,7 +57,13 @@ FALLBACK_SERVICE_ID = {
     "te": "bhashini/iitm/asr-dravidian--gpu--t4",
 }
 
+# Translation (NMT) — AI4Bharat IndicTrans2, the all-languages model. Used for
+# the optional "Show translation" (Hindi/Telugu -> English). Same pipeline flow
+# as ASR, different taskType.
+FALLBACK_NMT_SERVICE_ID = "ai4bharat/indictrans-v2-all-gpu--t4"
+
 _service_id_cache: dict = {}
+_nmt_sid_cache: dict = {}
 
 
 def _ssl_context():
@@ -147,18 +153,12 @@ def get_service_id(lang: str) -> str:
 
 # ── Step 2: inference -> transcript ──────────────────────────────────────────
 
-def transcribe(audio_bytes: bytes, lang: str):
-    """Transcribe audio for `lang`. Returns (text, service_id, ms)."""
-    if not INFERENCE_API_KEY:
-        raise RuntimeError("BHASHINI_INFERENCE_API_KEY not set")
-
+# Inference for one language given pre-encoded base64 WAV (so a multi-language
+# run transcodes the audio only once).
+def _infer_b64(b64: str, lang: str) -> tuple:
     import httpx
 
-    t0 = time.perf_counter()
-    wav = to_wav_bytes(audio_bytes)
-    b64 = base64.b64encode(wav).decode("utf-8")
     service_id = get_service_id(lang)
-
     asr_config = {
         "language": {"sourceLanguage": lang},
         "serviceId": service_id,
@@ -178,7 +178,98 @@ def transcribe(audio_bytes: bytes, lang: str):
         r = client.post(INFERENCE_URL, json=body, headers=headers)
         r.raise_for_status()
         data = r.json()
+    return data["pipelineResponse"][0]["output"][0]["source"], service_id
 
-    text = data["pipelineResponse"][0]["output"][0]["source"]
+
+def transcribe(audio_bytes: bytes, lang: str):
+    """Transcribe audio for `lang`. Returns (text, service_id, ms)."""
+    if not INFERENCE_API_KEY:
+        raise RuntimeError("BHASHINI_INFERENCE_API_KEY not set")
+
+    t0 = time.perf_counter()
+    wav = to_wav_bytes(audio_bytes)
+    b64 = base64.b64encode(wav).decode("utf-8")
+    text, service_id = _infer_b64(b64, lang)
     ms = int((time.perf_counter() - t0) * 1000)
     return text, service_id, ms
+
+
+# ── Translation (NMT): Indic -> English ──────────────────────────────────────
+
+def get_nmt_service_id(src: str, tgt: str) -> str:
+    key = f"{src}->{tgt}"
+    if key in _nmt_sid_cache:
+        return _nmt_sid_cache[key]
+
+    import httpx
+
+    body = {
+        "pipelineTasks": [{"taskType": "translation",
+                           "config": {"language": {"sourceLanguage": src, "targetLanguage": tgt}}}],
+        "pipelineRequestConfig": {"pipelineId": PIPELINE_ID},
+    }
+    headers = {"Authorization": UDYAT_KEY} if UDYAT_KEY else {}
+    try:
+        with httpx.Client(timeout=30, verify=_SSL) as client:
+            r = client.post(CONFIG_URL, json=body, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+        sid = data["pipelineResponseConfig"][0]["config"][0]["serviceId"]
+    except Exception as e:
+        sid = FALLBACK_NMT_SERVICE_ID
+        print(f"[bhashini] NMT config failed for {key} ({type(e).__name__}: {e}); "
+              f"using fallback serviceId={sid}", flush=True)
+    _nmt_sid_cache[key] = sid
+    return sid
+
+
+def translate(text: str, src: str, tgt: str = "en") -> str:
+    """Translate `text` from `src` to `tgt` via Bhashini NMT (IndicTrans2)."""
+    if not INFERENCE_API_KEY:
+        raise RuntimeError("BHASHINI_INFERENCE_API_KEY not set")
+    if not (text or "").strip() or src == tgt:
+        return text
+
+    import httpx
+
+    service_id = get_nmt_service_id(src, tgt)
+    body = {
+        "pipelineTasks": [{"taskType": "translation",
+                           "config": {"language": {"sourceLanguage": src, "targetLanguage": tgt},
+                                      "serviceId": service_id}}],
+        "inputData": {"input": [{"source": text}]},
+    }
+    headers = {"Authorization": INFERENCE_API_KEY, "Content-Type": "application/json"}
+
+    with httpx.Client(timeout=60, verify=_SSL) as client:
+        r = client.post(INFERENCE_URL, json=body, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+    return data["pipelineResponse"][0]["output"][0]["target"]
+
+
+def transcribe_multi(audio_bytes: bytes, langs=("en", "hi", "te")) -> dict:
+    """Transcribe the SAME audio in several languages at once (one transcode,
+    parallel inference). Returns {lang: text}. Used for spoken-language
+    detection — the caller scores the outputs and keeps the best. A failure for
+    one language yields '' for it rather than aborting the others."""
+    if not INFERENCE_API_KEY:
+        raise RuntimeError("BHASHINI_INFERENCE_API_KEY not set")
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    wav = to_wav_bytes(audio_bytes)
+    b64 = base64.b64encode(wav).decode("utf-8")
+
+    out: dict = {}
+
+    def work(l):
+        try:
+            out[l], _ = _infer_b64(b64, l)
+        except Exception as e:
+            out[l] = ""
+            print(f"[bhashini] multi ASR failed for {l}: {type(e).__name__}: {e}", flush=True)
+
+    with ThreadPoolExecutor(max_workers=len(langs)) as ex:
+        list(ex.map(work, langs))
+    return out
