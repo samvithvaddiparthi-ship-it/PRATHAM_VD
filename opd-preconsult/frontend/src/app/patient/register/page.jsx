@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t, tf } from '../../../lib/i18n';
+import { normalizeIndianPhone } from '../../../lib/phone';
 
 export default function Register() {
   const router = useRouter();
@@ -61,9 +62,11 @@ export default function Register() {
       return;
     }
 
-    // Phone validation — must be 10 digits (Indian mobile number)
-    const phone = form.patient_phone.replace(/\s+/g, '');
-    if (!/^[6-9]\d{9}$/.test(phone)) {
+    // Phone validation — accept common input shapes (+91, 0091, leading 0, spaces),
+    // normalize to E.164 (+91XXXXXXXXXX), and reject anything that isn't a valid
+    // Indian mobile (10 digits starting 6-9).
+    const { e164: phone, valid } = normalizeIndianPhone(form.patient_phone);
+    if (!valid) {
       setError(t('err_phone', lang));
       return;
     }
@@ -213,7 +216,20 @@ export default function Register() {
         </div>
         <div>
           <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('phone', lang)} *</label>
-          <input className="input" type="tel" value={form.patient_phone} onChange={e => setForm({ ...form, patient_phone: e.target.value })} />
+          {/* TESTING-ONLY HARD CAP — remove before production. This hard-limits the
+              field to 10 digits for easier testing. For production, restore the
+              +91-aware input:
+                inputMode="tel" maxLength={15} placeholder="9876543210"
+                onChange={e => { let v = e.target.value.replace(/[^\d+]/g,'').replace(/(?!^)\+/g,''); setForm({ ...form, patient_phone: v }); }}
+              The submit handler and the backend already normalize via normalizeIndianPhone,
+              so production input shapes (+91, 0091, leading 0) keep working once restored. */}
+          <input className="input" type="tel" inputMode="numeric" maxLength={10}
+            placeholder="9876543210"
+            value={form.patient_phone}
+            onChange={e => setForm({ ...form, patient_phone: e.target.value.replace(/\D/g, '').slice(0, 10) })} />
+          <p style={{ fontSize: 11, color: '#B7791F', background: '#FFF8E1', border: '1px dashed #F0C36D', borderRadius: 6, padding: '4px 8px', marginTop: 4 }}>
+            ⚠️ Testing: phone is hard-capped to 10 digits. Remove this cap before production.
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>

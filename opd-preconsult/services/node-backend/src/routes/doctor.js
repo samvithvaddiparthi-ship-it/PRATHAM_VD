@@ -76,11 +76,72 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Edit a doctor's details (admin endpoint — no auth for POC).
+// Updates only the fields provided. `pin` is optional: send it to reset the
+// PIN, omit/blank it to keep the existing one (we never expose the live PIN).
+router.patch('/:id', async (req, res) => {
+  try {
+    const { name, department, phone, pin } = req.body;
+    const sets = [];
+    const params = [];
+
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty' });
+      params.push(String(name).trim()); sets.push(`name = $${params.length}`);
+    }
+    if (department !== undefined) {
+      if (!String(department).trim()) return res.status(400).json({ error: 'department cannot be empty' });
+      params.push(String(department).toUpperCase()); sets.push(`department = $${params.length}`);
+    }
+    if (phone !== undefined) {
+      if (!String(phone).trim()) return res.status(400).json({ error: 'phone cannot be empty' });
+      params.push(String(phone).trim()); sets.push(`phone = $${params.length}`);
+    }
+    if (pin !== undefined && pin !== '') {
+      if (pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) {
+        return res.status(400).json({ error: 'PIN must be 4-6 digits' });
+      }
+      params.push(hashPin(pin)); sets.push(`pin_hash = $${params.length}`);
+    }
+
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+
+    params.push(req.params.id);
+    const result = await pool.query(
+      `UPDATE doctors SET ${sets.join(', ')} WHERE id = $${params.length}
+       RETURNING id, name, department, phone, is_active, created_at`,
+      params
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Doctor not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Phone number already registered' });
+    }
+    console.error('edit doctor error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Deactivate a doctor (soft delete)
 router.post('/:id/deactivate', async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE doctors SET is_active = false WHERE id = $1 RETURNING id, name, is_active`,
+      [req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Doctor not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Reactivate a doctor (undo a soft delete)
+router.post('/:id/reactivate', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE doctors SET is_active = true WHERE id = $1 RETURNING id, name, is_active`,
       [req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Doctor not found' });

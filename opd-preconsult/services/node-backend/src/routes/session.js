@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { signToken, authMiddleware } = require('../middleware/auth');
+const { normalizeIndianPhone } = require('../utils/phone');
 
 const router = Router();
 
@@ -46,13 +47,21 @@ router.post('/register', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Name and phone required' });
     }
 
+    // Normalize the phone to canonical E.164 (+91XXXXXXXXXX) and reject anything
+    // that isn't a valid Indian mobile — don't trust the client's formatting. We
+    // store and match on this normalized form everywhere below.
+    const { e164: normalizedPhone, valid: phoneValid } = normalizeIndianPhone(patient_phone);
+    if (!phoneValid) {
+      return res.status(400).json({ error: 'Invalid phone number' });
+    }
+
     const result = await pool.query(
       `UPDATE sessions SET
         patient_name = $1, patient_phone = $2, patient_age = $3,
         patient_gender = $4, language = COALESCE($5, language),
         state = 'REGISTERED', updated_at = NOW()
        WHERE id = $6 RETURNING *`,
-      [patient_name, patient_phone, patient_age || null, patient_gender || null, language, session_id]
+      [patient_name, normalizedPhone, patient_age || null, patient_gender || null, language, session_id]
     );
 
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
@@ -72,7 +81,7 @@ router.post('/register', authMiddleware, async (req, res) => {
           AND removed_at IS NULL
         ORDER BY created_at DESC
         LIMIT 5`,
-      [patient_phone, session_id]
+      [normalizedPhone, session_id]
     );
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS count
@@ -81,7 +90,7 @@ router.post('/register', authMiddleware, async (req, res) => {
           AND id <> $2
           AND state = 'COMPLETE'
           AND removed_at IS NULL`,
-      [patient_phone, session_id]
+      [normalizedPhone, session_id]
     );
 
     res.json({
@@ -144,7 +153,12 @@ router.post('/state', authMiddleware, async (req, res) => {
 // Get session by ID
 router.get('/:id', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM sessions WHERE id = $1', [req.params.id]);
+    const result = await pool.query(
+      `SELECT s.*, COALESCE(d.collect_vitals, true) AS collect_vitals
+       FROM sessions s LEFT JOIN departments d ON d.code = s.department
+       WHERE s.id = $1`,
+      [req.params.id]
+    );
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
     res.json(result.rows[0]);
   } catch (err) {

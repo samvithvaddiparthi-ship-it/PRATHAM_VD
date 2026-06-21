@@ -77,8 +77,9 @@ export default function Done() {
         )}
 
         {/* Vitals: accordion tile (matches the Queue-Number tile) — late entry
-            when missing, or update when already recorded. */}
-        {vitalsChecked && (
+            when missing, or update when already recorded. Only shown when the
+            patient's department collects vitals. */}
+        {vitalsChecked && session?.collect_vitals && (
           <div style={{ width: '100%', background: 'var(--bg)', borderRadius: 12, overflow: 'hidden', textAlign: 'left' }}>
             <button type="button" onClick={() => { setVErr(''); setOpen(o => !o); }} aria-expanded={open}
               style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12,

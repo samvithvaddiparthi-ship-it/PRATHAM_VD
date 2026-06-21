@@ -150,21 +150,21 @@ export default function HISPage() {
           <button className={`btn ${tab === 'sessions' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('sessions')}>Patients</button>
+          <button className={`btn ${tab === 'analytics' ? 'btn-primary' : 'btn-outline'}`}
+            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            onClick={() => setTab('analytics')}>Analytics</button>
+          <button className={`btn ${tab === 'departments' ? 'btn-primary' : 'btn-outline'}`}
+            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            onClick={() => setTab('departments')}>Departments</button>
           <button className={`btn ${tab === 'doctors' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('doctors')}>Doctors</button>
           <button className={`btn ${tab === 'questions' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('questions')}>Questionnaires</button>
-          <button className={`btn ${tab === 'departments' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('departments')}>Departments</button>
           <button className={`btn ${tab === 'protocols' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('protocols')}>Protocols</button>
-          <button className={`btn ${tab === 'analytics' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('analytics')}>Analytics</button>
           <button className={`btn ${tab === 'formulary' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('formulary')}>Drug Formulary</button>
@@ -508,6 +508,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
   const [search, setSearch] = useState('');   // doctor name / department search
   const [selected, setSelected] = useState(null);   // doctor detail drawer
   const [showAdd, setShowAdd] = useState(false);     // add-doctor modal
+  const [showEdit, setShowEdit] = useState(false);   // edit-doctor modal
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
@@ -531,6 +532,21 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
     }))) return;
     try {
       await api.deactivateDoctor(doctor.id);
+      setSelected(null);
+      onChange();
+    } catch (err) {
+      toast('Failed: ' + err.message, 'error');
+    }
+  }
+
+  async function handleReactivate(doctor) {
+    if (!(await confirm({
+      title: `Reactivate ${doctor.name}?`,
+      message: 'They will be able to log in and take patients again.',
+      confirmLabel: 'Reactivate',
+    }))) return;
+    try {
+      await api.reactivateDoctor(doctor.id);
       setSelected(null);
       onChange();
     } catch (err) {
@@ -742,10 +758,20 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
                 {cell('Last Consult', st.lastAt ? fmtDateTime(st.lastAt) : '—', null, true)}
               </div>
 
-              {selected.is_active && (
+              <button onClick={() => setShowEdit(true)}
+                style={{ marginTop: 18, width: '100%', height: 42, borderRadius: 10, background: '#fff', color: 'var(--primary)', border: '1px solid #CBD5E0', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                Edit details
+              </button>
+
+              {selected.is_active ? (
                 <button onClick={() => handleDeactivate(selected)}
-                  style={{ marginTop: 18, width: '100%', height: 42, borderRadius: 10, background: '#FDEDEC', color: '#C0392B', border: '1px solid #F1B0A8', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#FDEDEC', color: '#C0392B', border: '1px solid #F1B0A8', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
                   Deactivate doctor
+                </button>
+              ) : (
+                <button onClick={() => handleReactivate(selected)}
+                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#D5F5E3', color: '#1E8449', border: '1px solid #A9DFBF', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  Reactivate doctor
                 </button>
               )}
             </div>
@@ -756,6 +782,13 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
       {/* Add-doctor modal */}
       {showAdd && (
         <AddDoctorModal depts={depts} onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onChange(); }} />
+      )}
+
+      {/* Edit-doctor modal */}
+      {showEdit && selected && (
+        <EditDoctorModal doctor={selected} depts={depts}
+          onClose={() => setShowEdit(false)}
+          onSaved={() => { setShowEdit(false); setSelected(null); onChange(); }} />
       )}
       <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 10 }}>
         All-time stats. “Avg. Consult” is the mean time from a doctor locking a patient to clicking Save &amp; Generate QR.
@@ -829,6 +862,87 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
             <button type="button" className="btn btn-outline" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
               {saving ? 'Adding...' : 'Add Doctor'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  );
+}
+
+// Edit-doctor modal — opened from the doctor detail drawer. Pre-fills the current
+// details; the PIN field is optional (blank = keep the existing PIN, never shown).
+function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: doctor.name || '', department: doctor.department || 'CARD', phone: doctor.phone || '', pin: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    if (form.pin && (form.pin.length < 4 || form.pin.length > 6)) { setError('PIN must be 4-6 digits'); return; }
+    setSaving(true);
+    try {
+      const payload = { name: form.name, department: form.department, phone: form.phone };
+      if (form.pin) payload.pin = form.pin;   // omit to keep current PIN
+      await api.updateDoctor(doctor.id, payload);
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  }
+
+  // Make sure the doctor's current department is selectable even if it's inactive.
+  const deptOptions = depts.filter(d => d.is_active || d.code === doctor.department);
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+        width: 400, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Edit Doctor</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Name *</label>
+            <input className="input" required value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Ravi Kumar" />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Department *</label>
+            <select className="input" value={form.department}
+              onChange={e => setForm({ ...form, department: e.target.value })}>
+              {deptOptions.map(d => (
+                <option key={d.code} value={d.code}>{d.name} ({d.code})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Phone *</label>
+            <input className="input" type="tel" required value={form.phone}
+              onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Reset PIN (4-6 digits)</label>
+            <input className="input" type="password" inputMode="numeric" maxLength={6} value={form.pin}
+              onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
+              placeholder="Leave blank to keep current" style={{ letterSpacing: form.pin ? 4 : 0 }} />
+          </div>
+
+          {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button type="button" className="btn btn-outline" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
+              {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -1196,7 +1310,7 @@ function QuestionsManager({ depts = [] }) {
 
 
 function DepartmentsManager({ depts, onChange }) {
-  const [form, setForm] = useState({ code: '', name: '' });
+  const [form, setForm] = useState({ code: '', name: '', collect_vitals: true });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -1211,12 +1325,23 @@ function DepartmentsManager({ depts, onChange }) {
     try {
       const created = await api.createDepartment(form);
       setSuccess(`Department "${created.name}" (${created.code}) added`);
-      setForm({ code: '', name: '' });
+      setForm({ code: '', name: '', collect_vitals: true });
       onChange();
     } catch (err) {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Flip a department's "collect vitals" toggle. When off, the patient flow skips
+  // the vitals step and the done page hides the vitals tile for that department.
+  async function handleToggleVitals(d) {
+    try {
+      await api.updateDepartment(d.code, { collect_vitals: !d.collect_vitals });
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
     }
   }
 
@@ -1255,6 +1380,11 @@ function DepartmentsManager({ depts, onChange }) {
               onChange={e => setForm({ ...form, name: e.target.value })}
               placeholder="Orthopaedics" />
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.collect_vitals}
+              onChange={e => setForm({ ...form, collect_vitals: e.target.checked })} />
+            Collect vitals from patients
+          </label>
           {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
           {success && <p style={{ color: 'var(--green)', fontSize: 13 }}>{success}</p>}
           <button className="btn btn-primary" type="submit" disabled={saving}>
@@ -1277,6 +1407,7 @@ function DepartmentsManager({ depts, onChange }) {
             <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 13 }}>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Code</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Name</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Collect Vitals</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>QR Payload</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Actions</th>
             </tr>
@@ -1290,6 +1421,15 @@ function DepartmentsManager({ depts, onChange }) {
                 <tr key={d.code} style={{ borderBottom: '1px solid #F0F0F0' }}>
                   <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 600 }}>{d.code}</td>
                   <td style={{ padding: '10px 12px', fontSize: 14 }}>{d.name}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <button onClick={() => handleToggleVitals(d)}
+                      title="Toggle whether patients in this department are asked for vitals"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', borderRadius: 999, padding: '4px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: d.collect_vitals ? '#D5F5E3' : '#F8F9FA', color: d.collect_vitals ? '#1E8449' : 'var(--text-light)' }}>
+                      <span style={{ fontSize: 14 }}>{d.collect_vitals ? '✅' : '⚪'}</span>
+                      {d.collect_vitals ? 'On' : 'Off'}
+                    </button>
+                  </td>
                   <td style={{ padding: '10px 12px' }}>
                     <button onClick={() => { navigator.clipboard?.writeText(qr); toast('QR payload copied to clipboard', 'success'); }}
                       style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t } from '../../../lib/i18n';
@@ -12,16 +12,36 @@ export default function Vitals() {
   const [requiredVitals, setRequiredVitals] = useState([]);
   const [requiredTests, setRequiredTests] = useState([]);
   const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);   // false until we know whether to show the form
+  const finalizing = useRef(false);             // one-shot guard for the auto-skip path
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
     const token = sessionStorage.getItem('token');
     if (token) setToken(token);
 
-    // Check protocols for required vitals/tests
     const sessionId = sessionStorage.getItem('session_id');
-    if (sessionId) {
-      api.evaluateProtocols(sessionId).then(data => {
+    if (!sessionId) { setReady(true); return; }
+
+    (async () => {
+      // Vitals are collected per-department. If this patient's department has the
+      // toggle OFF, skip the form entirely: finalize the pre-consult and go straight
+      // to the done page (no vitals shown here or there). Default to collecting on
+      // any read error so we never silently drop required vitals.
+      let collect = true;
+      try {
+        const s = await api.getSession(sessionId);
+        collect = s?.collect_vitals !== false;
+      } catch { /* keep default true */ }
+
+      if (!collect) {
+        if (!finalizing.current) { finalizing.current = true; finish({}); }
+        return;
+      }
+
+      // Department collects vitals — load protocol-required vitals/tests, then show the form.
+      try {
+        const data = await api.evaluateProtocols(sessionId);
         const vitals = [];
         const tests = [];
         (data.matched_protocols || []).forEach(p => {
@@ -30,8 +50,9 @@ export default function Vitals() {
         });
         setRequiredVitals([...new Set(vitals)]);
         setRequiredTests([...new Set(tests)]);
-      }).catch(() => {});
-    }
+      } catch {}
+      setReady(true);
+    })();
   }, []);
 
   // Complete the pre-consult: save whatever vitals we have (possibly none),
@@ -98,6 +119,16 @@ export default function Vitals() {
       </button>
     </>
   );
+
+  // While deciding whether to show the form (or auto-finalizing for a no-vitals
+  // department), show a loader so the form never flashes.
+  if (!ready) {
+    return (
+      <div className="screen" style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <p>{t('generating_report', lang)}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="screen">

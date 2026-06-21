@@ -37,6 +37,7 @@ export const api = {
   // Admin — Departments
   getDepartments: () => apiFetch('/api/admin/departments'),
   createDepartment: (data) => apiFetch('/api/admin/departments', { method: 'POST', body: JSON.stringify(data) }),
+  updateDepartment: (code, data) => apiFetch(`/api/admin/departments/${code}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteDepartment: (code) => apiFetch(`/api/admin/departments/${code}`, { method: 'DELETE' }),
 
   // Admin — Questionnaire management
@@ -144,7 +145,9 @@ export const api = {
   doctorChangePin: (old_pin, new_pin) => apiFetch('/api/doctor/change-pin', { method: 'POST', body: JSON.stringify({ old_pin, new_pin }) }),
   listDoctors: (department) => apiFetch(`/api/doctor${department ? '?department=' + department : ''}`),
   createDoctor: (data) => apiFetch('/api/doctor', { method: 'POST', body: JSON.stringify(data) }),
+  updateDoctor: (id, data) => apiFetch(`/api/doctor/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deactivateDoctor: (id) => apiFetch(`/api/doctor/${id}/deactivate`, { method: 'POST' }),
+  reactivateDoctor: (id) => apiFetch(`/api/doctor/${id}/reactivate`, { method: 'POST' }),
   allSessions: (params) => apiFetch(`/api/doctor/all-sessions?${new URLSearchParams(params || {})}`),
 
   // Prescription

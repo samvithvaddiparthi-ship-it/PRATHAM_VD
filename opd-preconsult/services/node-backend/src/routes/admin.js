@@ -15,8 +15,8 @@ router.get('/departments', async (req, res) => {
   } catch (err) {
     // Table may not exist yet — return hardcoded defaults
     res.json([
-      { code: 'CARD', name: 'Cardiology', is_active: true },
-      { code: 'GEN', name: 'General Medicine', is_active: true },
+      { code: 'CARD', name: 'Cardiology', is_active: true, collect_vitals: true },
+      { code: 'GEN', name: 'General Medicine', is_active: true, collect_vitals: true },
     ]);
   }
 });
@@ -24,14 +24,14 @@ router.get('/departments', async (req, res) => {
 // Create department
 router.post('/departments', async (req, res) => {
   try {
-    const { code, name } = req.body;
+    const { code, name, collect_vitals } = req.body;
     if (!code || !name) return res.status(400).json({ error: 'code and name required' });
     const cleanCode = code.toUpperCase().replace(/[^A-Z0-9_]/g, '');
     if (cleanCode.length < 2) return res.status(400).json({ error: 'Code must be at least 2 characters (letters/numbers only)' });
 
     const result = await pool.query(
-      'INSERT INTO departments (code, name) VALUES ($1, $2) RETURNING *',
-      [cleanCode, name]
+      'INSERT INTO departments (code, name, collect_vitals) VALUES ($1, $2, $3) RETURNING *',
+      [cleanCode, name, collect_vitals === undefined ? true : !!collect_vitals]
     );
 
     // Seed the shared base intake questions for the new department so it starts
@@ -50,6 +50,36 @@ router.post('/departments', async (req, res) => {
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Department code already exists' });
     console.error('create department error:', err);
+    sendServerError(res, err);
+  }
+});
+
+// Update a department (name and/or the collect_vitals toggle). Only the provided
+// fields are changed.
+router.patch('/departments/:code', async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const { name, collect_vitals } = req.body;
+    const sets = [];
+    const params = [];
+
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty' });
+      params.push(String(name).trim()); sets.push(`name = $${params.length}`);
+    }
+    if (collect_vitals !== undefined) {
+      params.push(!!collect_vitals); sets.push(`collect_vitals = $${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+
+    params.push(code);
+    const result = await pool.query(
+      `UPDATE departments SET ${sets.join(', ')} WHERE code = $${params.length} RETURNING *`,
+      params
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Department not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
     sendServerError(res, err);
   }
 });
