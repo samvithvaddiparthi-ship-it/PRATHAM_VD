@@ -28,8 +28,9 @@ def has_vision():
     """Returns True if a vision-capable API key is available."""
     oai = os.getenv("OPENAI_API_KEY", "").strip()
     gem = os.getenv("GEMINI_API_KEY", "").strip()
+    grq = os.getenv("GROQ_API_KEY", "").strip()
     ant = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    return bool(oai) or bool(gem) or (bool(ant) and ant != "your_key_here")
+    return bool(oai) or bool(gem) or bool(grq) or (bool(ant) and ant != "your_key_here")
 
 
 def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> str:
@@ -83,9 +84,10 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
 def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str = "image/jpeg", max_tokens: int = 1500) -> str:
     """
     Send system prompt + image + text to a vision-capable model.
-    Priority: Gemini Vision (free) → OpenAI GPT-4o → Anthropic Claude Vision
+    Priority: Gemini Vision (free) → Groq Llama-4 Vision (free) → OpenAI GPT-4o → Anthropic Claude Vision
     """
     gem_key = os.getenv("GEMINI_API_KEY", "").strip()
+    grq_key = os.getenv("GROQ_API_KEY", "").strip()
     oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ant_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
@@ -94,7 +96,15 @@ def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, 
         try:
             return _gemini_vision_complete(gem_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
         except Exception as e:
-            logger.warning(f"Gemini vision failed, trying OpenAI: {e}")
+            logger.warning(f"Gemini vision failed, trying Groq: {e}")
+
+    # Groq multimodal (Llama 4 Scout) — free; the main fallback when Gemini's
+    # daily quota is spent, so OCR doesn't silently drop to local Tesseract.
+    if grq_key:
+        try:
+            return _groq_vision_complete(grq_key, system_prompt, user_text, image_bytes, mime_type, max_tokens)
+        except Exception as e:
+            logger.warning(f"Groq vision failed, trying OpenAI: {e}")
 
     # Fall back to OpenAI GPT-4o
     if oai_key:
@@ -220,6 +230,34 @@ def _openai_vision_complete(api_key: str, system_prompt: str, user_text: str, im
 
     response = client.chat.completions.create(
         model="gpt-4o",
+        max_tokens=max_tokens,
+        temperature=0.1,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                    {"type": "text", "text": user_text},
+                ],
+            },
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def _groq_vision_complete(api_key: str, system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> str:
+    """Groq multimodal vision via its OpenAI-compatible API. Default model is
+    Llama 4 Scout (override with GROQ_VISION_MODEL). Same image_url format as the
+    OpenAI vision path. Free fallback for when the Gemini quota is exhausted."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1", timeout=LLM_TIMEOUT)
+    model = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=max_tokens,
         temperature=0.1,
         messages=[
