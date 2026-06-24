@@ -246,30 +246,3 @@ def translate(text: str, src: str, tgt: str = "en") -> str:
         r.raise_for_status()
         data = r.json()
     return data["pipelineResponse"][0]["output"][0]["target"]
-
-
-def transcribe_multi(audio_bytes: bytes, langs=("en", "hi", "te")) -> dict:
-    """Transcribe the SAME audio in several languages at once (one transcode,
-    parallel inference). Returns {lang: text}. Used for spoken-language
-    detection — the caller scores the outputs and keeps the best. A failure for
-    one language yields '' for it rather than aborting the others."""
-    if not INFERENCE_API_KEY:
-        raise RuntimeError("BHASHINI_INFERENCE_API_KEY not set")
-
-    from concurrent.futures import ThreadPoolExecutor
-
-    wav = to_wav_bytes(audio_bytes)
-    b64 = base64.b64encode(wav).decode("utf-8")
-
-    out: dict = {}
-
-    def work(l):
-        try:
-            out[l], _ = _infer_b64(b64, l)
-        except Exception as e:
-            out[l] = ""
-            print(f"[bhashini] multi ASR failed for {l}: {type(e).__name__}: {e}", flush=True)
-
-    with ThreadPoolExecutor(max_workers=len(langs)) as ex:
-        list(ex.map(work, langs))
-    return out

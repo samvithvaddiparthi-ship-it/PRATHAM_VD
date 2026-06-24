@@ -25,40 +25,6 @@ router = APIRouter(prefix="/api/transcribe", tags=["transcribe"])
 STAGE2_LANGS = ("en", "hi", "te")
 
 
-def _native_count(text: str, lang: str) -> int:
-    """How many of a transcript's letters fall in `lang`'s native script. Each
-    ASR model always emits its OWN script, so a *ratio* can't compare them — but
-    the model fed the language it was actually built for produces a real,
-    substantial transcript, while a model fed mismatched audio produces only a
-    short garbled fragment. So the native-character COUNT is the discriminator."""
-    letters = [c for c in (text or "") if c.isalpha()]
-    if lang == "hi":
-        return sum(1 for c in letters if 0x0900 <= ord(c) <= 0x097F)
-    if lang == "te":
-        return sum(1 for c in letters if 0x0C00 <= ord(c) <= 0x0C7F)
-    return sum(1 for c in letters if c.isascii())  # en
-
-
-# Minimum native-script characters before we trust an Indic transcription over
-# English (guards against a stray word the wrong model hallucinates).
-_INDIC_MIN_CHARS = 4
-
-
-def _detect_lang(results: dict, prefer: str = "en") -> str:
-    """Pick the SPOKEN language from the per-language ASR outputs. The Indic
-    model that produced the most native-script content wins (Hindi vs Telugu);
-    if neither produced a meaningful amount, it's English when the English run
-    has text, else the form language `prefer`."""
-    hi_c = _native_count(results.get("hi", ""), "hi")
-    te_c = _native_count(results.get("te", ""), "te")
-    best, best_c = ("hi", hi_c) if hi_c >= te_c else ("te", te_c)
-    if best_c >= _INDIC_MIN_CHARS:
-        return best
-    if (results.get("en", "") or "").strip():
-        return "en"
-    return prefer
-
-
 @router.get("/health")
 async def health():
     return {"bhashini": asr.have_keys(), "llm": _llm.have_llm()}
@@ -95,34 +61,26 @@ async def transcribe(
     if lang not in STAGE2_LANGS:
         raise HTTPException(status_code=400, detail=f"Unsupported language: {lang}")
 
-    # ── Stage 1: Bhashini ASR with SPOKEN-language detection ──
-    # The form language (`lang`) is only a PRIOR/tiebreak. We transcribe in all
-    # three languages at once and keep the one that matches what was actually
-    # spoken, so Hindi speech shows Devanagari and Telugu speech shows Telugu —
-    # regardless of which language was chosen at the start of the form.
-    raw, bhashini_ok, detected = "", False, lang
+    # ── Stage 1: Bhashini ASR in the CHOSEN language ──
+    # `lang` is the language the patient explicitly chose to speak in (picked
+    # once on the first voice question, applied to every mic after). No
+    # detection — the chosen language is authoritative, so there are no
+    # detection errors and Hindi/Telugu/English each transcribe cleanly.
+    raw, bhashini_ok = "", False
     if asr.have_keys():
         try:
-            results = asr.transcribe_multi(contents, ("en", "hi", "te"))
-            detected = _detect_lang(results, prefer=lang)
-            raw = results.get(detected, "") or ""
-            bhashini_ok = any((v or "").strip() for v in results.values())
+            raw, _service_id, _ms1 = asr.transcribe(contents, lang)
+            bhashini_ok = True
         except Exception as e:
-            print(f"[transcribe] Bhashini multi-ASR failed: {type(e).__name__}: {e}", flush=True)
-            # Fall back to a single transcription in the form language.
-            try:
-                raw, _service_id, _ms1 = asr.transcribe(contents, lang)
-                detected, bhashini_ok = lang, True
-            except Exception as e2:
-                print(f"[transcribe] fallback ASR failed: {type(e2).__name__}: {e2}", flush=True)
+            print(f"[transcribe] Bhashini ASR failed: {type(e).__name__}: {e}", flush=True)
 
-    # ── Stage 2: medical correction in the DETECTED language ──
+    # ── Stage 2: medical correction in the chosen language ──
     text = raw
     llm_used = False
     changes = []
     if raw.strip():
         try:
-            c = medcorrect.correct(raw, detected, patient_name=patient_name)
+            c = medcorrect.correct(raw, lang, patient_name=patient_name)
             text = c.get("corrected") or raw
             llm_used = bool(c.get("llm_used"))
             changes = c.get("changes") or []
@@ -149,9 +107,8 @@ async def transcribe(
             print(f"[transcribe] clip store failed (non-fatal): {type(e).__name__}: {e}", flush=True)
 
     return {
-        "text": text,                  # corrected transcript in the SPOKEN language
-        "lang": detected,              # language actually detected from the audio
-        "form_lang": lang,             # language chosen on the form (prior)
+        "text": text,                  # corrected transcript in the chosen language
+        "lang": lang,                  # the language the patient chose to speak in
         "bhashini_ok": bhashini_ok,    # Stage-1 produced a transcript
         "llm_used": llm_used,
         "llm_enabled": _llm.have_llm(),

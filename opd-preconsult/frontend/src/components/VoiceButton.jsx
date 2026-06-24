@@ -1,11 +1,13 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 
 // Records the patient's answer as ONE continuous audio clip with pause/resume
 // buffering (pause + resume append to the same recording, never a new clip).
 // On Stop the single blob is handed to the parent for Bhashini transcription.
 // onResult(audioBlob, durationMs). `labels` lets the parent localise the text.
-export default function VoiceButton({ onResult, labels = {} }) {
+// `onMicTap` (optional) intercepts the idle mic tap so the parent can, e.g.,
+// ask which language to speak in first; the parent then calls start() via ref.
+const VoiceButton = forwardRef(function VoiceButton({ onResult, labels = {}, onMicTap }, ref) {
   const [status, setStatus] = useState('idle');   // idle | recording | paused
   const [elapsed, setElapsed] = useState(0);       // active ms (excludes pauses)
   const [supported, setSupported] = useState(true);
@@ -15,6 +17,10 @@ export default function VoiceButton({ onResult, labels = {} }) {
   const accumRef = useRef(0);
   const segStartRef = useRef(0);
   const tickRef = useRef(null);
+  // Always call the LATEST onResult — `start` is frozen by useImperativeHandle,
+  // so without this it would call a stale onResult that captured an old language.
+  const onResultRef = useRef(onResult);
+  onResultRef.current = onResult;
 
   const L = {
     speak: labels.speak || 'Tap to speak',
@@ -30,6 +36,9 @@ export default function VoiceButton({ onResult, labels = {} }) {
     setSupported(typeof MediaRecorder !== 'undefined' && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
     return () => { clearInterval(tickRef.current); try { streamRef.current?.getTracks().forEach(t => t.stop()); } catch {} };
   }, []);
+
+  // Let the parent trigger recording imperatively (after picking a language).
+  useImperativeHandle(ref, () => ({ start }), []);
 
   function startTick() {
     clearInterval(tickRef.current);
@@ -53,7 +62,7 @@ export default function VoiceButton({ onResult, labels = {} }) {
     accumRef.current = 0;
     segStartRef.current = 0;
     setElapsed(0);
-    if (blob) onResult(blob, dur);
+    if (blob) onResultRef.current(blob, dur);
   }
 
   async function start() {
@@ -114,7 +123,7 @@ export default function VoiceButton({ onResult, labels = {} }) {
   if (status === 'idle') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-        <button type="button" onClick={start} aria-label={L.speak}
+        <button type="button" onClick={() => (onMicTap ? onMicTap() : start())} aria-label={L.speak}
           style={{ width: 64, height: 64, borderRadius: '50%', border: 'none', cursor: 'pointer',
             background: 'var(--secondary)', color: '#fff', fontSize: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 4px 14px rgba(46,134,171,0.35)', transition: 'transform 0.1s' }}>🎤</button>
@@ -146,7 +155,9 @@ export default function VoiceButton({ onResult, labels = {} }) {
       <style>{`@keyframes vbpulse { 0%,100%{opacity:1} 50%{opacity:.25} }`}</style>
     </div>
   );
-}
+});
+
+export default VoiceButton;
 
 function ctrlBtn(bg, color, border) {
   return {

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import VoiceButton from './VoiceButton';
 import { api } from '../lib/api';
 import { t } from '../lib/i18n';
@@ -16,24 +16,43 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [ocrResult, setOcrResult] = useState(null);
   const [inputError, setInputError] = useState('');
   const [transcribing, setTranscribing] = useState(false);   // Bhashini round-trip in progress
-  const [detectedLang, setDetectedLang] = useState('');      // language detected from speech
   const [translation, setTranslation] = useState('');        // English translation (NMT)
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
+  // The language the patient chose to SPEAK in — picked once on the first voice
+  // question, persisted in sessionStorage, then applied to every mic after.
+  const [voiceLang, setVoiceLang] = useState(() => {
+    if (typeof window !== 'undefined') return sessionStorage.getItem('voice_lang') || '';
+    return '';
+  });
+  const [showLangPicker, setShowLangPicker] = useState(false);
+  const voiceRef = useRef(null);        // imperative handle on VoiceButton (start)
 
   useEffect(() => {
     setValue(initialValue);
     setInputError('');
     setTranscribing(false);
-    setDetectedLang('');
     setTranslation(''); setShowTranslation(false); setTranslating(false);
   }, [question?.id]);
 
   // Any edit/new transcription invalidates a previously-fetched translation.
   function resetTranslation() { setTranslation(''); setShowTranslation(false); }
 
-  // Friendly name for a detected language code.
-  const langName = (code) => ({ en: 'English', hi: 'हिन्दी (Hindi)', te: 'తెలుగు (Telugu)' }[code] || code);
+  // Friendly name for a language code (own script).
+  const langName = (code) => ({ en: 'English', hi: 'हिन्दी', te: 'తెలుగు' }[code] || code);
+
+  // Mic tap: if a voice language is already chosen, record straight away;
+  // otherwise ask which language to speak in first. Recording does NOT start on
+  // its own — after choosing, the patient taps the mic again to begin.
+  function handleMicTap() {
+    if (voiceLang) { voiceRef.current?.start(); }
+    else { setShowLangPicker(true); }
+  }
+  function chooseVoiceLang(code) {
+    setVoiceLang(code);
+    try { sessionStorage.setItem('voice_lang', code); } catch {}
+    setShowLangPicker(false);   // just set the language; patient taps mic to record
+  }
 
   const text = question[`text_${lang}`] || question.text_en;
   const options = question.options_json || [];
@@ -63,9 +82,9 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     try { patientName = JSON.parse(sessionStorage.getItem('register_form') || '{}').patient_name || ''; } catch {}
     try {
       const sessionId = sessionStorage.getItem('session_id');
-      const res = await api.transcribeVoice(blob, { lang, sessionId, questionId: question.id, patientName, durationMs: durMs });
+      const res = await api.transcribeVoice(blob, { lang: voiceLang || lang, sessionId, questionId: question.id, patientName, durationMs: durMs });
       const t = (res && res.text || '').trim();
-      if (t) { setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${t}` : t); setDetectedLang(res.lang || ''); resetTranslation(); }
+      if (t) { setValue(prev => (prev && prev.trim()) ? `${prev.trim()} ${t}` : t); resetTranslation(); }
       else setInputError(lang === 'hi' ? 'समझ नहीं पाए — कृपया फिर बोलें या टाइप करें।' : lang === 'te' ? 'వినలేకపోయాం — దయచేసి మళ్ళీ చెప్పండి లేదా టైప్ చేయండి.' : "Couldn't catch that — please speak again or type.");
     } catch {
       setInputError(lang === 'hi' ? 'ट्रांसक्रिप्शन विफल — कृपया टाइप करें।' : lang === 'te' ? 'ట్రాన్స్క్రిప్షన్ విఫలమైంది — దయచేసి టైప్ చేయండి.' : 'Transcription failed — please type your answer.');
@@ -77,7 +96,6 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   function clearAnswer() {
     setValue('');
     setInputError('');
-    setDetectedLang('');
     resetTranslation();
   }
 
@@ -87,7 +105,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     if (translation) { setShowTranslation(true); return; }
     setTranslating(true);
     try {
-      const r = await api.translateText(value, detectedLang);
+      const r = await api.translateText(value, voiceLang);
       setTranslation((r && r.english) || '');
       setShowTranslation(true);
     } catch {
@@ -180,9 +198,9 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
             placeholder={lang === 'hi' ? 'बोलें या यहाँ टाइप करें...' : lang === 'te' ? 'మాట్లాడండి లేదా ఇక్కడ టైప్ చేయండి...' : 'Speak or type here...'}
           />
 
-          {/* Show English translation — only when the answer is in Hindi/Telugu.
-              On-demand Bhashini NMT (no LLM); fetched once then toggled. */}
-          {detectedLang && detectedLang !== 'en' && value.trim() && (
+          {/* Show English translation — only when the chosen voice language is
+              Hindi/Telugu. On-demand Bhashini NMT (no LLM); fetched once then toggled. */}
+          {voiceLang && voiceLang !== 'en' && value.trim() && (
             <div>
               <button type="button" onClick={handleShowTranslation} disabled={translating}
                 style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer',
@@ -202,21 +220,51 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
           {/* Microphone control */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, margin: '2px 0' }}>
-            <VoiceButton onResult={handleVoiceResult} labels={vLabels} />
+            <VoiceButton ref={voiceRef} onResult={handleVoiceResult} onMicTap={handleMicTap} labels={vLabels} />
             {transcribing && (
               <span style={{ fontSize: 13, color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ width: 13, height: 13, border: '2px solid #cfe0ec', borderTopColor: 'var(--secondary)', borderRadius: '50%', display: 'inline-block', animation: 'qcspin 0.7s linear infinite' }} />
                 {lang === 'hi' ? 'लिख रहे हैं…' : lang === 'te' ? 'రాస్తున్నాం…' : 'Transcribing…'}
               </span>
             )}
-            {!transcribing && detectedLang && (
+            {!transcribing && voiceLang && (
               <span style={{ fontSize: 12, color: 'var(--text-light)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block' }} />
-                {lang === 'hi' ? 'पहचानी गई भाषा' : lang === 'te' ? 'గుర్తించిన భాష' : 'Detected language'}: <strong style={{ color: 'var(--text)' }}>{langName(detectedLang)}</strong>
+                {lang === 'hi' ? 'भाषा' : lang === 'te' ? 'భాష' : 'Language'}: <strong style={{ color: 'var(--text)' }}>{langName(voiceLang)}</strong>
+                <button type="button" onClick={() => setShowLangPicker(true)}
+                  style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: 0, textDecoration: 'underline' }}>
+                  {lang === 'hi' ? 'बदलें' : lang === 'te' ? 'మార్చు' : 'change'}
+                </button>
               </span>
             )}
           </div>
           <style>{`@keyframes qcspin { to { transform: rotate(360deg) } }`}</style>
+
+          {/* Voice-language picker — appears on the first mic tap; the chosen
+              language applies to every mic for the rest of the session. */}
+          {showLangPicker && (
+            <>
+              <div onClick={() => setShowLangPicker(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
+              <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+                width: 320, maxWidth: '90vw', background: '#fff', borderRadius: 16, padding: 22, boxShadow: '0 12px 40px rgba(0,0,0,0.22)', textAlign: 'center' }}>
+                <div style={{ fontSize: 30, marginBottom: 6 }}>🎙️</div>
+                <h3 style={{ fontSize: 16, color: 'var(--primary)', marginBottom: 16 }}>
+                  {lang === 'hi' ? 'आप किस भाषा में बोलेंगे?' : lang === 'te' ? 'మీరు ఏ భాషలో మాట్లాడతారు?' : 'Which language will you speak in?'}
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {[['en', 'English'], ['hi', 'हिंदी'], ['te', 'తెలుగు']].map(([code, label]) => (
+                    <button key={code} type="button" onClick={() => chooseVoiceLang(code)}
+                      style={{ height: 48, borderRadius: 12, fontSize: 16, fontWeight: 600, cursor: 'pointer',
+                        background: voiceLang === code ? 'var(--secondary)' : '#fff',
+                        color: voiceLang === code ? '#fff' : 'var(--primary)',
+                        border: `1.5px solid ${voiceLang === code ? 'var(--secondary)' : '#CBD5E0'}` }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Contextual document upload */}
           {uploadCfg && (
