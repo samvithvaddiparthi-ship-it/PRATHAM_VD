@@ -3,8 +3,37 @@ const crypto = require('crypto');
 const pool = require('../models/db');
 const { authMiddleware } = require('../middleware/auth');
 const { sendServerError } = require('../utils/http');
+const { mergeRxTemplate } = require('../rxTemplate');
 
 const router = Router();
+
+// ── Hospital prescription template (branding/theme/toggles) ──
+// GET is public — the patient-facing digital prescription page renders with it.
+router.get('/template', async (req, res) => {
+  try {
+    const r = await pool.query("SELECT config FROM rx_template WHERE hospital_id = 'default'");
+    res.json(mergeRxTemplate(r.rows[0]?.config));
+  } catch (err) {
+    res.json(mergeRxTemplate(null));   // defaults if the table isn't there yet
+  }
+});
+
+// Save the template (admin). No auth in this POC, matching the other admin routes.
+router.put('/template', async (req, res) => {
+  try {
+    const config = mergeRxTemplate(req.body || {});   // validate/normalise against defaults
+    await pool.query(
+      `INSERT INTO rx_template (hospital_id, config, updated_at)
+       VALUES ('default', $1, NOW())
+       ON CONFLICT (hospital_id) DO UPDATE SET config = $1, updated_at = NOW()`,
+      [JSON.stringify(config)]
+    );
+    res.json(config);
+  } catch (err) {
+    console.error('save rx template error:', err);
+    sendServerError(res, err);
+  }
+});
 
 const QR_SECRET = process.env.DEMO_QR_SECRET || 'changeme_qr_secret';
 if (QR_SECRET === 'changeme_qr_secret') {
@@ -27,17 +56,23 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'session_id and items required' });
     }
 
-    // Get patient phone from session
-    const session = await pool.query('SELECT patient_phone, patient_name FROM sessions WHERE id = $1', [session_id]);
+    // Patient identity from the session (signed into the payload so the digital
+    // Rx shows the same details — which the template may optionally display).
+    const session = await pool.query(
+      'SELECT patient_phone, patient_name, patient_age, patient_gender FROM sessions WHERE id = $1', [session_id]);
     if (!session.rows.length) return res.status(404).json({ error: 'Session not found' });
     const patientPhone = session.rows[0].patient_phone;
     const patientName = session.rows[0].patient_name;
+    const patientAge = session.rows[0].patient_age;
+    const patientGender = session.rows[0].patient_gender;
 
     // Prescribing doctor — included in the signed payload so the digital Rx can
-    // show who authorised it (kept in sync with the printed slip).
-    const docRow = await pool.query('SELECT name, department FROM doctors WHERE id = $1', [doctorId]);
+    // show who authorised it. registration_no is pulled LIVE here, so editing the
+    // doctor's record flows through to subsequent prescriptions.
+    const docRow = await pool.query('SELECT name, department, registration_no FROM doctors WHERE id = $1', [doctorId]);
     const doctorName = docRow.rows[0]?.name || null;
     const doctorDept = docRow.rows[0]?.department || null;
+    const doctorReg = docRow.rows[0]?.registration_no || null;
 
     // Create prescription
     const rxResult = await pool.query(
@@ -65,7 +100,11 @@ router.post('/', authMiddleware, async (req, res) => {
     const qrData = {
       rx_id: rx.id,
       patient: patientName,
+      patient_age: patientAge,
+      patient_gender: patientGender,
+      patient_phone: patientPhone,
       doctor: doctorName,
+      doctor_registration: doctorReg,
       department: doctorDept,
       items: items.map(i => ({
         drug: i.drug_name,

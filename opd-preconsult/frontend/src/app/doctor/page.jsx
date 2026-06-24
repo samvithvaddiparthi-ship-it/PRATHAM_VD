@@ -1471,6 +1471,11 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   const [qrError, setQrError] = useState('');
   const [saveError, setSaveError] = useState('');
   const [showItemErrors, setShowItemErrors] = useState(false);
+  // Hospital prescription template — drives the printed slip's branding/theme/
+  // toggles, the same template the patient's digital prescription uses, so the
+  // printed and digital versions always match.
+  const [rxTemplate, setRxTemplate] = useState(null);
+  useEffect(() => { api.getRxTemplate().then(setRxTemplate).catch(() => setRxTemplate({})); }, []);
 
   // Build the QR as a link to the digital prescription page (so scanning opens a
   // verified, human-readable prescription). We use the SAME origin the doctor is
@@ -1491,65 +1496,99 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
   }, [saved]);
 
   // Open a clean, letterhead-style prescription in a new window and print it
-  // (browser print → paper or Save as PDF). The same QR is embedded on the slip.
+  // (browser print → paper or Save as PDF). Branding/theme/toggles come from the
+  // hospital template, so the printed slip matches the patient's digital Rx.
   function printPrescription() {
     if (!saved) return;
     const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const t = rxTemplate || {};
+    const show = t.show || {};
+    const accent = esc(t.accent || '#1c5d8c');
+    const modern = t.theme === 'modern';
+
     const items = saved.items || [];
     const pname = esc(session?.patient_name || saved.prescription?.patient_name || 'Patient');
-    const age = session?.patient_age ? `${session.patient_age}y ` : '';
-    const gender = esc(session?.patient_gender || '');
-    const phone = esc(session?.patient_phone || '');
+    // Optional patient details (per template toggles).
+    const ptBits = [];
+    if (show.patient_age && session?.patient_age) ptBits.push(`${esc(session.patient_age)}y`);
+    if (show.patient_gender && session?.patient_gender) ptBits.push(esc({ M: 'Male', F: 'Female', O: 'Other' }[session.patient_gender] || session.patient_gender));
+    if (show.patient_phone && session?.patient_phone) ptBits.push('Ph: ' + esc(session.patient_phone));
+
     const issued = saved.issued_at ? new Date(saved.issued_at) : new Date();
     const date = issued.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     const time = issued.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     const rxId = esc(saved.prescription?.id || '');
     const docName = esc(doctor?.name || 'Doctor');
-    const dept = esc(doctor?.department || '');
+    const docBits = [];
+    if (show.department && doctor?.department) docBits.push(esc(doctor.department) + ' Dept.');
+    if (show.doctor_registration && doctor?.registration_no) docBits.push('Reg. ' + esc(doctor.registration_no));
     const notes = saved.prescription?.notes ? esc(saved.prescription.notes) : '';
     const rows = items.map(it =>
       `<tr><td>${esc(it.drug_name)}</td><td>${esc(it.dose)}</td><td>${esc(it.frequency)}</td><td>${esc(it.duration)}</td><td>${esc(it.instructions)}</td></tr>`
     ).join('');
 
+    // Hospital header lines.
+    const hospName = esc(t.hospital_name || 'Hospital');
+    const hospMeta = [t.tagline, t.address, [t.phone, t.email].filter(Boolean).join('  ·  '), t.registration_line]
+      .filter(Boolean).map(l => `<p>${esc(l)}</p>`).join('');
+    const logo = (show.logo && t.logo_url) ? `<img class="logo" src="${esc(t.logo_url)}" alt="" />` : '';
+
+    // Optional notices.
+    const validUntil = show.valid_until
+      ? (() => { const d = new Date(issued); d.setDate(d.getDate() + (Number(t.valid_days) || 0));
+          return `<p class="meta">Valid until: <strong>${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></p>`; })()
+      : '';
+    const genericNote = (show.generic_note && t.generic_note_text) ? `<p class="meta gen">${esc(t.generic_note_text)}</p>` : '';
+    const footer = t.footer ? esc(t.footer) : '';
+
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Prescription ${rxId}</title>
 <style>
   @page { size: A4; margin: 16mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; }
-  .hdr { border-bottom: 2px solid #1c5d8c; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-start; }
-  .doc h1 { margin: 0; font-size: 20px; color: #1c5d8c; }
-  .doc p { margin: 2px 0; font-size: 12px; color: #555; }
-  .hosp { text-align: right; font-size: 12px; color: #555; }
-  .pt { display: flex; justify-content: space-between; margin: 16px 0; font-size: 13px; }
-  .rx { font-size: 34px; color: #1c5d8c; font-weight: bold; margin: 4px 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  body { font-family: ${modern ? 'Arial, Helvetica, sans-serif' : 'Georgia, "Times New Roman", serif'}; color: #1a1a1a; margin: 0; }
+  .hdr { border-bottom: 2px solid ${accent}; padding-bottom: 10px; margin-bottom: 14px;
+         display: flex; align-items: center; gap: 14px; text-align: ${modern ? 'left' : 'center'};
+         justify-content: ${modern ? 'flex-start' : 'center'}; ${modern ? `border-left: 4px solid ${accent}; padding-left: 12px;` : ''} }
+  .hdr .logo { height: 52px; width: 52px; object-fit: contain; }
+  .hosp h1 { margin: 0; font-size: 22px; color: ${accent}; }
+  .hosp p { margin: 1px 0; font-size: 11px; color: #555; }
+  .topline { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-family: Arial, sans-serif; }
+  .pt strong { font-size: 16px; } .pt .sub { color: #555; font-size: 12px; margin-left: 6px; }
+  .when { text-align: right; font-size: 12px; color: #555; }
+  .presc { font-size: 12px; color: #555; margin: 4px 0 12px; font-family: Arial, sans-serif; }
+  .rx { font-size: 30px; color: ${accent}; font-weight: bold; margin: 2px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: Arial, sans-serif; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #ddd; vertical-align: top; }
-  th { color: #1c5d8c; }
-  .notes { margin-top: 20px; font-size: 13px; border-top: 1px solid #e5e5e5; padding-top: 12px; }
-  .notes .lbl { font-weight: bold; color: #1c5d8c; display: block; margin-bottom: 4px; }
-  .foot { margin-top: 48px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .qr { text-align: center; font-size: 10px; color: #777; }
+  th { color: ${accent}; }
+  .notes { margin-top: 18px; font-size: 13px; border-top: 1px solid #e5e5e5; padding-top: 12px; font-family: Arial, sans-serif; }
+  .notes .lbl { font-weight: bold; color: ${accent}; display: block; margin-bottom: 4px; }
+  .meta { font-size: 11px; color: #555; margin: 8px 0 0; font-family: Arial, sans-serif; }
+  .meta.gen { font-style: italic; }
+  .foot { margin-top: 44px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .qr { text-align: center; font-size: 10px; color: #777; font-family: Arial, sans-serif; }
   .qr img { width: 110px; height: 110px; }
-  .sign { text-align: center; font-size: 12px; }
+  .sign { text-align: center; font-size: 12px; font-family: Arial, sans-serif; }
   .sign .line { border-top: 1px solid #333; width: 200px; margin-bottom: 4px; }
-  .disc { margin-top: 28px; font-size: 10px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 8px; }
+  .disc { margin-top: 26px; font-size: 10px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 8px; font-family: Arial, sans-serif; }
 </style></head>
 <body onload="window.print()">
-  <div class="hdr">
-    <div class="doc"><h1>${docName}</h1><p>${dept} Department</p><p>Demo City Hospital</p></div>
-    <div class="hosp">Date: ${date}<br>Time: ${time}<br>Rx ID: ${rxId}</div>
+  <div class="hdr">${logo}<div class="hosp"><h1>${hospName}</h1>${hospMeta}</div></div>
+  <div class="topline">
+    <div class="pt"><strong>${pname}</strong>${ptBits.length ? `<span class="sub">${ptBits.join(' · ')}</span>` : ''}</div>
+    <div class="when">Date: ${date}<br>Time: ${time}<br>Rx ID: ${rxId}</div>
   </div>
-  <div class="pt"><div><strong>${pname}</strong> &nbsp; ${age}${gender}</div><div>${phone ? 'Ph: ' + phone : ''}</div></div>
+  <p class="presc">Prescribed by <strong>${docName}</strong>${docBits.length ? ' · ' + docBits.join(' · ') : ''}</p>
   <div class="rx">&#8478;</div>
   <table>
     <thead><tr><th>Medication</th><th>Dose</th><th>Frequency</th><th>Duration</th><th>Instructions</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="5">No medications</td></tr>'}</tbody>
   </table>
   ${notes ? `<div class="notes"><span class="lbl">Doctor's Advice &amp; Instructions</span>${notes}</div>` : ''}
+  ${genericNote}${validUntil}
   <div class="foot">
     <div class="qr">${qrUrl ? `<img src="${qrUrl}"/><br>Scan to verify digital Rx` : ''}</div>
     <div class="sign"><div class="line"></div>${docName}<br>Signature</div>
   </div>
-  <div class="disc">Digitally generated via OPD Pre-Consultation system. Scan the QR code to verify authenticity.</div>
+  ${footer ? `<div class="disc">${footer}</div>` : ''}
 </body></html>`;
 
     const w = window.open('', '_blank', 'width=840,height=1060');

@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../../lib/api';
 import TriageBadge from '../../components/TriageBadge';
+import RxDocument from '../../components/RxDocument';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
@@ -168,10 +169,15 @@ export default function HISPage() {
           <button className={`btn ${tab === 'formulary' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('formulary')}>Drug Formulary</button>
+          <button className={`btn ${tab === 'rxtemplate' ? 'btn-primary' : 'btn-outline'}`}
+            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            onClick={() => setTab('rxtemplate')}>Rx Template</button>
         </div>
       </div>
 
-      {tab === 'formulary' ? (
+      {tab === 'rxtemplate' ? (
+        <RxTemplateManager />
+      ) : tab === 'formulary' ? (
         <FormularyManager />
       ) : tab === 'doctors' ? (
         <DoctorInfo doctors={doctors} depts={depts} onChange={loadDoctors} />
@@ -734,7 +740,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
 
               {/* Identity */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
-                {[['Phone', selected.phone || '—'], ['Department', selected.department || '—']].map(([k, v]) => (
+                {[['Phone', selected.phone || '—'], ['Department', selected.department || '—'], ['Reg. no.', selected.registration_no || '—']].map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                     <span style={{ color: 'var(--text-light)' }}>{k}</span>
                     <span style={{ fontWeight: 600 }}>{v}</span>
@@ -799,7 +805,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
 
 // Add-doctor modal — opened from the Doctors hub. Clean centered card overlay.
 function AddDoctorModal({ depts = [], onClose, onAdded }) {
-  const [form, setForm] = useState({ name: '', department: depts.find(d => d.is_active)?.code || 'CARD', phone: '', pin: '' });
+  const [form, setForm] = useState({ name: '', department: depts.find(d => d.is_active)?.code || 'CARD', phone: '', pin: '', registration_no: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -850,6 +856,11 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
               onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
           </div>
           <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Registration / license no. (optional)</label>
+            <input className="input" value={form.registration_no}
+              onChange={e => setForm({ ...form, registration_no: e.target.value })} placeholder="e.g. KMC-12345" />
+          </div>
+          <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>PIN (4-6 digits) *</label>
             <input className="input" type="password" inputMode="numeric" maxLength={6} required value={form.pin}
               onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
@@ -875,6 +886,7 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
 function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
   const [form, setForm] = useState({
     name: doctor.name || '', department: doctor.department || 'CARD', phone: doctor.phone || '', pin: '',
+    registration_no: doctor.registration_no || '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -885,7 +897,7 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
     if (form.pin && (form.pin.length < 4 || form.pin.length > 6)) { setError('PIN must be 4-6 digits'); return; }
     setSaving(true);
     try {
-      const payload = { name: form.name, department: form.department, phone: form.phone };
+      const payload = { name: form.name, department: form.department, phone: form.phone, registration_no: form.registration_no };
       if (form.pin) payload.pin = form.pin;   // omit to keep current PIN
       await api.updateDoctor(doctor.id, payload);
       onSaved();
@@ -929,6 +941,11 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Phone *</label>
             <input className="input" type="tel" required value={form.phone}
               onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Registration / license no.</label>
+            <input className="input" value={form.registration_no}
+              onChange={e => setForm({ ...form, registration_no: e.target.value })} placeholder="e.g. KMC-12345" />
           </div>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Reset PIN (4-6 digits)</label>
@@ -1867,6 +1884,138 @@ function gist(text, n = 130) {
   const dot = s.indexOf('. ');
   if (dot > 0 && dot <= n) return s.slice(0, dot + 1);
   return s.slice(0, n).replace(/\s+\S*$/, '') + '…';
+}
+
+// ── Rx Template manager: hospital prescription branding/theme/toggles + live preview ──
+const RX_SAMPLE = {
+  patient: 'Ravi Kumar', patient_age: 42, patient_gender: 'M', patient_phone: '9876543210',
+  doctor: 'Dr. Priya Sharma', doctor_registration: 'KMC-12345', department: 'CARD',
+  items: [
+    { drug: 'Paracetamol 500mg', dose: '1 tab', freq: 'TID', duration: '5 days', instructions: 'After food' },
+    { drug: 'Amoxicillin 250mg', dose: '1 cap', freq: 'BD', duration: '7 days', instructions: '' },
+  ],
+  notes: 'Plenty of fluids and rest. Review in 1 week if symptoms persist.',
+  rx_id: 'SAMPLE-0000', issued_at: new Date().toISOString(),
+};
+
+function RxTemplateManager() {
+  const [cfg, setCfg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const { toast, toastView } = useToast();
+
+  useEffect(() => { api.getRxTemplate().then(setCfg).catch(() => setCfg({})); }, []);
+
+  if (!cfg) return <p style={{ color: 'var(--text-light)', padding: 24 }}>Loading template…</p>;
+
+  const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));
+  const setShow = (k, v) => setCfg(c => ({ ...c, show: { ...(c.show || {}), [k]: v } }));
+  const show = cfg.show || {};
+
+  async function save() {
+    setSaving(true);
+    try { setCfg(await api.saveRxTemplate(cfg)); toast('Prescription template saved', 'success'); }
+    catch (e) { toast('Save failed: ' + (e.message || ''), 'error'); }
+    finally { setSaving(false); }
+  }
+
+  const label = { fontSize: 12, color: 'var(--text-light)', marginBottom: 3, display: 'block' };
+  const field = (key, ph) => (
+    <input className="input" value={cfg[key] || ''} placeholder={ph}
+      onChange={e => set(key, e.target.value)} style={{ height: 38 }} />
+  );
+  const Toggle = ({ k, text }) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', padding: '4px 0' }}>
+      <input type="checkbox" checked={!!show[k]} onChange={e => setShow(k, e.target.checked)}
+        style={{ width: 16, height: 16, cursor: 'pointer' }} />
+      {text}
+    </label>
+  );
+  const sectionHead = { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', margin: '16px 0 8px' };
+
+  return (
+    <div>
+      {toastView}
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        {/* ── Config form ── */}
+        <div style={{ flex: '1 1 420px', minWidth: 360, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+            <h3 style={{ fontSize: 16, color: 'var(--primary)', flex: 1 }}>Prescription Template</h3>
+            <button className="btn btn-primary" onClick={save} disabled={saving} style={{ width: 'auto', padding: '0 18px', height: 38, fontSize: 14 }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+            Configure how your hospital's digital prescription looks. Clinical fields (patient, ℞ medicines with dose/frequency/duration, prescriber, signature) always appear — these settings control branding and optional details.
+          </p>
+
+          <p style={sectionHead}>Hospital branding</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Hospital name</label>{field('hospital_name', 'City General Hospital')}</div>
+            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Tagline</label>{field('tagline', 'Caring for you, always')}</div>
+            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Address</label>{field('address', '123 Main Road, City – 500001')}</div>
+            <div><label style={label}>Phone</label>{field('phone', '+91 98765 43210')}</div>
+            <div><label style={label}>Email</label>{field('email', 'opd@hospital.org')}</div>
+            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Registration / license line</label>{field('registration_line', 'Reg. No. HOSP-2024-0001')}</div>
+            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Logo URL (optional)</label>{field('logo_url', 'https://…/logo.png')}</div>
+          </div>
+
+          <p style={sectionHead}>Theme</p>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+            {['classic', 'modern'].map(th => (
+              <label key={th} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', textTransform: 'capitalize' }}>
+                <input type="radio" name="rx-theme" checked={(cfg.theme || 'classic') === th} onChange={() => set('theme', th)} /> {th}
+              </label>
+            ))}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 'auto' }}>
+              Accent
+              <input type="color" value={cfg.accent || '#1c5d8c'} onChange={e => set('accent', e.target.value)}
+                style={{ width: 34, height: 28, border: 'none', background: 'none', cursor: 'pointer' }} />
+            </label>
+          </div>
+
+          <p style={sectionHead}>Show on prescription</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Toggle k="logo" text="Hospital logo" />
+            <Toggle k="department" text="Doctor's department" />
+            <Toggle k="patient_age" text="Patient age" />
+            <Toggle k="doctor_registration" text="Doctor registration no." />
+            <Toggle k="patient_gender" text="Patient gender" />
+            <Toggle k="valid_until" text="Valid-until date" />
+            <Toggle k="patient_phone" text="Patient phone" />
+            <Toggle k="generic_note" text="Generic-substitution note" />
+          </div>
+
+          {show.valid_until && (
+            <div style={{ marginTop: 10 }}>
+              <label style={label}>Valid for (days)</label>
+              <input className="input" type="number" min="1" value={cfg.valid_days ?? 30}
+                onChange={e => set('valid_days', parseInt(e.target.value) || 0)} style={{ height: 38, width: 120 }} />
+            </div>
+          )}
+          {show.generic_note && (
+            <div style={{ marginTop: 10 }}>
+              <label style={label}>Generic-substitution note text</label>
+              <input className="input" value={cfg.generic_note_text || ''}
+                onChange={e => set('generic_note_text', e.target.value)} style={{ height: 38 }} />
+            </div>
+          )}
+
+          <p style={sectionHead}>Footer</p>
+          <input className="input" value={cfg.footer || ''} onChange={e => set('footer', e.target.value)}
+            placeholder="Digitally signed prescription. Verify before dispensing." style={{ height: 38 }} />
+        </div>
+
+        {/* ── Live preview ── */}
+        <div style={{ flex: '1 1 460px', minWidth: 380, position: 'sticky', top: 16 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Live preview</p>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, boxShadow: '0 4px 20px rgba(0,0,0,.08)' }}>
+            <RxDocument rx={RX_SAMPLE} template={cfg} verified={true} />
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>Sample data — this is exactly how a patient's verified prescription will render.</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Drug Formulary manager: AI review queue + curated drugs/interactions ──────

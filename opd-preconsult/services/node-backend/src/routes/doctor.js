@@ -40,7 +40,7 @@ router.post('/login', async (req, res) => {
 
     res.json({
       token,
-      doctor: { id: doctor.id, name: doctor.name, department: doctor.department },
+      doctor: { id: doctor.id, name: doctor.name, department: doctor.department, registration_no: doctor.registration_no || null },
     });
   } catch (err) {
     console.error('doctor login error:', err);
@@ -51,7 +51,7 @@ router.post('/login', async (req, res) => {
 // Create a new doctor (admin endpoint — no auth for POC)
 router.post('/', async (req, res) => {
   try {
-    const { name, department, phone, pin } = req.body;
+    const { name, department, phone, pin, registration_no } = req.body;
     if (!name || !department || !phone || !pin) {
       return res.status(400).json({ error: 'name, department, phone, pin are required' });
     }
@@ -60,10 +60,10 @@ router.post('/', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO doctors (name, department, phone, pin_hash)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, department, phone, is_active, created_at`,
-      [name, department.toUpperCase(), phone, hashPin(pin)]
+      `INSERT INTO doctors (name, department, phone, pin_hash, registration_no)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, department, phone, registration_no, is_active, created_at`,
+      [name, department.toUpperCase(), phone, hashPin(pin), registration_no || null]
     );
 
     res.json(result.rows[0]);
@@ -81,10 +81,13 @@ router.post('/', async (req, res) => {
 // PIN, omit/blank it to keep the existing one (we never expose the live PIN).
 router.patch('/:id', async (req, res) => {
   try {
-    const { name, department, phone, pin } = req.body;
+    const { name, department, phone, pin, registration_no } = req.body;
     const sets = [];
     const params = [];
 
+    if (registration_no !== undefined) {
+      params.push(String(registration_no).trim() || null); sets.push(`registration_no = $${params.length}`);
+    }
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty' });
       params.push(String(name).trim()); sets.push(`name = $${params.length}`);
@@ -109,7 +112,7 @@ router.patch('/:id', async (req, res) => {
     params.push(req.params.id);
     const result = await pool.query(
       `UPDATE doctors SET ${sets.join(', ')} WHERE id = $${params.length}
-       RETURNING id, name, department, phone, is_active, created_at`,
+       RETURNING id, name, department, phone, registration_no, is_active, created_at`,
       params
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Doctor not found' });
@@ -155,7 +158,7 @@ router.post('/:id/reactivate', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { department } = req.query;
-    let q = 'SELECT id, name, department, phone, is_active, created_at FROM doctors WHERE 1=1';
+    let q = 'SELECT id, name, department, phone, registration_no, is_active, created_at FROM doctors WHERE 1=1';
     const params = [];
     if (department) { params.push(department); q += ` AND department = $${params.length}`; }
     q += ' ORDER BY name';
