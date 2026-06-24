@@ -539,8 +539,21 @@ router.get('/consulted', async (req, res) => {
 router.get('/all-sessions', async (req, res) => {
   try {
     const { department, doctor_id, state, triage } = req.query;
+    // display_state — the SINGLE source of truth for the HIS "State" column AND
+    // the State filter. The raw `state` column stays COMPLETE once the pre-consult
+    // report is generated and never changes through the doctor workflow, so it
+    // can't tell "in queue" from "consulted" from "released back to queue".
+    // Derive it from the workflow stamps instead:
+    //   dispatched_at set            -> CONSULTED  (doctor finished: Save & Generate)
+    //   COMPLETE + not dispatched    -> QUEUE      (ready/waiting — incl. released-back)
+    //   otherwise                    -> the pre-consult state (REGISTERED/INTERVIEW/VITALS)
+    const displayStateSql = `CASE
+        WHEN s.dispatched_at IS NOT NULL THEN 'CONSULTED'
+        WHEN s.state = 'COMPLETE' THEN 'QUEUE'
+        ELSE s.state END`;
     let q = `SELECT s.*, d.name as doctor_name, d.department as doctor_dept,
-             sr.doctor_feedback, sr.created_at as report_created_at
+             sr.doctor_feedback, sr.created_at as report_created_at,
+             ${displayStateSql} AS display_state
              FROM sessions s
              LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
              LEFT JOIN session_reports sr ON sr.session_id = s.id
@@ -548,7 +561,8 @@ router.get('/all-sessions', async (req, res) => {
     const params = [];
     if (department) { params.push(department); q += ` AND s.department = $${params.length}`; }
     if (doctor_id) { params.push(doctor_id); q += ` AND s.assigned_doctor_id = $${params.length}`; }
-    if (state) { params.push(state); q += ` AND s.state = $${params.length}`; }
+    // Filter on the DERIVED status so the dropdown and the column always agree.
+    if (state) { params.push(state); q += ` AND ${displayStateSql} = $${params.length}`; }
     if (triage) { params.push(triage); q += ` AND s.triage_level = $${params.length}`; }
     q += ' ORDER BY s.created_at DESC LIMIT 200';
     const result = await pool.query(q, params);

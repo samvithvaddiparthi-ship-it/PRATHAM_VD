@@ -783,7 +783,6 @@ function DoctorDashboard({ doctor }) {
                     const isFilledNow = vi === 0 && p.filledNow;
                     const isReleased = vi === 0 && p.releasedRecent;
                     const isSel = selected?.id === v.id;
-                    const meds = v.prescription_items || [];
                     // Every visit row gets a light tint of its OWN triage colour
                     // (matching the outer cards). The current "filled now" visit is
                     // only slightly deeper + a soft, low-opacity triage border —
@@ -809,18 +808,6 @@ function DoctorDashboard({ doctor }) {
                             {(isFilledNow || isReleased) && <p style={{ fontSize: 10, color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
                           </div>
                         </div>
-                        {/* Prescriptions for this particular visit */}
-                        {meds.length > 0 ? (
-                          <div style={{ marginTop: 4, marginLeft: 2 }}>
-                            {meds.map((it, ii) => (
-                              <p key={ii} style={{ fontSize: 10, color: 'var(--text-light)' }}>
-                                💊 {it.drug_name}{it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` · ${it.frequency}` : ''}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p style={{ fontSize: 10, color: '#bbb', marginTop: 2, marginLeft: 2 }}>No prescription</p>
-                        )}
                       </div>
                     );
                   })}
@@ -1536,6 +1523,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     // Optional notices.
     const validUntil = show.valid_until
       ? (() => { const d = new Date(issued); d.setDate(d.getDate() + (Number(t.valid_days) || 0));
+          if (isNaN(d.getTime())) return '';   // huge day count overflowed the date range
           return `<p class="meta">Valid until: <strong>${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></p>`; })()
       : '';
     const genericNote = (show.generic_note && t.generic_note_text) ? `<p class="meta gen">${esc(t.generic_note_text)}</p>` : '';

@@ -4,11 +4,13 @@ import io
 import json
 import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import Optional
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 
 from ..db import execute, query
+from .. import storage
 from ..llm_client import complete_with_image, has_llm, has_vision
 from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
 
@@ -369,13 +371,25 @@ async def process_document(
 
     display_confidence = round(display_confidence, 3)
 
-    # Persist to DB
+    # Persist to DB. Also store the uploaded image (PDFs → first-page PNG) so the
+    # HIS dashboard can show the actual document the patient uploaded, not just
+    # the extracted text. Non-fatal if object storage is unavailable.
+    image_key = None
+    if session_id:
+        try:
+            store_bytes = img_bytes if is_pdf else contents
+            store_mime = "image/png" if is_pdf else mime_type
+            ext = "png" if is_pdf else (mime_type.split("/")[-1] or "jpg").replace("jpeg", "jpg")
+            image_key = storage.upload_document(store_bytes, f"doc.{ext}", session_id, content_type=store_mime)
+        except Exception as e:
+            print(f"[ocr] document image store failed (non-fatal): {type(e).__name__}: {e}", flush=True)
+
     doc_id = None
     if session_id:
         rows = execute(
-            """INSERT INTO session_documents (session_id, doc_type, ocr_raw, ocr_structured, ocr_confidence, patient_confirmed)
-               VALUES (%s, %s, %s, %s, %s, false) RETURNING id""",
-            (session_id, doc_label or doc_type, raw_text.strip(), json.dumps(structured), display_confidence),
+            """INSERT INTO session_documents (session_id, doc_type, ocr_raw, ocr_structured, ocr_confidence, patient_confirmed, image_key)
+               VALUES (%s, %s, %s, %s, %s, false, %s) RETURNING id""",
+            (session_id, doc_label or doc_type, raw_text.strip(), json.dumps(structured), display_confidence, image_key),
         )
         if rows:
             doc_id = str(rows[0]['id'])
@@ -404,3 +418,17 @@ async def get_documents(session_id: str):
         "SELECT * FROM session_documents WHERE session_id = %s ORDER BY created_at",
         (session_id,),
     )
+
+
+@router.get("/documents/image/{doc_id}")
+async def get_document_image(doc_id: str):
+    """Stream the stored image for an uploaded document (for the HIS viewer)."""
+    rows = query("SELECT image_key FROM session_documents WHERE id = %s", (doc_id,))
+    key = rows[0]["image_key"] if rows else None
+    if not key:
+        raise HTTPException(status_code=404, detail="No image for this document")
+    data = storage.get_bytes(key)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Image unavailable")
+    media_type = "image/png" if str(key).lower().endswith(".png") else "image/jpeg"
+    return StreamingResponse(io.BytesIO(data), media_type=media_type)

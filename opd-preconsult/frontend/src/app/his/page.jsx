@@ -19,6 +19,21 @@ function fmtDateTime(ts) {
   } catch { return ''; }
 }
 
+// Display status for the HIS State column. Keyed by the backend-derived
+// `display_state` (the single source of truth — see /all-sessions). A patient
+// released from Consulted back to the queue has dispatched_at cleared, so the
+// backend derives QUEUE and this shows "In Queue", not "Completed".
+const STATE_META = {
+  REGISTERED: { label: 'Registered', bg: '#F1F3F5', fg: 'var(--text)' },
+  INTERVIEW:  { label: 'In Interview', bg: '#D6EAF8', fg: '#1B4F72' },
+  VITALS:     { label: 'Vitals', bg: '#FDEBD0', fg: '#9C640C' },
+  QUEUE:      { label: 'In Queue', bg: '#FCF3CF', fg: '#7D6608' },
+  CONSULTED:  { label: 'Consulted', bg: '#D5F5E3', fg: '#1E8449' },
+};
+function stateMeta(displayState) {
+  return STATE_META[displayState] || { label: displayState || '—', bg: '#F1F3F5', fg: 'var(--text)' };
+}
+
 // Consultation duration = doctor lock (consulted_at) → Save & Generate QR
 // (dispatched_at). Returns a compact "1h 5m" / "12m 30s" / "45s", or null when
 // the consultation hasn't both started and finished.
@@ -42,6 +57,10 @@ export default function HISPage() {
   const [depts, setDepts] = useState([]);
   const [selected, setSelected] = useState(null);
   const [report, setReport] = useState(null);
+  const [docs, setDocs] = useState([]);                    // patient-uploaded documents
+  const [rxList, setRxList] = useState([]);                // doctor-generated prescriptions
+  const [rxTemplate, setRxTemplate] = useState(null);      // hospital prescription template
+  const [detailTab, setDetailTab] = useState('report');    // right panel: report | prescription | documents
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ department: '', doctor_id: '', triage: '', state: '' });
   const [showFilters, setShowFilters] = useState(false);   // filter popover open?
@@ -56,6 +75,7 @@ export default function HISPage() {
   useEffect(() => {
     loadDoctors();
     loadDepts();
+    api.getRxTemplate().then(setRxTemplate).catch(() => setRxTemplate({}));
   }, []);
 
   async function loadDoctors() {
@@ -95,9 +115,15 @@ export default function HISPage() {
   async function selectSession(s) {
     setSelected(s);
     setReport(null);
+    setDocs([]);
+    setRxList([]);
+    setDetailTab('report');
     setLoading(true);
     try { setReport(await api.getReport(s.id)); } catch { setReport(null); }
     setLoading(false);
+    // Uploaded documents + doctor prescriptions load alongside (non-blocking).
+    api.getDocuments(s.id).then(d => setDocs(Array.isArray(d) ? d : [])).catch(() => setDocs([]));
+    api.getPrescriptions(s.id).then(r => setRxList(Array.isArray(r) ? r : [])).catch(() => setRxList([]));
   }
 
   async function handleReassign(sessionId, targetDoctorId) {
@@ -354,10 +380,11 @@ export default function HISPage() {
                       <select className="input" style={selectStyle} value={filters.state}
                         onChange={e => setFilters(f => ({ ...f, state: e.target.value }))}>
                         <option value="">All States</option>
-                        <option value="COMPLETE">Completed</option>
+                        <option value="REGISTERED">Registered</option>
                         <option value="INTERVIEW">In Interview</option>
                         <option value="VITALS">Vitals</option>
-                        <option value="REGISTERED">Registered</option>
+                        <option value="QUEUE">In Queue</option>
+                        <option value="CONSULTED">Consulted</option>
                       </select>
                     </div>
 
@@ -421,11 +448,9 @@ export default function HISPage() {
                   <td style={{ padding: '10px 12px', fontSize: 13 }}>{s.department}</td>
                   <td style={{ padding: '10px 12px' }}><TriageBadge level={s.triage_level} /></td>
                   <td style={{ padding: '10px 12px', fontSize: 13 }}>
-                    <span style={{
-                      padding: '2px 8px', borderRadius: 4, fontSize: 11,
-                      background: s.state === 'COMPLETE' ? '#D5F5E3' : s.state === 'INTERVIEW' ? '#D6EAF8' : '#F8F9FA',
-                      color: s.state === 'COMPLETE' ? '#1E8449' : 'var(--text)'
-                    }}>{s.state}</span>
+                    {(() => { const m = stateMeta(s.display_state); return (
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: m.bg, color: m.fg }}>{m.label}</span>
+                    ); })()}
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 13 }}>
                     {(() => {
@@ -475,13 +500,86 @@ export default function HISPage() {
               {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department} · Doctor: {selected.doctor_name || 'Unassigned'}
             </p>
 
-            {loading && <p style={{ color: 'var(--text-light)' }}>Loading report...</p>}
-            {report ? (
-              <div style={{ lineHeight: 1.7, fontSize: 14 }}>
-                <ReactMarkdown>{report.report_md}</ReactMarkdown>
-              </div>
-            ) : (
-              !loading && <p style={{ color: 'var(--text-light)' }}>No report generated yet.</p>
+            {/* Switchable headings, ordered by importance: the generated report,
+                the doctor's prescription, then the patient's own uploads. */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 14, borderBottom: '1px solid #E2E8F0' }}>
+              {[['report', 'Report'], ['prescription', `Prescription${rxList.length ? ` (${rxList.length})` : ''}`], ['documents', `Uploaded${docs.length ? ` (${docs.length})` : ''}`]].map(([key, lbl]) => (
+                <button key={key} onClick={() => setDetailTab(key)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px 2px', fontSize: 13, fontWeight: 600,
+                    color: detailTab === key ? 'var(--primary)' : 'var(--text-light)',
+                    borderBottom: detailTab === key ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -1 }}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+
+            {/* ── Report ── */}
+            {detailTab === 'report' && (
+              loading ? <p style={{ color: 'var(--text-light)' }}>Loading report...</p>
+              : report ? (
+                <div style={{ lineHeight: 1.7, fontSize: 14 }}>
+                  <ReactMarkdown>{report.report_md}</ReactMarkdown>
+                </div>
+              ) : <p style={{ color: 'var(--text-light)' }}>No report generated yet.</p>
+            )}
+
+            {/* ── Doctor-generated prescription (Save & Generate QR) ── */}
+            {detailTab === 'prescription' && (
+              rxList.length === 0 ? (
+                <p style={{ color: 'var(--text-light)' }}>Prescription not yet generated — the doctor hasn't completed this consultation.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {rxList.map(p => (
+                    <div key={p.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: 14 }}>
+                      <RxDocument
+                        rx={{
+                          patient: selected.patient_name,
+                          patient_age: selected.patient_age,
+                          patient_gender: selected.patient_gender,
+                          patient_phone: selected.patient_phone,
+                          doctor: p.doctor_name,
+                          department: selected.department,
+                          items: (p.items || []).map(it => ({ drug: it.drug_name, dose: it.dose, freq: it.frequency, duration: it.duration, instructions: it.instructions })),
+                          notes: p.notes,
+                          rx_id: p.id,
+                          issued_at: p.created_at,
+                        }}
+                        template={rxTemplate || {}}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {/* ── Patient-uploaded documents — the EXACT files the patient uploaded ── */}
+            {detailTab === 'documents' && (
+              docs.length === 0 ? (
+                <p style={{ color: 'var(--text-light)' }}>No documents uploaded by this patient.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {docs.map(d => (
+                    <div key={d.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-light)' }}>{d.created_at ? fmtDateTime(d.created_at) : ''}</span>
+                      </div>
+                      <div style={{ padding: 12 }}>
+                        {d.image_key ? (
+                          <a href={`/api/ocr/documents/image/${d.id}`} target="_blank" rel="noreferrer">
+                            <img src={`/api/ocr/documents/image/${d.id}`} alt="uploaded document"
+                              style={{ width: '100%', objectFit: 'contain', borderRadius: 6, border: '1px solid #EEF2F6', background: '#fff', cursor: 'zoom-in' }} />
+                          </a>
+                        ) : (
+                          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                            Original file not available — this was uploaded before document storage was enabled.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
             )}
           </div>
         )}
@@ -1918,6 +2016,38 @@ function RxTemplateManager() {
     finally { setSaving(false); }
   }
 
+  // Upload a logo (PNG/JPG): read → resize to ≤240px → store as a base64 data
+  // URL in logo_url. A data URL renders directly in <img src>, so it shows in
+  // the preview, the patient's digital Rx, and the doctor's printed slip with no
+  // backend file storage. Resizing keeps the stored config small.
+  function onLogoFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) { toast('Please choose a PNG or JPG image.', 'error'); e.target.value = ''; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 240;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          const s = MAX / Math.max(width, height);
+          width = Math.round(width * s); height = Math.round(height * s);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        set('logo_url', canvas.toDataURL('image/png'));   // PNG keeps transparency
+        setShow('logo', true);                            // auto-enable so it shows
+      };
+      img.onerror = () => toast('Could not read that image.', 'error');
+      img.src = reader.result;
+    };
+    reader.onerror = () => toast('Could not read the file.', 'error');
+    reader.readAsDataURL(file);
+    e.target.value = '';   // allow re-selecting the same file
+  }
+
   const label = { fontSize: 12, color: 'var(--text-light)', marginBottom: 3, display: 'block' };
   const field = (key, ph) => (
     <input className="input" value={cfg[key] || ''} placeholder={ph}
@@ -1956,7 +2086,27 @@ function RxTemplateManager() {
             <div><label style={label}>Phone</label>{field('phone', '+91 98765 43210')}</div>
             <div><label style={label}>Email</label>{field('email', 'opd@hospital.org')}</div>
             <div style={{ gridColumn: '1 / -1' }}><label style={label}>Registration / license line</label>{field('registration_line', 'Reg. No. HOSP-2024-0001')}</div>
-            <div style={{ gridColumn: '1 / -1' }}><label style={label}>Logo URL (optional)</label>{field('logo_url', 'https://…/logo.png')}</div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={label}>Hospital logo (PNG or JPG)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {cfg.logo_url ? (
+                  <img src={cfg.logo_url} alt="logo" style={{ height: 46, width: 46, objectFit: 'contain', borderRadius: 6, border: '1px solid #E2E8F0', background: '#fff' }} />
+                ) : (
+                  <div style={{ height: 46, width: 46, borderRadius: 6, border: '1px dashed #CBD5E0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-light)', fontSize: 18 }}>🏥</div>
+                )}
+                <label className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', height: 38, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+                  {cfg.logo_url ? 'Change logo' : 'Upload logo'}
+                  <input type="file" accept="image/png,image/jpeg" onChange={onLogoFile} style={{ display: 'none' }} />
+                </label>
+                {cfg.logo_url && (
+                  <button type="button" onClick={() => set('logo_url', '')}
+                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Remove</button>
+                )}
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+                Shown on the prescription when the “Hospital logo” toggle is on. PNG/JPG, auto-resized.
+              </p>
+            </div>
           </div>
 
           <p style={sectionHead}>Theme</p>
@@ -1988,8 +2138,16 @@ function RxTemplateManager() {
           {show.valid_until && (
             <div style={{ marginTop: 10 }}>
               <label style={label}>Valid for (days)</label>
+              {/* Free entry — any whole number. We DON'T clamp on keystroke (that
+                  fights typing/backspace); the preview's date math already handles
+                  absurd values gracefully without crashing. */}
               <input className="input" type="number" min="1" value={cfg.valid_days ?? 30}
-                onChange={e => set('valid_days', parseInt(e.target.value) || 0)} style={{ height: 38, width: 120 }} />
+                onChange={e => {
+                  const v = e.target.value;
+                  if (v === '') { set('valid_days', ''); return; }   // allow clearing while editing
+                  const n = parseInt(v, 10);
+                  if (!Number.isNaN(n)) set('valid_days', n);
+                }} style={{ height: 38, width: 120 }} />
             </div>
           )}
           {show.generic_note && (

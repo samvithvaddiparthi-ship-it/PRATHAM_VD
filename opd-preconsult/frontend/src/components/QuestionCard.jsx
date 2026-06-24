@@ -20,11 +20,10 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   // The language the patient chose to SPEAK in — picked once on the first voice
-  // question, persisted in sessionStorage, then applied to every mic after.
-  const [voiceLang, setVoiceLang] = useState(() => {
-    if (typeof window !== 'undefined') return sessionStorage.getItem('voice_lang') || '';
-    return '';
-  });
+  // question and applied to every mic after. Kept ONLY in component state (NOT
+  // sessionStorage), so a page refresh or a new patient entry asks again; within
+  // one entry it persists across all the question mics.
+  const [voiceLang, setVoiceLang] = useState('');
   const [showLangPicker, setShowLangPicker] = useState(false);
   const voiceRef = useRef(null);        // imperative handle on VoiceButton (start)
 
@@ -49,9 +48,8 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     else { setShowLangPicker(true); }
   }
   function chooseVoiceLang(code) {
-    setVoiceLang(code);
-    try { sessionStorage.setItem('voice_lang', code); } catch {}
-    setShowLangPicker(false);   // just set the language; patient taps mic to record
+    setVoiceLang(code);          // state only — no caching across entries/refreshes
+    setShowLangPicker(false);    // just set the language; patient taps mic to record
   }
 
   const text = question[`text_${lang}`] || question.text_en;

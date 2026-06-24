@@ -23,6 +23,9 @@ function addDays(iso, days) {
   const d = new Date(iso || Date.now());
   if (isNaN(d.getTime())) return '';
   d.setDate(d.getDate() + (Number(days) || 0));
+  // A very large day count overflows JS's max date range, making the Date
+  // invalid — calling toISOString() on it would THROW and crash the page.
+  if (isNaN(d.getTime())) return '';
   return d.toISOString();
 }
 
