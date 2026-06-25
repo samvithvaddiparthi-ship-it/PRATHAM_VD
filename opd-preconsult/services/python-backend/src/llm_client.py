@@ -25,12 +25,13 @@ def has_llm():
 
 
 def has_vision():
-    """Returns True if a vision-capable API key is available."""
+    """Returns True if a vision-capable provider is available."""
+    local = os.getenv("LOCAL_VISION_BASE_URL", "").strip()
     oai = os.getenv("OPENAI_API_KEY", "").strip()
     gem = os.getenv("GEMINI_API_KEY", "").strip()
     grq = os.getenv("GROQ_API_KEY", "").strip()
     ant = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    return bool(oai) or bool(gem) or bool(grq) or (bool(ant) and ant != "your_key_here")
+    return bool(local) or bool(oai) or bool(gem) or bool(grq) or (bool(ant) and ant != "your_key_here")
 
 
 def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> str:
@@ -84,12 +85,22 @@ def complete(system_prompt: str, user_content: str, max_tokens: int = 1024) -> s
 def complete_with_image(system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str = "image/jpeg", max_tokens: int = 1500) -> str:
     """
     Send system prompt + image + text to a vision-capable model.
-    Priority: Gemini Vision (free) → Groq Llama-4 Vision (free) → OpenAI GPT-4o → Anthropic Claude Vision
+    Priority: Local (on-shore) → Gemini Vision (free) → Groq Llama-4 Vision (free) → OpenAI GPT-4o → Anthropic Claude Vision
     """
+    local_base = os.getenv("LOCAL_VISION_BASE_URL", "").strip()
     gem_key = os.getenv("GEMINI_API_KEY", "").strip()
     grq_key = os.getenv("GROQ_API_KEY", "").strip()
     oai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ant_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+    # On-shore local vision model first when configured (e.g. Ollama-served
+    # Qwen2.5-VL). Keeps patient images off third-party servers (DPDP). Falls
+    # through to cloud providers if the local endpoint is unreachable.
+    if local_base:
+        try:
+            return _local_vision_complete(local_base, system_prompt, user_text, image_bytes, mime_type, max_tokens)
+        except Exception as e:
+            logger.warning(f"Local vision failed, trying cloud: {e}")
 
     # Try Gemini first (free tier)
     if gem_key:
@@ -230,6 +241,38 @@ def _openai_vision_complete(api_key: str, system_prompt: str, user_text: str, im
 
     response = client.chat.completions.create(
         model="gpt-4o",
+        max_tokens=max_tokens,
+        temperature=0.1,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                    {"type": "text", "text": user_text},
+                ],
+            },
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def _local_vision_complete(base_url: str, system_prompt: str, user_text: str, image_bytes: bytes, mime_type: str, max_tokens: int) -> str:
+    """On-shore local vision model via an OpenAI-compatible endpoint (e.g. Ollama
+    serving Qwen2.5-VL at http://host:11434/v1). Same image_url format as the cloud
+    vision paths, so the only difference is base_url + model. Patient images never
+    leave the local network — the DPDP-clean OCR path. Configure with
+    LOCAL_VISION_BASE_URL, LOCAL_VISION_MODEL, optional LOCAL_VISION_TIMEOUT."""
+    from openai import OpenAI
+
+    timeout = int(os.getenv("LOCAL_VISION_TIMEOUT", "300"))  # local GPUs are slower
+    api_key = os.getenv("LOCAL_VISION_API_KEY", "ollama")    # Ollama ignores the key
+    model = os.getenv("LOCAL_VISION_MODEL", "qwen2.5vl:7b")
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=max_tokens,
         temperature=0.1,
         messages=[

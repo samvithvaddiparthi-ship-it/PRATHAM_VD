@@ -100,8 +100,11 @@ Document types:
 - unknown: cannot determine
 
 For PRESCRIPTION — extract EVERY medication including Indian brand names (Crocin, Dolo, Augmentin, Pan-D, Ecosprin, Atorfit, Telma, Stamlo, Metpure, Cardace, etc.):
-  name, generic name (if inferable), dose (e.g. 500mg), frequency (OD/BD/TDS/QID/HS/SOS), duration (e.g. 5 Days), route (oral/IV/topical/inhaled), instructions (before food / after food / with water).
-  Also capture: doctor name, date, diagnosis or chief complaint, investigations ordered (CBC, ECG, Echo, X-Ray, etc.).
+  name, generic name, dose (e.g. 500mg), frequency (OD/BD/TDS/QID/HS/SOS), duration (e.g. 5 Days), route (oral/IV/topical/inhaled), instructions (before food / after food / with water).
+  ALWAYS fill "generic" with the active ingredient(s) — infer it from the Indian brand whenever the brand is legible (Orofer-XT -> ferrous ascorbate + folic acid; Pan-D -> pantoprazole + domperidone; Montair-LC -> montelukast + levocetirizine; Augmentin 625 -> amoxicillin + clavulanic acid; Shelcal -> calcium + vitamin D3). Use null only when the brand is too illegible to identify the drug.
+  When a handwritten brand is ambiguous, prefer the closest REAL Indian pharmaceutical brand name over a literal letter-by-letter transcription — a "brand" that is not a real product is almost certainly a misread (e.g. read "Erojex" as "Orofer", "Gulbixe" as "Gutbile").
+  Do NOT list these as medications (they are NOT drugs): lab tests / investigations (CBC, LFT, RFT, KFT, X-ray, USG, ECG, Echo); dosing-schedule notations and timing abbreviations (1-0-1, 0-0-1, BBF, ABF, BD, TDS, OD, SOS, stat); IV fluids (NS, RL, DNS, normal saline, ringer lactate); and non-medicinal supportive / lifestyle advice (plain steam inhalation, salt-water or warm-water gargle, ice pack, rest, plenty of fluids, diet). NOTE: a MEDICATED gargle / mouthwash such as Betadine (povidone-iodine) or chlorhexidine IS a medication and SHOULD be included.
+  Also capture: doctor name, date, diagnosis or chief complaint, and investigations ordered (CBC, ECG, Echo, X-Ray, etc.) under investigations_ordered (not under medications).
 
 For LAB_REPORT — extract EVERY result row:
   test name, exact numeric value, unit, reference range exactly as printed, abnormal flag (true if outside the printed range).
