@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const crypto = require('crypto');
 const pool = require('../models/db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('../middleware/auth');
 const { sendServerError } = require('../utils/http');
 const { mergeRxTemplate } = require('../rxTemplate');
 
@@ -18,8 +18,8 @@ router.get('/template', async (req, res) => {
   }
 });
 
-// Save the template (admin). No auth in this POC, matching the other admin routes.
-router.put('/template', async (req, res) => {
+// Save the template (admin only).
+router.put('/template', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const config = mergeRxTemplate(req.body || {});   // validate/normalise against defaults
     await pool.query(
@@ -46,7 +46,7 @@ function signPayload(payload) {
 }
 
 // Create prescription (doctor auth required)
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
   try {
     const doctorId = req.session_data.doctor_id;
     if (!doctorId) return res.status(403).json({ error: 'Doctor auth required' });

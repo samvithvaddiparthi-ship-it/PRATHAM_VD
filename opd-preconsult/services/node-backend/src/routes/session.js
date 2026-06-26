@@ -28,7 +28,7 @@ router.post('/scan', async (req, res) => {
     );
 
     const session = result.rows[0];
-    const token = signToken({ session_id: session.id, hospital_id, department });
+    const token = signToken({ session_id: session.id, hospital_id, department, role: 'patient' });
 
     res.json({ session, token });
   } catch (err) {

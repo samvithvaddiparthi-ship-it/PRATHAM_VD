@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const crypto = require('crypto');
 const pool = require('../models/db');
-const { signToken } = require('../middleware/auth');
+const { signToken, verifyToken, authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
 
@@ -48,8 +48,8 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Create a new doctor (admin endpoint — no auth for POC)
-router.post('/', async (req, res) => {
+// Create a new doctor (admin only)
+router.post('/', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const { name, department, phone, pin, registration_no } = req.body;
     if (!name || !department || !phone || !pin) {
@@ -79,7 +79,7 @@ router.post('/', async (req, res) => {
 // Edit a doctor's details (admin endpoint — no auth for POC).
 // Updates only the fields provided. `pin` is optional: send it to reset the
 // PIN, omit/blank it to keep the existing one (we never expose the live PIN).
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const { name, department, phone, pin, registration_no } = req.body;
     const sets = [];
@@ -126,8 +126,8 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// Deactivate a doctor (soft delete)
-router.post('/:id/deactivate', async (req, res) => {
+// Deactivate a doctor (soft delete) — admin only
+router.post('/:id/deactivate', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE doctors SET is_active = false WHERE id = $1 RETURNING id, name, is_active`,
@@ -140,8 +140,8 @@ router.post('/:id/deactivate', async (req, res) => {
   }
 });
 
-// Reactivate a doctor (undo a soft delete)
-router.post('/:id/reactivate', async (req, res) => {
+// Reactivate a doctor (undo a soft delete) — admin only
+router.post('/:id/reactivate', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE doctors SET is_active = true WHERE id = $1 RETURNING id, name, is_active`,
@@ -175,8 +175,7 @@ router.get('/queue', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     const { doctor_id, department } = decoded;
@@ -221,8 +220,7 @@ router.post('/assign/:session_id', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     // consulted_at is stamped ONCE (first open) and never overwritten, so the
@@ -254,8 +252,7 @@ router.post('/open/:session_id', async (req, res) => {
   try {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     // One active consultation per doctor: block opening a new patient while another
@@ -322,8 +319,7 @@ router.post('/dispatch/:session_id', async (req, res) => {
   try {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     const result = await pool.query(
@@ -354,8 +350,7 @@ router.post('/unassign/:session_id', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     // Abandon a lock — release the patient back to "waiting" (clear the doctor
@@ -388,8 +383,7 @@ router.post('/release/:session_id', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     const result = await pool.query(
@@ -502,8 +496,7 @@ router.get('/consulted', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     // Consulted = visits I finished (Save & Generate QR → dispatched_at set).
@@ -581,10 +574,9 @@ router.delete('/session/:session_id', async (req, res) => {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'No token' });
 
-  const jwt = require('jsonwebtoken');
   let decoded;
   try {
-    decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    decoded = verifyToken(auth.replace('Bearer ', ''));
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -610,8 +602,7 @@ router.post('/change-pin', async (req, res) => {
     const auth = req.headers.authorization;
     if (!auth) return res.status(401).json({ error: 'No token' });
 
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(auth.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev_secret');
+    const decoded = verifyToken(auth.replace('Bearer ', ''));
     if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
 
     const { old_pin, new_pin } = req.body;

@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { api, setToken } from '../../lib/api';
+import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
@@ -130,7 +131,7 @@ function PinLogin({ onLogin }) {
         </div>
         <div>
           <label style={{ fontSize: 13, color: 'var(--text-light)' }}>PIN (4-6 digits)</label>
-          <input className="input" type="password" inputMode="numeric" maxLength={6} value={pin}
+          <PasswordInput className="input" inputMode="numeric" maxLength={6} value={pin}
             onChange={e => setPin(e.target.value.replace(/\D/g, ''))} placeholder="••••" required
             style={{ fontSize: 24, letterSpacing: 8, textAlign: 'center' }} />
         </div>

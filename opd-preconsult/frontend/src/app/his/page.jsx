@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { api } from '../../lib/api';
+import { api, setToken } from '../../lib/api';
+import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import RxDocument from '../../components/RxDocument';
 import ReactMarkdown from 'react-markdown';
@@ -50,7 +51,66 @@ function consultDuration(s) {
   return `${sec}s`;
 }
 
+// Admin login gate — the HIS dashboard mounts only after a valid admin passcode
+// issues an admin-role token. Keeps the dashboard (and the admin-only endpoints
+// it calls) behind authentication.
 export default function HISPage() {
+  const [authed, setAuthed] = useState(false);
+  if (!authed) return <AdminLogin onSuccess={() => setAuthed(true)} />;
+  return <HISDashboard />;
+}
+
+function AdminLogin({ onSuccess }) {
+  const [passcode, setPasscode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const { token } = await api.adminLogin(passcode);
+      setToken(token);
+      onSuccess();
+    } catch (err) {
+      setError(err.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{
+      minHeight: '100vh', width: '100%', display: 'flex',
+      alignItems: 'center', justifyContent: 'center', padding: 24, background: 'var(--bg)',
+    }}>
+      <form onSubmit={submit} style={{
+        width: '100%', maxWidth: 400, background: 'var(--card-bg)', borderRadius: 16,
+        padding: 36, boxShadow: '0 4px 20px rgba(0,0,0,0.10)',
+        display: 'flex', flexDirection: 'column', gap: 18,
+      }}>
+        <h2 style={{ textAlign: 'center', margin: 0 }}>HIS Admin</h2>
+        <p style={{ color: 'var(--text-light)', fontSize: 14, textAlign: 'center', margin: 0 }}>
+          Enter the admin passcode to continue.
+        </p>
+        <PasswordInput
+          className="input"
+          autoFocus
+          value={passcode}
+          onChange={e => setPasscode(e.target.value)}
+          placeholder="Admin passcode"
+        />
+        {error && <div style={{ color: 'var(--red)', fontSize: 14, textAlign: 'center' }}>{error}</div>}
+        <button className="btn btn-primary" type="submit" disabled={loading || !passcode}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function HISDashboard() {
   const [tab, setTab] = useState('sessions');
   const [sessions, setSessions] = useState([]);
   const [doctors, setDoctors] = useState([]);

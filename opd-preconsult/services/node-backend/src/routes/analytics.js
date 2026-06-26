@@ -1,11 +1,12 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
+const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
 
-// OPD analytics dashboard data
-router.get('/summary', async (req, res) => {
+// OPD analytics dashboard data — admin only (aggregate operational data)
+router.get('/summary', authMiddleware, requireRole('admin'), async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
     const since = `NOW() - INTERVAL '${hours} hours'`;

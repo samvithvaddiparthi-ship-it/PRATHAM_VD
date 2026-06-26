@@ -101,6 +101,7 @@ const strings = {
     save_vitals: 'Save vitals',
     saving: 'Saving…',
     could_not_save_vitals: 'Could not save vitals',
+    disclaimer: 'Investigational — not for clinical use. AI outputs are decision-support only and must be verified by a clinician.',
   },
   hi: {
     welcome: 'Pratham में आपका स्वागत है, OPD प्री-कंसल्टेशन AI एजेंट',
@@ -204,6 +205,7 @@ const strings = {
     save_vitals: 'वाइटल्स सहेजें',
     saving: 'सहेजा जा रहा है…',
     could_not_save_vitals: 'वाइटल्स सहेजे नहीं जा सके',
+    disclaimer: 'अनुसंधान चरण — चिकित्सकीय उपयोग हेतु नहीं। AI परिणाम केवल सहायक हैं और चिकित्सक द्वारा सत्यापित किए जाने चाहिए।',
   },
   te: {
     welcome: 'Pratham కు స్వాగతం, OPD ప్రీ-కన్సల్టేషన్ AI ఏజెంట్',
@@ -307,6 +309,7 @@ const strings = {
     save_vitals: 'వైటల్స్ సేవ్ చేయండి',
     saving: 'సేవ్ అవుతోంది…',
     could_not_save_vitals: 'వైటల్స్ సేవ్ చేయలేకపోయాం',
+    disclaimer: 'పరిశోధన దశ — క్లినికల్ ఉపయోగానికి కాదు. AI ఫలితాలు సహాయక సూచనలు మాత్రమే; వైద్యుడు ధృవీకరించాలి.',
   },
 };
 

@@ -20,6 +20,9 @@ body {
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  /* Reserve space for the fixed "not for clinical use" disclaimer bar so it never
+     covers page content or action buttons. */
+  padding-bottom: 44px;
 }
 
 .screen {

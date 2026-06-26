@@ -1,8 +1,13 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
+const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
+
+// Admin-only guard for protocol authoring (create/update/delete). Reads
+// (list / get / evaluate) stay open so the patient flow can evaluate protocols.
+const adminOnly = [authMiddleware, requireRole('admin')];
 
 // List protocols (optionally filter by department)
 router.get('/', async (req, res) => {
@@ -34,8 +39,8 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Create protocol
-router.post('/', async (req, res) => {
+// Create protocol — admin only
+router.post('/', ...adminOnly, async (req, res) => {
   try {
     const { id, name, department, trigger_conditions, trigger_medications,
             required_tests, required_vitals, pre_visit_msg_en, pre_visit_msg_hi,
@@ -65,8 +70,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Update protocol
-router.put('/:id', async (req, res) => {
+// Update protocol — admin only
+router.put('/:id', ...adminOnly, async (req, res) => {
   try {
     const fields = req.body;
     const sets = [];
@@ -92,8 +97,8 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// Delete (soft — set is_active = false)
-router.delete('/:id', async (req, res) => {
+// Delete (soft — set is_active = false) — admin only
+router.delete('/:id', ...adminOnly, async (req, res) => {
   try {
     await pool.query('UPDATE protocols SET is_active = false WHERE id = $1', [req.params.id]);
     res.json({ deleted: true });

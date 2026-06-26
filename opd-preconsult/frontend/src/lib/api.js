@@ -122,6 +122,9 @@ export const api = {
     return res.json();
   },
 
+  // Admin (HIS dashboard)
+  adminLogin: (passcode) => apiFetch('/api/admin/login', { method: 'POST', body: JSON.stringify({ passcode }) }),
+
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),
   doctorQueue: () => apiFetch('/api/doctor/queue'),

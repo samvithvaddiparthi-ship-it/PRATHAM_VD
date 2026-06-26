@@ -1,9 +1,46 @@
 const { Router } = require('express');
+const crypto = require('crypto');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
 const { baseNodesForDept } = require('../seed/baseTemplate');
+const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
+
+// Admin-only guard for all mutating config routes below. GET (config reads) stay
+// open — they expose department/question config, not patient PHI.
+const adminOnly = [authMiddleware, requireRole('admin')];
+
+// ── Admin login ──
+// Verifies the shared admin passcode (env ADMIN_PASSCODE) and issues an
+// admin-role JWT for the HIS dashboard. POC-grade shared credential — per-user
+// admin accounts / SSO is a later decision. Fails closed if not configured.
+router.post('/login', async (req, res) => {
+  try {
+    const expected = (process.env.ADMIN_PASSCODE || '').trim();
+    if (!expected || expected.length < 6) {
+      return res.status(503).json({ error: 'Admin login is not configured. Set a strong ADMIN_PASSCODE.' });
+    }
+    const passcode = String((req.body || {}).passcode || '');
+    if (!passcode) return res.status(400).json({ error: 'Passcode required' });
+    // Constant-time comparison (avoids timing leaks); unequal lengths => reject.
+    const a = Buffer.from(passcode);
+    const b = Buffer.from(expected);
+    const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!ok) return res.status(401).json({ error: 'Invalid passcode' });
+
+    const token = signToken({ role: 'admin' });
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (event_type, actor, payload) VALUES ('admin_login', $1, $2)`,
+        ['admin', JSON.stringify({})]
+      );
+    } catch { /* audit_log optional */ }
+    res.json({ token });
+  } catch (err) {
+    sendServerError(res, err);
+  }
+});
 
 // ── Departments ──
 
@@ -22,7 +59,7 @@ router.get('/departments', async (req, res) => {
 });
 
 // Create department
-router.post('/departments', async (req, res) => {
+router.post('/departments', ...adminOnly, async (req, res) => {
   try {
     const { code, name, collect_vitals } = req.body;
     if (!code || !name) return res.status(400).json({ error: 'code and name required' });
@@ -56,7 +93,7 @@ router.post('/departments', async (req, res) => {
 
 // Update a department (name and/or the collect_vitals toggle). Only the provided
 // fields are changed.
-router.patch('/departments/:code', async (req, res) => {
+router.patch('/departments/:code', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
     const { name, collect_vitals } = req.body;
@@ -85,7 +122,7 @@ router.patch('/departments/:code', async (req, res) => {
 });
 
 // Delete department (only if no doctors, sessions, or questions reference it)
-router.delete('/departments/:code', async (req, res) => {
+router.delete('/departments/:code', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
 
@@ -126,7 +163,7 @@ router.get('/questions/:department', async (req, res) => {
 });
 
 // Create question
-router.post('/questions', async (req, res) => {
+router.post('/questions', ...adminOnly, async (req, res) => {
   try {
     const { id, department, text_en, text_hi, text_te, q_type, options_json, required,
             triage_flag, triage_answer, next_default, next_rules, sort_order, is_base } = req.body;
@@ -146,7 +183,7 @@ router.post('/questions', async (req, res) => {
 });
 
 // Update question
-router.put('/questions/:id', async (req, res) => {
+router.put('/questions/:id', ...adminOnly, async (req, res) => {
   try {
     const fields = req.body;
     const sets = [];
@@ -171,7 +208,7 @@ router.put('/questions/:id', async (req, res) => {
 });
 
 // Delete question
-router.delete('/questions/:id', async (req, res) => {
+router.delete('/questions/:id', ...adminOnly, async (req, res) => {
   try {
     await pool.query('DELETE FROM questionnaire_nodes WHERE id = $1', [req.params.id]);
     res.json({ deleted: true });
