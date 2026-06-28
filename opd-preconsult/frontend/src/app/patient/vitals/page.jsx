@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t } from '../../../lib/i18n';
 import VitalsForm from '../../../components/VitalsForm';
+import ListenButton from '../../../components/ListenButton';
 
 export default function Vitals() {
   const router = useRouter();
@@ -114,7 +115,7 @@ export default function Vitals() {
       <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', margin: 0 }}>
         {t('nurse_later', lang)}
       </p>
-      <button type="button" className="btn btn-outline" onClick={handleGoBack} disabled={loading} style={{ fontSize: 13 }}>
+      <button type="button" className="btn btn-outline" onClick={handleGoBack} disabled={loading}>
         ← {t('go_back', lang)}
       </button>
     </>
@@ -137,6 +138,13 @@ export default function Vitals() {
       </div>
       <div className="card" style={{ gap: 12 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('vitals_title', lang)}</h2>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <ListenButton
+            text={`${t('vitals_title', lang)}. ${t('nurse_later', lang)}`}
+            lang={lang}
+            label={lang === 'hi' ? 'सुनें' : lang === 'te' ? 'వినండి' : 'Listen'}
+          />
+        </div>
         <VitalsForm
           lang={lang}
           loading={loading}

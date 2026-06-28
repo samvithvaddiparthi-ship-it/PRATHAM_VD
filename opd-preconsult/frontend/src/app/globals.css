@@ -11,6 +11,10 @@
   --card-bg: #FFFFFF;
   --text: #2C3E50;
   --text-light: #7F8C8D;
+  /* Patient-flow text-size multiplier (A / A+ / A++). Set by A11yProvider on the
+     patient routes only; 1 everywhere else. Scaling fonts (not zoom) keeps the
+     layout within the phone's width — text just grows and reflows. */
+  --fs: 1;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,6 +24,8 @@ body {
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  /* Base size scales with --fs so headings (em-based) and body text grow together. */
+  font-size: calc(16px * var(--fs, 1));
   /* Reserve space for the fixed "not for clinical use" disclaimer bar so it never
      covers page content or action buttons. */
   padding-bottom: 44px;
@@ -48,11 +54,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 48px;
+  min-height: calc(48px * var(--fs, 1));
   padding: 12px 24px;
   border: none;
   border-radius: 12px;
-  font-size: 16px;
+  font-size: calc(16px * var(--fs, 1));
   font-weight: 600;
   cursor: pointer;
   width: 100%;
@@ -68,11 +74,11 @@ body {
 
 .input {
   width: 100%;
-  min-height: 48px;
+  min-height: calc(48px * var(--fs, 1));
   padding: 12px 16px;
   border: 2px solid #E0E0E0;
   border-radius: 12px;
-  font-size: 16px;
+  font-size: calc(16px * var(--fs, 1));
   font-family: inherit;
   outline: none;
   transition: border-color 0.2s;
@@ -105,9 +111,9 @@ body {
   border-radius: 8px;
   background: transparent;
   color: var(--primary);
-  font-size: 14px;
+  font-size: calc(14px * var(--fs, 1));
   cursor: pointer;
-  min-height: 48px;
+  min-height: calc(48px * var(--fs, 1));
 }
 .lang-btn.active { background: var(--primary); color: #fff; }
 
@@ -177,3 +183,16 @@ body {
 
 .flag-warning { color: var(--amber); }
 .flag-critical { color: var(--red); }
+
+/* ── Assisted / Easy mode — high-contrast for elderly / low-literacy patients.
+   Toggled by A11yProvider (adds `assist` to <html>). Darkens text, whitens
+   background, and strengthens card/input/button outlines. Font is forced to
+   max via --fs separately. */
+html.assist {
+  --text: #111827;
+  --text-light: #333a44;
+}
+html.assist body { background: #ffffff; }
+html.assist .card { border: 2px solid var(--primary); box-shadow: 0 2px 12px rgba(0,0,0,0.18); }
+html.assist .input { border-color: var(--primary); }
+html.assist .btn-outline { border-width: 3px; }

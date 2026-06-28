@@ -203,7 +203,7 @@ export default function Documents() {
         }}>
           {t('next', lang)}
         </button>
-        <button className="btn btn-outline" onClick={() => router.push('/patient/consent')} style={{ fontSize: 13 }}>
+        <button className="btn btn-outline" onClick={() => router.push('/patient/consent')}>
           ← {t('go_back', lang)}
         </button>
       </div>

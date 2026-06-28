@@ -192,7 +192,7 @@ export default function Register() {
               form (same page, local state only) — no router navigation, so it
               cannot reorder pages no matter how many times it's clicked. The
               entered form data is preserved. */}
-          <button className="btn btn-outline" onClick={() => { setWelcomeBack(null); sessionStorage.removeItem('welcome_back'); }} style={{ fontSize: 13 }}>
+          <button className="btn btn-outline" onClick={() => { setWelcomeBack(null); sessionStorage.removeItem('welcome_back'); }}>
             ← {t('go_back', lang)}
           </button>
         </div>
@@ -231,19 +231,26 @@ export default function Register() {
             ⚠️ Testing: phone is hard-capped to 10 digits. Remove this cap before production.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)} *</label>
-            <input className="input" type="number" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)}</label>
-            <select className="input" value={form.patient_gender} onChange={e => setForm({ ...form, patient_gender: e.target.value })}>
-              <option value="">--</option>
-              <option value="M">{t('male', lang)}</option>
-              <option value="F">{t('female', lang)}</option>
-              <option value="O">{t('other', lang)}</option>
-            </select>
+        <div>
+          <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)} *</label>
+          <input className="input" type="number" value={form.patient_age} onChange={e => setForm({ ...form, patient_age: e.target.value })} />
+        </div>
+        <div>
+          <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)}</label>
+          {/* Icon buttons instead of a dropdown — clearer for low-literacy/elderly. */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[['M', '👨', t('male', lang)], ['F', '👩', t('female', lang)], ['O', '🧑', t('other', lang)]].map(([val, icon, lbl]) => (
+              <button
+                type="button"
+                key={val}
+                className={`btn ${form.patient_gender === val ? 'btn-primary' : 'btn-outline'}`}
+                style={{ flex: 1, flexDirection: 'column', gap: 2, padding: '8px 4px' }}
+                onClick={() => setForm({ ...form, patient_gender: val })}
+              >
+                <span aria-hidden="true" style={{ fontSize: 22 }}>{icon}</span>
+                <span style={{ fontSize: 'calc(13px * var(--fs, 1))' }}>{lbl}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -252,7 +259,7 @@ export default function Register() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? '...' : t('next', lang)}
         </button>
-        <button type="button" className="btn btn-outline" onClick={() => router.push('/')} style={{ fontSize: 13 }}>
+        <button type="button" className="btn btn-outline" onClick={() => router.push('/')}>
           ← {t('go_back', lang)}
         </button>
       </form>

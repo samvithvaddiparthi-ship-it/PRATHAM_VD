@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import VoiceButton from './VoiceButton';
+import ListenButton from './ListenButton';
 import { api } from '../lib/api';
 import { t } from '../lib/i18n';
 
@@ -26,6 +27,16 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [voiceLang, setVoiceLang] = useState('');
   const [showLangPicker, setShowLangPicker] = useState(false);
   const voiceRef = useRef(null);        // imperative handle on VoiceButton (start)
+
+  // Assisted mode (set in A11yProvider) → auto-read each question aloud.
+  const [assist, setAssist] = useState(false);
+  useEffect(() => {
+    const read = () => { try { setAssist(localStorage.getItem('assistMode') === '1'); } catch {} };
+    read();
+    const onEvt = (e) => setAssist(!!e.detail);
+    window.addEventListener('assistchange', onEvt);
+    return () => window.removeEventListener('assistchange', onEvt);
+  }, []);
 
   useEffect(() => {
     setValue(initialValue);
@@ -56,6 +67,17 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const options = question.options_json || [];
   const type = question.q_type;
   const uploadCfg = UPLOAD_CONFIG[question.id];
+
+  // Read aloud for low-literacy/elderly patients: the question first, then each
+  // option as its OWN segment so they're spoken with a pause between (clearer in
+  // Assisted mode than a single run-on sentence).
+  const optionList = type === 'SINGLE_SELECT'
+    ? options.map(o => o[`label_${lang}`] || o.label_en)
+    : type === 'BOOLEAN'
+      ? (lang === 'hi' ? ['हाँ', 'नहीं'] : lang === 'te' ? ['అవును', 'కాదు'] : ['Yes', 'No'])
+      : [];
+  const speakSegments = [text, ...optionList];
+  const listenLabel = lang === 'hi' ? 'सुनें' : lang === 'te' ? 'వినండి' : 'Listen';
 
   function submit(val) {
     const answer = val || value;
@@ -154,15 +176,18 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
   return (
     <div className="card" style={{ gap: 24, justifyContent: 'center' }}>
-      <h2 style={{ fontSize: 20, lineHeight: 1.4, textAlign: 'center' }}>{text}</h2>
+      <h2 style={{ fontSize: 'calc(20px * var(--fs, 1))', lineHeight: 1.4, textAlign: 'center' }}>{text}</h2>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: -12 }}>
+        <ListenButton segments={speakSegments} lang={lang} label={listenLabel} autoPlay={assist} />
+      </div>
 
       {type === 'BOOLEAN' && (
         <div style={{ display: 'flex', gap: 12 }}>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => submit('yes')}>
-            {lang === 'hi' ? 'हाँ' : lang === 'te' ? 'అవును' : 'Yes'}
+          <button className="btn btn-primary" style={{ flex: 1, gap: 8 }} onClick={() => submit('yes')}>
+            <span aria-hidden="true">✓</span> {lang === 'hi' ? 'हाँ' : lang === 'te' ? 'అవును' : 'Yes'}
           </button>
-          <button className="btn btn-outline" style={{ flex: 1 }} onClick={() => submit('no')}>
-            {lang === 'hi' ? 'नहीं' : lang === 'te' ? 'కాదు' : 'No'}
+          <button className="btn btn-outline" style={{ flex: 1, gap: 8 }} onClick={() => submit('no')}>
+            <span aria-hidden="true">✗</span> {lang === 'hi' ? 'नहीं' : lang === 'te' ? 'కాదు' : 'No'}
           </button>
         </div>
       )}
@@ -325,16 +350,16 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
           )}
 
           {/allerg|medication|drug|medicine/i.test(question.text_en) && (
-            <button className="btn btn-outline" style={{ width: '100%', fontSize: 13 }} onClick={() => submit('None')}>
+            <button className="btn btn-outline" style={{ width: '100%' }} onClick={() => submit('None')}>
               {lang === 'hi' ? 'कोई नहीं' : lang === 'te' ? 'ఏదీ లేదు' : 'None'}
             </button>
           )}
           {/* Clear + Done — equal size */}
           <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn btn-outline" style={{ flex: 1, minHeight: 46 }} disabled={!value} onClick={clearAnswer}>
+            <button className="btn btn-outline" style={{ flex: 1 }} disabled={!value} onClick={clearAnswer}>
               {lang === 'hi' ? 'मिटाएँ' : lang === 'te' ? 'తుడిచివేయి' : 'Clear'}
             </button>
-            <button className="btn btn-primary" style={{ flex: 1, minHeight: 46 }} onClick={() => submit()}>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => submit()}>
               {lang === 'hi' ? 'पूर्ण' : lang === 'te' ? 'పూర్తయింది' : 'Done'}
             </button>
           </div>

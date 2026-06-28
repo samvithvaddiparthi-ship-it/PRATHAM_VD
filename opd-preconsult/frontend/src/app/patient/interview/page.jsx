@@ -191,7 +191,7 @@ export default function Interview() {
       </div>
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}
-      <button className="btn btn-outline" onClick={handleGoBack} style={{ fontSize: 13, marginTop: 12 }}>
+      <button className="btn btn-outline" onClick={handleGoBack} style={{ marginTop: 12 }}>
         ← {t('go_back', lang)}
       </button>
     </div>
