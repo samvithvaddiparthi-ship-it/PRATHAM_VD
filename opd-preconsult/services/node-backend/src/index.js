@@ -13,6 +13,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Routes
 app.use('/api/session', require('./routes/session'));
+app.use('/api/queue', require('./routes/queue'));
 app.use('/api/q', require('./routes/questionnaire'));
 app.use('/api/vitals', require('./routes/vitals'));
 app.use('/api/admin', require('./routes/admin'));

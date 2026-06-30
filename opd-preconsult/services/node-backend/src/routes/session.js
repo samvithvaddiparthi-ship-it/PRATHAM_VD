@@ -66,6 +66,29 @@ router.post('/register', authMiddleware, async (req, res) => {
 
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
 
+    // Assign a daily, per-department token (gov-OPD style) — once per session, so
+    // navigating Back and re-submitting keeps the same number. The atomic upsert
+    // is race-safe and the counter resets each day (keyed by service_date).
+    let sess = result.rows[0];
+    if (sess.token_number == null) {
+      const tok = await pool.query(
+        `INSERT INTO queue_counters (hospital_id, department, service_date, last_token)
+         VALUES ($1, $2, CURRENT_DATE, 1)
+         ON CONFLICT (hospital_id, department, service_date)
+         DO UPDATE SET last_token = queue_counters.last_token + 1
+         RETURNING last_token`,
+        [sess.hospital_id, sess.department]
+      );
+      const n = tok.rows[0].last_token;
+      const label = `${sess.department}-${String(n).padStart(3, '0')}`;
+      const upd = await pool.query(
+        `UPDATE sessions SET token_number = $1, token_label = $2, updated_at = NOW()
+         WHERE id = $3 RETURNING *`,
+        [n, label, sess.id]
+      );
+      sess = upd.rows[0];
+    }
+
     // Look up this patient's prior visits (same phone number) so the UI can
     // greet returning patients with their login history. We identify a patient
     // by phone and count only COMPLETED visits (state = 'COMPLETE'), i.e. those
@@ -94,7 +117,7 @@ router.post('/register', authMiddleware, async (req, res) => {
     );
 
     res.json({
-      ...result.rows[0],
+      ...sess,
       previous_login_count: countResult.rows[0].count,
       previous_logins: history.rows,
     });

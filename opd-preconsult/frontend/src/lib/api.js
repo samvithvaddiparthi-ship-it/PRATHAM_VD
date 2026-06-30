@@ -26,6 +26,9 @@ export const api = {
   listSessions: (params) => apiFetch(`/api/session?${new URLSearchParams(params)}`),
   updateState: (state) => apiFetch('/api/session/state', { method: 'POST', body: JSON.stringify({ state }) }),
 
+  // Public waiting-room board (no auth) — token numbers only
+  queueBoard: (department) => apiFetch(`/api/queue/board?department=${encodeURIComponent(department)}`),
+
   // Questionnaire
   nextQuestion: (sessionId) => apiFetch(`/api/q/next/${sessionId}`),
   getQuestionnaireSchema: (department) => apiFetch(`/api/q/schema/${department}`),

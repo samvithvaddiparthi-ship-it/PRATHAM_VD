@@ -69,10 +69,10 @@ export default function Done() {
           </div>
         )}
 
-        {session?.queue_slot && (
+        {(session?.token_label || session?.token_number) && (
           <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 16, width: '100%' }}>
             <p style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('queue_number', lang)}</p>
-            <p style={{ fontSize: 36, fontWeight: 700, color: 'var(--primary)' }}>{session.queue_slot}</p>
+            <p style={{ fontSize: 36, fontWeight: 700, color: 'var(--primary)' }}>{session.token_label || session.token_number}</p>
           </div>
         )}
 
