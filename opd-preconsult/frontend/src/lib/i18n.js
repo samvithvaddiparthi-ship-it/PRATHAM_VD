@@ -75,6 +75,7 @@ const strings = {
     number_verified: 'Mobile number verified',
     change_number_locked: 'This number is verified. To use a different number, please',
     start_new_form: 'start a new form',
+    already_consulting: 'This patient already has a visit in progress that hasn’t finished yet. Please wait until that consultation is over, or select a different patient.',
     // ── Who-is-visiting chooser ──
     who_title: 'Who is visiting today?',
     who_sub: 'This number is used by more than one patient. Choose who is filling this form.',
@@ -203,6 +204,7 @@ const strings = {
     number_verified: 'मोबाइल नंबर सत्यापित',
     change_number_locked: 'यह नंबर सत्यापित है। दूसरा नंबर उपयोग करने के लिए, कृपया',
     start_new_form: 'नया फॉर्म शुरू करें',
+    already_consulting: 'इस मरीज़ की एक विज़िट अभी चल रही है जो पूरी नहीं हुई है। कृपया वह कंसल्टेशन पूरा होने तक प्रतीक्षा करें, या कोई अन्य मरीज़ चुनें।',
     // ── Who-is-visiting chooser ──
     who_title: 'आज किसकी जांच है?',
     who_sub: 'यह नंबर एक से अधिक मरीज़ उपयोग करते हैं। चुनें कि यह फॉर्म कौन भर रहा है।',
@@ -331,6 +333,7 @@ const strings = {
     number_verified: 'మొబైల్ నంబర్ ధృవీకరించబడింది',
     change_number_locked: 'ఈ నంబర్ ధృవీకరించబడింది. వేరే నంబర్ ఉపయోగించడానికి, దయచేసి',
     start_new_form: 'కొత్త ఫారమ్ ప్రారంభించండి',
+    already_consulting: 'ఈ రోగికి ఇంకా పూర్తికాని సందర్శన ఇప్పటికే జరుగుతోంది. దయచేసి ఆ సంప్రదింపు పూర్తయ్యే వరకు వేచి ఉండండి, లేదా వేరే రోగిని ఎంచుకోండి.',
     // ── Who-is-visiting chooser ──
     who_title: 'ఈరోజు ఎవరు సందర్శిస్తున్నారు?',
     who_sub: 'ఈ నంబర్‌ను ఒకరి కంటే ఎక్కువ మంది రోగులు ఉపయోగిస్తారు. ఈ ఫారమ్‌ను ఎవరు నింపుతున్నారో ఎంచుకోండి.',

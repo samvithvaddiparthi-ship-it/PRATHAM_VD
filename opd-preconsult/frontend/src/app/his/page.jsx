@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { api, setToken } from '../../lib/api';
+import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import RxDocument from '../../components/RxDocument';
@@ -369,7 +370,7 @@ function HISDashboard() {
                       onMouseEnter={e => { e.currentTarget.style.background = '#F5F9FC'; }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
                       <span style={{ fontWeight: 600 }}>{s.patient_name || 'Unregistered'}</span>
-                      <span style={{ color: 'var(--text-light)', fontSize: 12 }}>{s.patient_phone || ''} · {s.department}</span>
+                      <span style={{ color: 'var(--text-light)', fontSize: 12 }}>{formatPhoneDisplay(s.patient_phone) || ''} · {s.department}</span>
                     </button>
                   ))}
                 </div>
@@ -898,7 +899,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
 
               {/* Identity */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
-                {[['Phone', selected.phone || '—'], ['Department', selected.department || '—'], ['Reg. no.', selected.registration_no || '—']].map(([k, v]) => (
+                {[['Phone', formatPhoneDisplay(selected.phone) || '—'], ['Department', selected.department || '—'], ['Reg. no.', selected.registration_no || '—']].map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                     <span style={{ color: 'var(--text-light)' }}>{k}</span>
                     <span style={{ fontWeight: 600 }}>{v}</span>

@@ -153,9 +153,15 @@ export default function Register() {
       await api.register({ ...identity, patient_phone: e164, language: lang });
       router.push('/patient/consent');
     } catch (err) {
-      if (/session not found|phone not verified/i.test(err.message || '')) {
+      if (/session not found|phone not verified|session_finished/i.test(err.message || '')) {
         setError(t('err_session_expired', lang));
-        setTimeout(() => router.push('/'), 1500);
+        setTimeout(() => { sessionStorage.removeItem('token'); router.push('/'); }, 1500);
+        return;
+      }
+      // This person already has an open visit that isn't finished yet — stay on
+      // the chooser and tell them to wait (or pick a different person).
+      if (/already_active/i.test(err.message || '')) {
+        setError(t('already_consulting', lang));
         return;
       }
       setError(err.message);

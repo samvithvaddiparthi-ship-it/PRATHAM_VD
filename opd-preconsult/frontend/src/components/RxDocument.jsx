@@ -6,6 +6,7 @@
 // never drift. Convention-mandated clinical fields (patient identity + date,
 // the ℞ medication table with dose/frequency/duration, prescriber name +
 // signature line, Rx id) are ALWAYS rendered regardless of the toggles.
+import { formatPhoneDisplay } from '../lib/phone';
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -40,7 +41,7 @@ export default function RxDocument({ rx = {}, template = {}, verified = null }) 
   const patientBits = [];
   if (show.patient_age && rx.patient_age != null && rx.patient_age !== '') patientBits.push(`${rx.patient_age}y`);
   if (show.patient_gender && rx.patient_gender) patientBits.push(({ M: 'Male', F: 'Female', O: 'Other' }[rx.patient_gender] || rx.patient_gender));
-  if (show.patient_phone && rx.patient_phone) patientBits.push(rx.patient_phone);
+  if (show.patient_phone && rx.patient_phone) patientBits.push(formatPhoneDisplay(rx.patient_phone));
 
   const muted = '#64748b';
   const line = '#e2e8f0';

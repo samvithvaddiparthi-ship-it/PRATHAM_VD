@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { api, setToken } from '../../lib/api';
+import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
@@ -405,7 +406,7 @@ function DoctorDashboard({ doctor }) {
     // Free → confirm, then lock.
     if (!(await confirm({
       title: 'Open & lock this patient?',
-      message: `${p.name} · ${p.phone}\nOnce you open them, other doctors won't be able to view this patient until you finish (Save & Generate QR).`,
+      message: `${p.name} · ${formatPhoneDisplay(p.phone)}\nOnce you open them, other doctors won't be able to view this patient until you finish (Save & Generate QR).`,
       confirmLabel: 'Open & lock',
     }))) return;
 
@@ -429,6 +430,10 @@ function DoctorDashboard({ doctor }) {
   // is dispatched (now in Consulted, gone from the queue) and the lock is freed.
   function handleDispatched() {
     setActiveLock(null);
+    // Mark the currently-selected visit dispatched in-memory right away, so the
+    // tab flips to "Prescribed" immediately — without waiting for a reselect or
+    // the queue refetch to land.
+    setSelected(prev => (prev && !prev.dispatched_at ? { ...prev, dispatched_at: new Date().toISOString() } : prev));
     loadQueue();
     loadConsulted();
     // After Save & Generate QR the visit belongs to Consulted, so jump the left
@@ -565,6 +570,9 @@ function DoctorDashboard({ doctor }) {
     || !!report.doctor_feedback
     || (feedbackGiven?.id === selected?.id && (feedbackGiven?.val === 'accurate' || feedbackGiven?.val === 'inaccurate'));
   const prescribeLocked = tab !== 'consulted' && !!selected && !reportReviewed;
+  // A finished visit (already dispatched via Save & Generate QR) is a done record,
+  // not an action — so the tab reads "Prescribed" (past tense) and is never locked.
+  const visitDone = !!selected && !!selected.dispatched_at;
   // Queue tree: show patients with a "filled now" visit (completed in the last
   // 24h) — i.e. patients who are actually here now — plus any patient already
   // pinned this session (they appeared with a recent fill, so they stay visible
@@ -758,7 +766,7 @@ function DoctorDashboard({ doctor }) {
                 style={{ display: 'flex', alignItems: 'stretch', gap: 8, cursor: lockedByOther ? 'not-allowed' : 'pointer', padding: '8px 10px', borderRadius: 8, background: lockedByOther ? '#F2F3F5' : (headColor ? `${headColor}14` : '#fff'), boxShadow: '0 1px 3px rgba(0,0,0,0.06)', opacity: lockedByOther ? 0.75 : 1, outline: lockedByMe ? '2px solid var(--secondary)' : 'none', outlineOffset: -2 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</p>
-                  <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{p.phone} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
+                  <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{formatPhoneDisplay(p.phone)} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
                   {lockedByOther && (
                     <p style={{ fontSize: 10.5, color: '#C0392B', fontWeight: 600, marginTop: 2 }}>🔒 Being consulted by {p.lockedByName || 'another doctor'}</p>
                   )}
@@ -879,7 +887,7 @@ function DoctorDashboard({ doctor }) {
             <div onClick={e => e.stopPropagation()}
               style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 420, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: 'center' }}>
               <div style={{ fontSize: 34, marginBottom: 8 }}>✋</div>
-              <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish this patient first</h3>
+              <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish current patient first</h3>
               <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: '0 0 18px' }}>
                 You're currently consulting a patient. Complete their prescription and click
                 <strong> Save &amp; Generate QR</strong> before opening another patient.
@@ -1059,12 +1067,13 @@ function DoctorDashboard({ doctor }) {
                 style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
                 onClick={() => setRightTab('report')}>Report</button>
               <button className={`btn ${rightTab === 'prescribe' ? 'btn-primary' : 'btn-outline'}`}
-                title={prescribeLocked ? 'Mark the report Accurate or Inaccurate first' : 'Prescribe'}
-                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px', opacity: prescribeLocked ? 0.5 : 1, cursor: prescribeLocked ? 'not-allowed' : 'pointer' }}
+                title={visitDone ? 'Prescription already issued' : (prescribeLocked ? 'Mark the report Accurate or Inaccurate first' : 'Prescribe')}
+                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px', opacity: (prescribeLocked && !visitDone) ? 0.5 : 1, cursor: (prescribeLocked && !visitDone) ? 'not-allowed' : 'pointer' }}
                 onClick={() => {
-                  if (prescribeLocked) { toast('Review the report first — mark it Accurate or Inaccurate.', 'error'); return; }
+                  // A finished visit just shows its issued prescription — never locked.
+                  if (prescribeLocked && !visitDone) { toast('Review the report first — mark it Accurate or Inaccurate.', 'error'); return; }
                   setRightTab('prescribe'); setPrescribeMounted(true);
-                }}>{prescribeLocked ? '🔒 ' : ''}Prescribe</button>
+                }}>{visitDone ? 'Prescribed' : (prescribeLocked ? '🔒 ' : '') + 'Prescribe'}</button>
             </div>
 
             {rightTab === 'report' && (
@@ -1505,7 +1514,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
     const ptBits = [];
     if (show.patient_age && session?.patient_age) ptBits.push(`${esc(session.patient_age)}y`);
     if (show.patient_gender && session?.patient_gender) ptBits.push(esc({ M: 'Male', F: 'Female', O: 'Other' }[session.patient_gender] || session.patient_gender));
-    if (show.patient_phone && session?.patient_phone) ptBits.push('Ph: ' + esc(session.patient_phone));
+    if (show.patient_phone && session?.patient_phone) ptBits.push('Ph: ' + esc(formatPhoneDisplay(session.patient_phone)));
 
     const issued = saved.issued_at ? new Date(saved.issued_at) : new Date();
     const date = issued.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });

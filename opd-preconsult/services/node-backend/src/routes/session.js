@@ -60,12 +60,40 @@ router.post('/register', authMiddleware, async (req, res) => {
     // was verified — so the request can't be edited to register a different,
     // unverified number after the code check.
     const guard = await pool.query(
-      'SELECT phone_verified, patient_phone FROM sessions WHERE id = $1',
+      'SELECT phone_verified, patient_phone, state, dispatched_at FROM sessions WHERE id = $1',
       [session_id]
     );
     if (!guard.rows.length) return res.status(404).json({ error: 'Session not found' });
     if (!guard.rows[0].phone_verified || guard.rows[0].patient_phone !== normalizedPhone) {
       return res.status(403).json({ error: 'Phone not verified' });
+    }
+    // Never re-register a session that's already finished (completed pre-consult
+    // or dispatched by the doctor). This can only happen if a stale token leaked
+    // from a previous visit — refuse so the patient starts a fresh scan instead
+    // of resurrecting a done session (which caused the skip-to-vitals bug).
+    if (guard.rows[0].state === 'COMPLETE' || guard.rows[0].dispatched_at) {
+      return res.status(409).json({ error: 'session_finished' });
+    }
+
+    // A patient is identified by phone + name (one number may serve a whole
+    // family). Block a SECOND concurrent entry for the same person while their
+    // previous visit is still open — i.e. an existing session for this phone+name
+    // that hasn't been removed and hasn't been finished by the doctor yet
+    // (dispatched_at still null). A DIFFERENT name on the same number is allowed
+    // through normally. The frontend turns 'already_active' into a wait message.
+    const nameKey = String(patient_name).trim().toLowerCase();
+    const active = await pool.query(
+      `SELECT 1 FROM sessions
+        WHERE patient_phone = $1
+          AND lower(trim(patient_name)) = $2
+          AND id <> $3
+          AND removed_at IS NULL
+          AND dispatched_at IS NULL
+        LIMIT 1`,
+      [normalizedPhone, nameKey, session_id]
+    );
+    if (active.rows.length) {
+      return res.status(409).json({ error: 'already_active' });
     }
 
     const result = await pool.query(
@@ -107,7 +135,6 @@ router.post('/register', authMiddleware, async (req, res) => {
     // alone — otherwise a relative's visits would be miscounted as this person's.
     // Only COMPLETED visits count (a visit "counts" once submitted). The current
     // session is excluded (it isn't complete yet anyway).
-    const nameKey = String(patient_name).trim().toLowerCase();
     const history = await pool.query(
       `SELECT created_at, department
          FROM sessions

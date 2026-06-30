@@ -27,27 +27,47 @@ function HomeContent() {
     const urlLang = searchParams.get('lang');
     if (urlLang && ['en', 'hi', 'te'].includes(urlLang)) setLang(urlLang);
     const qr = searchParams.get('qr');
-    // Store QR payload but don't process yet — wait for the patient to pick a language.
-    // Fall back to the QR remembered in sessionStorage so returning here (Back from the
-    // form, which drops the URL param) still has something to proceed with.
+    // A QR in the URL is a FRESH kiosk scan → it must start a brand-new session,
+    // never reuse a token left over from a previous patient on this (shared) device.
+    // Only when there's NO new QR but a token exists do we treat it as the patient
+    // returning from the form (Back to change language) and reuse that session.
     let storedQr = null, hasTok = false;
     try { storedQr = sessionStorage.getItem('qr'); hasTok = !!sessionStorage.getItem('token'); } catch {}
-    if (qr) setPendingQr(qr);
-    else if (storedQr) setPendingQr(storedQr);
-    setHasSession(hasTok);
+    if (qr) {
+      setPendingQr(qr);
+      setHasSession(false);            // fresh scan — do not reuse any old session
+    } else if (hasTok) {
+      setHasSession(true);             // returned from the form — reuse the session
+      setPendingQr(storedQr);
+    } else if (storedQr) {
+      setPendingQr(storedQr);
+      setHasSession(false);
+    }
   }, [searchParams]);
 
-  // Picking a language is the "proceed" action on a kiosk. If a session already
-  // exists (returned from the form), reuse it; otherwise scan the pending QR.
+  // Clear every trace of a previous patient on this (possibly shared kiosk)
+  // browser, so a new scan never inherits an old session_id, OTP-verified flag,
+  // form draft, or welcome card — which is what made the interview skip questions
+  // and jump straight to vitals.
+  function clearPatientState() {
+    ['token', 'session_id', 'department', 'qr', 'otp_verified', 'register_form', 'welcome_back']
+      .forEach(k => { try { sessionStorage.removeItem(k); } catch {} });
+    setToken(null);
+  }
+
+  // Picking a language is the "proceed" action on a kiosk. A fresh URL QR always
+  // scans a NEW session; otherwise, if a session exists (returned from the form),
+  // reuse it; otherwise scan the remembered QR.
   function pickLang(code) {
     setLang(code);
     try { sessionStorage.setItem('lang', code); } catch {}
-    let tok = null;
-    try { tok = sessionStorage.getItem('token'); } catch {}
-    if (tok) {
-      router.push('/patient/register');   // reuse existing session, don't re-scan
+    const urlQr = searchParams.get('qr');
+    if (urlQr) {
+      handleQR(urlQr, code);               // fresh kiosk QR → new session, clean slate
+    } else if (hasSession) {
+      router.push('/patient/register');    // returned from the form — reuse session
     } else if (pendingQr) {
-      handleQR(pendingQr, code);           // first scan from the kiosk QR
+      handleQR(pendingQr, code);           // remembered QR, no live session → new one
     }
     // else: direct visit, no session yet — language just updates; use the Scan button.
   }
@@ -58,6 +78,9 @@ function HomeContent() {
     setError('');
     try {
       const result = await api.scan(payload);
+      // A successful scan = a new visit. Wipe any previous patient's state FIRST so
+      // nothing leaks into this session, then write the fresh session's values.
+      clearPatientState();
       setToken(result.token);
       sessionStorage.setItem('token', result.token);
       sessionStorage.setItem('session_id', result.session.id);
