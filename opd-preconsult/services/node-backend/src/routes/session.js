@@ -55,6 +55,19 @@ router.post('/register', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid phone number' });
     }
 
+    // Gate on OTP: the session must have passed phone verification (POST
+    // /api/otp/verify) and the number being registered must be the exact one that
+    // was verified — so the request can't be edited to register a different,
+    // unverified number after the code check.
+    const guard = await pool.query(
+      'SELECT phone_verified, patient_phone FROM sessions WHERE id = $1',
+      [session_id]
+    );
+    if (!guard.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!guard.rows[0].phone_verified || guard.rows[0].patient_phone !== normalizedPhone) {
+      return res.status(403).json({ error: 'Phone not verified' });
+    }
+
     const result = await pool.query(
       `UPDATE sessions SET
         patient_name = $1, patient_phone = $2, patient_age = $3,
@@ -89,31 +102,33 @@ router.post('/register', authMiddleware, async (req, res) => {
       sess = upd.rows[0];
     }
 
-    // Look up this patient's prior visits (same phone number) so the UI can
-    // greet returning patients with their login history. We identify a patient
-    // by phone and count only COMPLETED visits (state = 'COMPLETE'), i.e. those
-    // where the patient finished the whole pre-consult and submitted — matching
-    // the rule that a visit only "counts" once submitted. The current session
-    // is excluded (it isn't complete yet anyway).
+    // Look up THIS person's prior visits. One phone may serve a whole family, so
+    // a patient is identified by phone + name (case/space-insensitive), not phone
+    // alone — otherwise a relative's visits would be miscounted as this person's.
+    // Only COMPLETED visits count (a visit "counts" once submitted). The current
+    // session is excluded (it isn't complete yet anyway).
+    const nameKey = String(patient_name).trim().toLowerCase();
     const history = await pool.query(
       `SELECT created_at, department
          FROM sessions
         WHERE patient_phone = $1
+          AND lower(trim(patient_name)) = $3
           AND id <> $2
           AND state = 'COMPLETE'
           AND removed_at IS NULL
         ORDER BY created_at DESC
         LIMIT 5`,
-      [normalizedPhone, session_id]
+      [normalizedPhone, session_id, nameKey]
     );
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS count
          FROM sessions
         WHERE patient_phone = $1
+          AND lower(trim(patient_name)) = $3
           AND id <> $2
           AND state = 'COMPLETE'
           AND removed_at IS NULL`,
-      [normalizedPhone, session_id]
+      [normalizedPhone, session_id, nameKey]
     );
 
     res.json({

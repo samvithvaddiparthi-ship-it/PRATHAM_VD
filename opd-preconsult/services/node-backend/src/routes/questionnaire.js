@@ -89,21 +89,24 @@ router.get('/next/:session_id', authMiddleware, async (req, res) => {
   try {
     const { session_id } = req.params;
 
-    const sessResult = await pool.query('SELECT department, patient_phone FROM sessions WHERE id = $1', [session_id]);
+    const sessResult = await pool.query('SELECT department, patient_phone, patient_name FROM sessions WHERE id = $1', [session_id]);
     if (!sessResult.rows.length) return res.status(404).json({ error: 'Session not found' });
-    const { department, patient_phone } = sessResult.rows[0];
+    const { department, patient_phone, patient_name } = sessResult.rows[0];
 
     let walk = await walkDag(session_id, department);
 
     // The "first visit or follow-up?" question (base, role=visit_type) is never
     // shown to the patient — we resolve it automatically and authoritatively from
-    // their history: if this phone has ANY prior COMPLETED visit it's a follow-up,
-    // otherwise a first visit. Determining it here (server-side, from live data)
-    // rather than from a client flag avoids stale/cross-patient classification.
+    // their history: if THIS person (phone + name — one number may serve a whole
+    // family) has ANY prior COMPLETED visit it's a follow-up, otherwise a first
+    // visit. Determining it here (server-side, from live data) rather than from a
+    // client flag avoids stale/cross-patient classification.
     if (walk.current && roleOf(walk.current) === 'visit_type') {
       const prior = await pool.query(
-        `SELECT 1 FROM sessions WHERE patient_phone = $1 AND id <> $2 AND state = 'COMPLETE' LIMIT 1`,
-        [patient_phone, session_id]
+        `SELECT 1 FROM sessions
+          WHERE patient_phone = $1 AND lower(trim(patient_name)) = lower(trim($3))
+            AND id <> $2 AND state = 'COMPLETE' LIMIT 1`,
+        [patient_phone, session_id, patient_name || '']
       );
       const answer = prior.rows.length ? 'followup' : 'first';
       await pool.query(

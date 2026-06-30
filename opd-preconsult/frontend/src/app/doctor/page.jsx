@@ -29,7 +29,11 @@ function fmtVisitDate(ts) {
 function groupByPatient(list) {
   const map = new Map();
   for (const s of list) {
-    const key = s.patient_phone || s.id;
+    // One phone may serve a whole family, so a patient is keyed by phone + name
+    // (case/space-insensitive) — not phone alone — otherwise two different people
+    // sharing a number would collapse into one card.
+    const nameKey = (s.patient_name || '').trim().toLowerCase();
+    const key = s.patient_phone ? `${s.patient_phone}|${nameKey}` : s.id;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(s);
   }
@@ -39,12 +43,13 @@ function groupByPatient(list) {
   // to the top of the queue), otherwise by when it was filled.
   const recencyOf = v => new Date((RELEASE_RECENT(v) && v.released_at) || v.created_at).getTime();
   const patients = [];
-  for (const [phone, visits] of map) {
+  for (const [key, visits] of map) {
     visits.sort((a, b) => recencyOf(b) - recencyOf(a));
     const latest = visits[0];
     const filledNow = !!latest.is_recent;
     patients.push({
-      phone,
+      key,
+      phone: latest.patient_phone || '',
       name: latest.patient_name || 'Unregistered',
       age: latest.patient_age,
       gender: latest.patient_gender,
@@ -221,12 +226,12 @@ function DoctorDashboard({ doctor }) {
   // vanish. Patients who never had a recent fill are never pinned, so they stay
   // hidden. Resets on a full page reload (then the recent-only rule applies).
   useEffect(() => {
-    const recent = groupByPatient(sessions).filter(p => p.filledNow).map(p => p.phone);
+    const recent = groupByPatient(sessions).filter(p => p.filledNow).map(p => p.key);
     if (!recent.length) return;
     setPinned(prev => {
       let changed = false;
       const next = { ...prev };
-      for (const ph of recent) if (!next[ph]) { next[ph] = true; changed = true; }
+      for (const k of recent) if (!next[k]) { next[k] = true; changed = true; }
       return changed ? next : prev;
     });
   }, [sessions]);
@@ -240,7 +245,7 @@ function DoctorDashboard({ doctor }) {
     // (consulted_at set). A patient merely reassigned to me (consulted_at null)
     // is NOT an active consultation, so it never holds the single-consult lock.
     const mine = groupByPatient(sessions).find(p => p.lockedById === doctor.id && p.consultedAt && !p.dispatched);
-    if (mine && activeLock !== mine.phone) setActiveLock(mine.phone);
+    if (mine && activeLock !== mine.key) setActiveLock(mine.key);
     else if (!mine && activeLock) setActiveLock(null);
   }, [sessions]);
 
@@ -379,16 +384,16 @@ function DoctorDashboard({ doctor }) {
     // set), or the optimistic activeLock. A patient merely reassigned to me
     // (consulted_at null) is NOT yet open — it must go through the lock flow below,
     // so it still counts against the "one consultation at a time" rule.
-    const activelyMine = (p.lockedById === doctor.id && p.consultedAt) || activeLock === p.phone;
-    const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
+    const activelyMine = (p.lockedById === doctor.id && p.consultedAt) || activeLock === p.key;
+    const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.key;
 
     // Already my open consultation → just toggle the tree open/closed, no confirm.
     if (activelyMine) {
-      setExpanded(e => ({ ...e, [p.phone]: !e[p.phone] }));
+      setExpanded(e => ({ ...e, [p.key]: !e[p.key] }));
       return;
     }
     // I'm mid-consultation with someone else → block opening a second one.
-    if (activeLock && activeLock !== p.phone) {
+    if (activeLock && activeLock !== p.key) {
       setSwitchBlocked(true);
       return;
     }
@@ -406,8 +411,8 @@ function DoctorDashboard({ doctor }) {
 
     const res = await api.doctorOpen(p.latest.id).catch(() => ({ ok: false, error: true }));
     if (res.ok) {
-      setActiveLock(p.phone);
-      setExpanded(e => ({ ...e, [p.phone]: true }));
+      setActiveLock(p.key);
+      setExpanded(e => ({ ...e, [p.key]: true }));
       markSeen(p.latest.id);
       selectSession(p.latest);
       setTab('consulting');   // patient is now in-progress → move to the Consulting tab
@@ -572,7 +577,7 @@ function DoctorDashboard({ doctor }) {
   // being consulted → Consulting tab; everyone else openable → Queue. This keeps
   // the Queue from filling up with patients already under consultation.
   const allActive = groupByPatient(sessions).filter(p => !p.dispatched);
-  const waitingPatients = allActive.filter(p => (p.filledNow || pinned[p.phone]) && !p.consultedAt);
+  const waitingPatients = allActive.filter(p => (p.filledNow || pinned[p.key]) && !p.consultedAt);
   const consultingPatients = allActive.filter(p => !!p.consultedAt);
   const patients = tab === 'consulting' ? consultingPatients : waitingPatients; // active tab's list
   // Consulted: a flat list of INDIVIDUAL consulted visits (NOT grouped per
@@ -736,16 +741,16 @@ function DoctorDashboard({ doctor }) {
           const assignedToMe = !!(p.lockedById && p.lockedById === doctor.id);
           // "Locked by me" = an ACTIVE consultation I've opened (consulted_at set),
           // not a patient merely assigned/handed to me (those stay in the queue).
-          const lockedByMe = (assignedToMe && p.consultedAt) || activeLock === p.phone;
-          const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.phone;
+          const lockedByMe = (assignedToMe && p.consultedAt) || activeLock === p.key;
+          const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.key;
           // Pending handoff: reassigned to me and not yet opened — shows the alert chip.
           const pendingHandoff = assignedToMe && p.latest.reassigned_by && !p.consultedAt;
           // Only the patient I currently hold shows its visit tree — others can't
           // be expanded/peeked (opening = locking, which requires the confirm).
-          const isOpen = lockedByMe && !!expanded[p.phone];
+          const isOpen = lockedByMe && !!expanded[p.key];
           const headColor = p.triage ? TRIAGE_COLORS[p.triage] : null;
           return (
-            <div key={p.phone} style={{ marginBottom: 8 }}>
+            <div key={p.key} style={{ marginBottom: 8 }}>
               {/* Patient heading */}
               <div onClick={() => openPatient(p)}
                 /* Header tinted by the patient's current triage; greyed out when
