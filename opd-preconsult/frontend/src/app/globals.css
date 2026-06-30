@@ -31,6 +31,11 @@ body {
   padding-bottom: 44px;
 }
 
+/* Reserve a top strip for the fixed accessibility bar (A11yProvider: Text size +
+   Assist), added only on patient routes. Without this the bar overlaps the top of
+   the card on phones, where the card spans almost the full viewport width. */
+body.has-a11y-bar { padding-top: 52px; }
+
 .screen {
   min-height: 100dvh;
   display: flex;

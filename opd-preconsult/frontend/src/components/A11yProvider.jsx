@@ -29,6 +29,10 @@ export default function A11yProvider({ children }) {
     const fs = !isPatient ? 1 : (assist ? ASSIST_FS : scale);
     document.documentElement.style.setProperty('--fs', String(fs));
     document.documentElement.classList.toggle('assist', isPatient && assist);
+    // Reserve a top strip for the fixed bar so it never overlaps page content
+    // (on a phone the centered card spans nearly the full width and would sit
+    // under the bar). Only on patient routes, where the bar is rendered.
+    document.body.classList.toggle('has-a11y-bar', isPatient);
     // Let auto-read-aware components (e.g. QuestionCard) react.
     window.dispatchEvent(new CustomEvent('assistchange', { detail: isPatient && assist }));
   }, [scale, assist, isPatient]);
@@ -51,7 +55,8 @@ export default function A11yProvider({ children }) {
     <>
       <div style={{
         position: 'fixed', top: 8, right: 10, zIndex: 70,
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap',
+        maxWidth: 'calc(100vw - 20px)', whiteSpace: 'nowrap',
         background: '#fff', border: '1px solid #e0e6ec', borderRadius: 22,
         padding: '4px 10px', boxShadow: '0 1px 5px rgba(0,0,0,0.12)',
       }}>

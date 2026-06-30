@@ -12,14 +12,45 @@ function HomeContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  // When the patient opens a kiosk QR URL (?qr=...) we hold the payload here
+  // instead of processing it immediately. The QR is only scanned once the patient
+  // taps their language — so they always see the welcome screen and make a language
+  // choice before the session is created.
+  const [pendingQr, setPendingQr] = useState(null);
+  // True once the patient has an active session this visit (e.g. they tapped Back
+  // from the form to change language). Lets a language tap send them onward instead
+  // of dead-ending when the ?qr= param is no longer in the URL.
+  const [hasSession, setHasSession] = useState(false);
 
   useEffect(() => {
     // Optional ?lang=hi|te|en lets a bypass link jump straight into a language.
     const urlLang = searchParams.get('lang');
     if (urlLang && ['en', 'hi', 'te'].includes(urlLang)) setLang(urlLang);
     const qr = searchParams.get('qr');
-    if (qr) handleQR(qr, urlLang);
+    // Store QR payload but don't process yet — wait for the patient to pick a language.
+    // Fall back to the QR remembered in sessionStorage so returning here (Back from the
+    // form, which drops the URL param) still has something to proceed with.
+    let storedQr = null, hasTok = false;
+    try { storedQr = sessionStorage.getItem('qr'); hasTok = !!sessionStorage.getItem('token'); } catch {}
+    if (qr) setPendingQr(qr);
+    else if (storedQr) setPendingQr(storedQr);
+    setHasSession(hasTok);
   }, [searchParams]);
+
+  // Picking a language is the "proceed" action on a kiosk. If a session already
+  // exists (returned from the form), reuse it; otherwise scan the pending QR.
+  function pickLang(code) {
+    setLang(code);
+    try { sessionStorage.setItem('lang', code); } catch {}
+    let tok = null;
+    try { tok = sessionStorage.getItem('token'); } catch {}
+    if (tok) {
+      router.push('/patient/register');   // reuse existing session, don't re-scan
+    } else if (pendingQr) {
+      handleQR(pendingQr, code);           // first scan from the kiosk QR
+    }
+    // else: direct visit, no session yet — language just updates; use the Scan button.
+  }
 
   async function handleQR(payload, langOverride) {
     setShowScanner(false);
@@ -60,22 +91,31 @@ function HomeContent() {
             <button
               key={code}
               className={`lang-btn ${lang === code ? 'active' : ''}`}
-              onClick={() => setLang(code)}
+              onClick={() => pickLang(code)}
             >
               {label}
             </button>
           ))}
         </div>
 
-        {/* Camera scan button — primary CTA */}
-        <button
-          className="btn btn-primary"
-          style={{ fontSize: 18, padding: '16px 24px', gap: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={() => setShowScanner(true)}
-          disabled={loading}
-        >
-          📷 {lang === 'hi' ? 'QR कोड स्कैन करें' : lang === 'te' ? 'QR కోడ్ స్కాన్ చేయండి' : 'Scan QR Code'}
-        </button>
+        {/* When a kiosk QR is pending (or a session already exists from an earlier
+            scan this visit), language selection IS the proceed action — show a hint
+            instead of the camera button to avoid confusing the patient. */}
+        {(pendingQr || hasSession) ? (
+          <p style={{ color: 'var(--text-light)', fontSize: 14, fontWeight: 500 }}>
+            {lang === 'hi' ? '👆 अपनी भाषा चुनें' : lang === 'te' ? '👆 మీ భాషను ఎంచుకోండి' : '👆 Tap your language to continue'}
+          </p>
+        ) : (
+          /* Camera scan button — primary CTA for in-app scanning */
+          <button
+            className="btn btn-primary"
+            style={{ fontSize: 18, padding: '16px 24px', gap: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={() => setShowScanner(true)}
+            disabled={loading}
+          >
+            📷 {lang === 'hi' ? 'QR कोड स्कैन करें' : lang === 'te' ? 'QR కోడ్ స్కాన్ చేయండి' : 'Scan QR Code'}
+          </button>
+        )}
 
         {/* Manual entry for demo/fallback */}
         <details style={{ width: '100%' }}>
