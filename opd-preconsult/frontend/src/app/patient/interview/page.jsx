@@ -3,8 +3,12 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t } from '../../../lib/i18n';
+import ProgressBar from '../../../components/ProgressBar';
 import QuestionCard from '../../../components/QuestionCard';
 import TriageBadge from '../../../components/TriageBadge';
+
+// "Question" label for the within-step counter shown on the progress bar.
+const QUESTION_WORD = { en: 'Question', hi: 'प्रश्न', te: 'ప్రశ్న' };
 
 export default function Interview() {
   const router = useRouter();
@@ -186,9 +190,7 @@ export default function Interview() {
 
   return (
     <div className="screen">
-      <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" />
-      </div>
+      <ProgressBar stepId="interview" lang={lang} note={`${QUESTION_WORD[lang] || QUESTION_WORD.en} ${history.length + 1}`} />
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}
       <button className="btn btn-outline" onClick={handleGoBack} style={{ marginTop: 12 }}>

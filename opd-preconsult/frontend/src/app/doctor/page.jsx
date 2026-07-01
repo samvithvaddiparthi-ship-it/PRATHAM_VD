@@ -1782,7 +1782,16 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
   async function handleSave() {
     const validItems = items.filter(i => i.drug_name);
-    if (!validItems.length) return;
+    // Advice-only consultations are legitimate (reassurance, lifestyle advice,
+    // referral, "review if worse"). If no medicine was added, confirm before
+    // saving an advice-only prescription rather than silently doing nothing.
+    if (!validItems.length) {
+      if (!(await confirm({
+        title: 'No medicine added',
+        message: 'You have not added any medication. Save this as an advice-only prescription (guidance only, no drugs)?',
+        confirmLabel: 'Save advice-only',
+      }))) return;
+    }
 
     // Require dose AND duration for every prescribed drug before saving.
     const incomplete = validItems.filter(i => !String(i.dose || '').trim() || !String(i.duration || '').trim());
@@ -2111,7 +2120,22 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           placeholder="Record the consultation above to auto-fill this, or type the patient's instructions here. e.g. Drink plenty of fluids and rest. Get a blood test done. Come back in 5 days, or sooner if the fever worsens." />
       </div>
 
-      <button className="btn btn-primary" onClick={handleSave} disabled={saving || !items.some(i => i.drug_name)}>
+      {/* Advice-only heads-up — shown only when NO medication is entered but there
+          is advice to save. This is the zero-drug case; the dose/duration warning
+          only fires when a drug IS entered, so the two alerts never overlap. */}
+      {!items.some(i => i.drug_name) && String(notes || '').trim() && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: '#FFF8E1', border: '1px solid #F0C36D', borderRadius: 8, padding: '10px 12px' }}>
+          <span style={{ fontSize: 15, lineHeight: 1.2 }}>⚠️</span>
+          <span style={{ fontSize: 12.5, color: '#8A6D1B', lineHeight: 1.5 }}>
+            <strong>No medication added.</strong> This will be saved as an <strong>advice-only</strong> prescription (guidance only, no drugs). You&#39;ll be asked to confirm.
+          </span>
+        </div>
+      )}
+
+      {/* Enabled when there's at least one drug OR some advice text (advice-only
+          consultations are allowed — handleSave asks to confirm the no-drug case). */}
+      <button className="btn btn-primary" onClick={handleSave}
+        disabled={saving || (!items.some(i => i.drug_name) && !String(notes || '').trim())}>
         {saving ? 'Saving...' : 'Save & Generate QR'}
       </button>
       {saveError && (
@@ -2119,20 +2143,49 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
       )}
       </>)}
 
-      {/* QR Result */}
+      {/* Saved result — printed prescription (medications) FIRST, QR below. A
+          doctor reviewing this cares about the meds; the QR is for the patient to
+          open the verified digital Rx at the pharmacy. */}
       {saved && (
         <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 16, textAlign: 'center' }}>
           <p style={{ fontWeight: 600, color: '#1E8449', marginBottom: 12 }}>✓ Prescription saved!</p>
 
-          {/* Actual scannable QR code */}
+          {/* Printed prescription card (medications + advice) */}
+          <div style={{ background: '#fff', borderRadius: 10, padding: 14, textAlign: 'left', marginBottom: 12, border: '1px solid #cfe9d8' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline', borderBottom: '1px solid #eef1f3', paddingBottom: 6, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--primary)' }}>
+                {saved.prescription?.patient_name || session?.patient_name || 'Patient'}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                {new Date(saved.issued_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+              </span>
+            </div>
+            {(saved.items || []).length === 0 ? (
+              <p style={{ fontSize: 13, color: 'var(--text-light)', fontStyle: 'italic' }}>No medication prescribed — advice only.</p>
+            ) : (
+              (saved.items || []).map((it, i) => (
+                <p key={i} style={{ fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>
+                  • <strong>{it.drug_name}</strong>
+                  {it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` — ${it.frequency}` : ''}
+                  {it.duration ? `, ${it.duration}` : ''}
+                  {it.instructions ? ` (${it.instructions})` : ''}
+                </p>
+              ))
+            )}
+            {saved.prescription?.notes && (
+              <p style={{ fontSize: 12, color: 'var(--text)', marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e0e0e0' }}>
+                <strong style={{ color: 'var(--primary)' }}>Advice:</strong> {saved.prescription.notes}
+              </p>
+            )}
+          </div>
+
+          {/* Scannable QR (secondary) */}
           {qrUrl && (
-            <div style={{ background: '#fff', display: 'inline-block', padding: 12, borderRadius: 8, marginBottom: 8 }}>
-              <img src={qrUrl} alt="Prescription QR code" style={{ display: 'block', width: 220, height: 220 }} />
+            <div style={{ background: '#fff', display: 'inline-block', padding: 10, borderRadius: 8, marginBottom: 6 }}>
+              <img src={qrUrl} alt="Prescription QR code" style={{ display: 'block', width: 170, height: 170 }} />
             </div>
           )}
-          {qrError && (
-            <p style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{qrError}</p>
-          )}
+          {qrError && (<p style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{qrError}</p>)}
           <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 12 }}>
             Scan to open the verified digital prescription.
           </p>
@@ -2148,27 +2201,6 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
             style={{ marginBottom: 12 }}>
             ＋ Write another prescription
           </button>
-
-          {/* Human-readable summary of what the QR contains */}
-          <div style={{ background: '#fff', borderRadius: 8, padding: 12, textAlign: 'left', marginBottom: 8 }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)', marginBottom: 6 }}>
-              {saved.prescription?.patient_name || session?.patient_name || 'Patient'} ·{' '}
-              {new Date(saved.issued_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
-            {(saved.items || []).map((it, i) => (
-              <p key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: 2 }}>
-                • <strong>{it.drug_name}</strong>
-                {it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` — ${it.frequency}` : ''}
-                {it.duration ? `, ${it.duration}` : ''}
-                {it.instructions ? ` (${it.instructions})` : ''}
-              </p>
-            ))}
-            {saved.prescription?.notes && (
-              <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 6, fontStyle: 'italic' }}>
-                Note: {saved.prescription.notes}
-              </p>
-            )}
-          </div>
 
           {/* Raw payload tucked away for debugging / manual encoding */}
           <details style={{ textAlign: 'left' }}>
@@ -2310,72 +2342,60 @@ function ScribePanel({ session, embedded = false, onAdvice }) {
     });
   }
 
-  // Collapsible header used when embedded inside the Prescribe tab.
-  if (embedded && !open) {
-    return (
-      <div style={{ border: '1px solid #E0E0E0', borderRadius: 12, padding: '10px 14px', marginBottom: 4 }}>
-        <button type="button" onClick={() => setOpen(true)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
-          <span style={{ fontSize: 14 }}>🎙</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Consultation Scribe</span>
-          <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
-            {advised || soapText ? '✓ note ready · summary below' : 'record → SOAP note + patient summary'}
-          </span>
-          <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>▸</span>
-        </button>
-      </div>
-    );
-  }
+  // Scribe stays inside Prescribe (folded-in, not a separate tab), but the RECORD
+  // action is always visible; the SOAP note is the collapsible dropdown. `open`
+  // now controls whether the SOAP note is expanded (collapsed by default).
+  const soapReady = !!(soapText && soapText.trim());
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16,
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12,
       ...(embedded ? { border: '1px solid #E0E0E0', borderRadius: 12, padding: 14, marginBottom: 4 } : {}) }}>
       {toastView}
-      {embedded && (
-        <button type="button" onClick={() => setOpen(false)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
-          <span style={{ fontSize: 14 }}>🎙</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Consultation Scribe</span>
-          <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>▾</span>
-        </button>
-      )}
-      <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12, fontSize: 12, color: 'var(--text-light)' }}>
-        Record the consultation — it becomes an editable SOAP note below, and a plain-language summary
-        is added to <strong>Patient summary</strong> for the prescription. Audio is transcribed then
-        discarded (zero-retention).
-      </div>
 
-      {/* Recording controls */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      {/* Title + always-visible recording control */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>🎙 Consultation Scribe</span>
         {!recording ? (
           <button className="btn btn-primary" onClick={startRecording} disabled={!!processing}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', padding: '0 20px' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', padding: '0 20px', marginLeft: 'auto' }}>
             <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#fff', display: 'inline-block' }} />
             Start Recording
           </button>
         ) : (
           <button className="btn" onClick={stopRecording}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', padding: '0 20px', background: 'var(--red)', color: '#fff', border: 'none' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', padding: '0 20px', marginLeft: 'auto', background: 'var(--red)', color: '#fff', border: 'none' }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: '#fff', display: 'inline-block', animation: 'pulse 1s infinite' }} />
             Stop Recording
           </button>
         )}
-        {processing && <span style={{ fontSize: 13, color: 'var(--secondary)' }}>{processing}</span>}
       </div>
+      {processing && <span style={{ fontSize: 13, color: 'var(--secondary)' }}>{processing}</span>}
+      <p style={{ fontSize: 11, color: 'var(--text-light)', margin: 0 }}>
+        Record the consultation → editable SOAP note (below) + a plain-language summary added to <strong>Patient summary</strong>. Audio is transcribed then discarded.
+      </p>
 
-      {/* Editable SOAP note (doctor's clinical record — not shown to the patient) */}
-      <div>
-        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>SOAP Note <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>(editable — your clinical record)</span></label>
-        <textarea className="input" value={soapText}
-          onChange={e => setSoapText(e.target.value)}
-          onBlur={() => persistSoap(soapText)}
-          rows={10}
-          placeholder="Record the consultation to auto-generate the SOAP note here, or type it directly…"
-          style={{ fontSize: 13, lineHeight: 1.6, marginTop: 4 }} />
-        {embedded && advised && (
-          <p style={{ fontSize: 11, color: '#1E8449', marginTop: 4 }}>
-            ✓ A plain-language summary was added to <strong>Patient summary</strong> below — review/edit before saving.
-          </p>
+      {/* SOAP note — collapsible dropdown */}
+      <div style={{ borderTop: '1px solid #EEF1F3', paddingTop: 10 }}>
+        <button type="button" onClick={() => setOpen(o => !o)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>SOAP Note</span>
+          <span style={{ fontSize: 11, color: 'var(--text-light)' }}>{soapReady ? '✓ note ready' : '(editable — your clinical record)'}</span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>{open ? '▾' : '▸'}</span>
+        </button>
+        {open && (
+          <div>
+            <textarea className="input" value={soapText}
+              onChange={e => setSoapText(e.target.value)}
+              onBlur={() => persistSoap(soapText)}
+              rows={10}
+              placeholder="Record the consultation to auto-generate the SOAP note here, or type it directly…"
+              style={{ fontSize: 13, lineHeight: 1.6, marginTop: 8 }} />
+            {embedded && advised && (
+              <p style={{ fontSize: 11, color: '#1E8449', marginTop: 4 }}>
+                ✓ A plain-language summary was added to <strong>Patient summary</strong> below — review/edit before saving.
+              </p>
+            )}
+          </div>
         )}
       </div>
     </div>

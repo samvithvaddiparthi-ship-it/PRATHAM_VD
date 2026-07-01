@@ -52,8 +52,11 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
     if (!doctorId) return res.status(403).json({ error: 'Doctor auth required' });
 
     const { session_id, items, notes } = req.body;
-    if (!session_id || !items || !items.length) {
-      return res.status(400).json({ error: 'session_id and items required' });
+    // Advice-only consultations are allowed — a prescription may have zero drugs
+    // (guidance/notes only). Only session_id is strictly required.
+    const rxItems = Array.isArray(items) ? items : [];
+    if (!session_id) {
+      return res.status(400).json({ error: 'session_id required' });
     }
 
     // Patient identity from the session (signed into the payload so the digital
@@ -84,7 +87,7 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
 
     // Insert items
     const insertedItems = [];
-    for (const item of items) {
+    for (const item of rxItems) {
       const result = await pool.query(
         `INSERT INTO prescription_items (prescription_id, drug_name, dose, frequency, duration, instructions, warnings)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
@@ -106,7 +109,7 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
       doctor: doctorName,
       doctor_registration: doctorReg,
       department: doctorDept,
-      items: items.map(i => ({
+      items: rxItems.map(i => ({
         drug: i.drug_name,
         dose: i.dose,
         freq: i.frequency,

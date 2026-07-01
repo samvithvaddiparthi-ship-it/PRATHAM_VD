@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t } from '../../../lib/i18n';
+import ProgressBar from '../../../components/ProgressBar';
 
 export default function Consent() {
   const router = useRouter();
@@ -21,9 +22,7 @@ export default function Consent() {
 
   return (
     <div className="screen">
-      <div className="progress-dots">
-        <span className="dot done" /><span className="dot active" /><span className="dot" /><span className="dot" /><span className="dot" />
-      </div>
+      <ProgressBar stepId="consent" lang={lang} />
       <div className="card" style={{ gap: 24, justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', fontSize: 48 }}>🔒</div>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('consent_title', lang)}</h2>

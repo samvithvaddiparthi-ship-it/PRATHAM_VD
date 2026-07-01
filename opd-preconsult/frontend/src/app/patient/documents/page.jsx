@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t, tf } from '../../../lib/i18n';
+import ProgressBar from '../../../components/ProgressBar';
 
 const DOC_TYPES = [
   { value: 'prescription', label_en: 'Prescription', label_hi: 'प्रिस्क्रिप्शन', label_te: 'ప్రిస్క్రిప్షన్' },
@@ -64,9 +65,7 @@ export default function Documents() {
 
   return (
     <div className="screen">
-      <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot active" /><span className="dot" /><span className="dot" />
-      </div>
+      <ProgressBar stepId="documents" lang={lang} />
       <div className="card" style={{ gap: 16 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('documents_title', lang)}</h2>
         <p style={{ color: 'var(--text-light)', textAlign: 'center', fontSize: 14 }}>{t('documents_desc', lang)}</p>

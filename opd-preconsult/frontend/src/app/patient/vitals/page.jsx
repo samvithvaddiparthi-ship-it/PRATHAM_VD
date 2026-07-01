@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t } from '../../../lib/i18n';
+import ProgressBar from '../../../components/ProgressBar';
 import VitalsForm from '../../../components/VitalsForm';
 import ListenButton from '../../../components/ListenButton';
 
@@ -133,9 +134,7 @@ export default function Vitals() {
 
   return (
     <div className="screen">
-      <div className="progress-dots">
-        <span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot done" /><span className="dot active" />
-      </div>
+      <ProgressBar stepId="vitals" lang={lang} />
       <div className="card" style={{ gap: 12 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('vitals_title', lang)}</h2>
         <div style={{ display: 'flex', justifyContent: 'center' }}>

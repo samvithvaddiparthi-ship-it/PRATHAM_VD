@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { api, setToken } from '../../../lib/api';
 import { t, tf } from '../../../lib/i18n';
 import { normalizeIndianPhone } from '../../../lib/phone';
+import ProgressBar from '../../../components/ProgressBar';
 
 // Patient entry is now a three-step flow:
 //   1. phone     — enter mobile number, request an SMS OTP
@@ -176,17 +177,11 @@ export default function Register() {
     } catch { return ts; }
   }
 
-  const dots = (n) => (
-    <div className="progress-dots">
-      {[0, 1, 2, 3, 4].map(i => <span key={i} className={`dot ${i === 0 ? 'active' : ''}`} />)}
-    </div>
-  );
-
   // ─────────────────────────── Step 1: phone ───────────────────────────
   if (phase === 'phone') {
     return (
       <div className="screen">
-        {dots()}
+        <ProgressBar stepId="register" lang={lang} />
         <form className="card" style={{ gap: 16 }} onSubmit={sendOtp} noValidate>
           <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('otp_phone_title', lang)}</h2>
           <p style={{ fontSize: 13, color: 'var(--text-light)', textAlign: 'center', lineHeight: 1.5 }}>{t('otp_phone_sub', lang)}</p>
@@ -208,7 +203,7 @@ export default function Register() {
           <button className="btn btn-primary" type="submit" disabled={loading}>
             {loading ? t('sending', lang) : t('send_code', lang)}
           </button>
-          <button type="button" className="btn btn-outline" onClick={() => router.push('/')} style={{ fontSize: 13 }}>
+          <button type="button" className="btn btn-outline" onClick={() => router.push('/')}>
             ← {t('go_back', lang)}
           </button>
         </form>
@@ -241,7 +236,7 @@ export default function Register() {
 
     return (
       <div className="screen">
-        {dots()}
+        <ProgressBar stepId="register" lang={lang} />
         <form className="card" style={{ gap: 16 }} onSubmit={alreadyVerified ? (e) => { e.preventDefault(); setPhase('identify'); } : verifyOtp} noValidate>
           <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('otp_enter_title', lang)}</h2>
           <p style={{ fontSize: 13, color: 'var(--text-light)', textAlign: 'center', lineHeight: 1.5 }}>
@@ -312,7 +307,7 @@ export default function Register() {
   const showNewFields = selected === 'new';
   return (
     <div className="screen">
-      {dots()}
+      <ProgressBar stepId="register" lang={lang} />
       <form className="card" style={{ gap: 16 }} onSubmit={submitIdentity} noValidate>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>
           {hasHistory ? t('who_title', lang) : t('new_person_title', lang)}
@@ -399,7 +394,7 @@ export default function Register() {
         <button className="btn btn-primary" type="submit" disabled={loading}>
           {loading ? '...' : t('next', lang)}
         </button>
-        <button type="button" className="btn btn-outline" style={{ fontSize: 13 }}
+        <button type="button" className="btn btn-outline"
           onClick={() => { setPhase('otp'); setError(''); }}>
           ← {t('go_back', lang)}
         </button>

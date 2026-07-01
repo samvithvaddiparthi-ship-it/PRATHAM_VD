@@ -116,7 +116,7 @@ export default function RxDocument({ rx = {}, template = {}, verified = null }) 
         </thead>
         <tbody>
           {items.length === 0 ? (
-            <tr><td colSpan={4} style={{ padding: 10, color: muted, textAlign: 'center' }}>—</td></tr>
+            <tr><td colSpan={4} style={{ padding: 10, color: muted, textAlign: 'center', fontStyle: 'italic' }}>No medication prescribed — advice only</td></tr>
           ) : items.map((it, i) => (
             <tr key={i} style={{ borderBottom: `1px solid #f1f5f9` }}>
               <td style={{ padding: '8px 4px', fontWeight: 600 }}>

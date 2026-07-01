@@ -140,25 +140,6 @@ function HomeContent() {
           </button>
         )}
 
-        {/* Manual entry for demo/fallback */}
-        <details style={{ width: '100%' }}>
-          <summary style={{ fontSize: 12, color: 'var(--text-light)', cursor: 'pointer', marginBottom: 8 }}>
-            Enter QR code manually
-          </summary>
-          <input className="input" placeholder="Base64 QR payload" id="qr-input" />
-          <button
-            className="btn btn-outline"
-            style={{ marginTop: 8, fontSize: 14 }}
-            disabled={loading}
-            onClick={() => {
-              const val = document.getElementById('qr-input').value;
-              if (val) handleQR(val);
-            }}
-          >
-            {loading ? 'Loading...' : 'Start Session'}
-          </button>
-        </details>
-
         {error && <p style={{ color: 'var(--red)', fontSize: 14 }}>{error}</p>}
       </div>
     </div>
