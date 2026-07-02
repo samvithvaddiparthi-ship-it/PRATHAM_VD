@@ -2132,12 +2132,27 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         </div>
       )}
 
-      {/* Enabled when there's at least one drug OR some advice text (advice-only
-          consultations are allowed — handleSave asks to confirm the no-drug case). */}
-      <button className="btn btn-primary" onClick={handleSave}
-        disabled={saving || (!items.some(i => i.drug_name) && !String(notes || '').trim())}>
-        {saving ? 'Saving...' : 'Save & Generate QR'}
-      </button>
+      {/* Save needs at least a drug OR some advice (advice-only is allowed —
+          handleSave confirms the no-drug case). When nothing is entered the button
+          is visibly greyed and a hint explains why, so it never looks like a dead
+          click. */}
+      {(() => {
+        const nothingToSave = !items.some(i => i.drug_name) && !String(notes || '').trim();
+        const off = saving || nothingToSave;
+        return (
+          <>
+            <button className="btn btn-primary" onClick={handleSave} disabled={off}
+              style={{ opacity: off ? 0.5 : 1, cursor: off ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Saving...' : 'Save & Generate QR'}
+            </button>
+            {nothingToSave && !saving && (
+              <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', marginTop: 2 }}>
+                Add a medicine, or type advice in <strong>Patient summary</strong> above, to save.
+              </p>
+            )}
+          </>
+        );
+      })()}
       {saveError && (
         <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', fontWeight: 600 }}>⚠ {saveError}</p>
       )}
@@ -2201,16 +2216,6 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
             style={{ marginBottom: 12 }}>
             ＋ Write another prescription
           </button>
-
-          {/* Raw payload tucked away for debugging / manual encoding */}
-          <details style={{ textAlign: 'left' }}>
-            <summary style={{ fontSize: 11, color: 'var(--text-light)', cursor: 'pointer' }}>
-              Show raw signed payload
-            </summary>
-            <textarea className="input" readOnly value={saved.prescription?.qr_payload || ''}
-              style={{ fontSize: 10, height: 60, fontFamily: 'monospace', marginTop: 6 }}
-              onClick={e => e.target.select()} />
-          </details>
         </div>
       )}
     </div>
