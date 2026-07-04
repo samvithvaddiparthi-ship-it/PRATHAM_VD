@@ -160,9 +160,10 @@ function DoctorDashboard({ doctor }) {
   const [consulted, setConsulted] = useState([]);
   const [selected, setSelected] = useState(null);
   const [report, setReport] = useState(null);
+  const [docs, setDocs] = useState([]);                // patient-uploaded documents (prescriptions/reports) from MinIO
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
-  const [rightTab, setRightTab] = useState('report'); // report | prescribe (Scribe is embedded in Prescribe)
+  const [rightTab, setRightTab] = useState('report'); // report | prescribe | uploaded (Scribe is embedded in Prescribe)
   // Once the doctor opens Prescribe for the selected patient we keep that panel
   // MOUNTED (just hidden) while they flip to Report/Scribe, so the saved
   // prescription + QR survive sub-tab switches instead of being rebuilt fresh.
@@ -311,6 +312,10 @@ function DoctorDashboard({ doctor }) {
     // openPatient() (with the confirm dialog). selectSession just loads a visit.
     try { setReport(await api.getReport(s.id)); } catch { setReport(null); }
     setLoading(false);
+    // Load any documents the patient uploaded at entry (prescriptions, lab reports,
+    // etc. — stored in MinIO) so the doctor can view the originals. May be several.
+    setDocs([]);
+    api.getDocuments(s.id).then(d => setDocs(Array.isArray(d) ? d : [])).catch(() => setDocs([]));
     // Load the patient's recorded voice answers (if any) for playback.
     setVoiceClips([]);
     setAudioOpen(false);
@@ -538,17 +543,14 @@ function DoctorDashboard({ doctor }) {
     }
   }
 
-  // Refresh the active tab. Spins for the real fetch time but holds the spin a
-  // minimum ~0.7s so a near-instant local refresh still visibly registers.
+  // Refresh the active tab. Spins only for the actual fetch — no artificial delay.
   async function refreshActive() {
     if (refreshing) return;
     setRefreshing(true);
-    const started = Date.now();
     try {
       await (tab === 'consulted' ? loadConsulted() : loadQueue());
     } finally {
-      const remaining = 500 - (Date.now() - started);
-      setTimeout(() => setRefreshing(false), Math.max(0, remaining));
+      setRefreshing(false);
     }
   }
 
@@ -1088,6 +1090,13 @@ function DoctorDashboard({ doctor }) {
                   if (prescribeLocked && !visitDone) { toast('Review the report first — mark it Accurate or Inaccurate.', 'error'); return; }
                   setRightTab('prescribe'); setPrescribeMounted(true);
                 }}>{visitDone ? 'Prescribed' : (prescribeLocked ? '🔒 ' : '') + 'Prescribe'}</button>
+              {/* Patient-uploaded documents (prescriptions, lab reports…). Only shown
+                  when the patient actually uploaded something — no empty tab clutter. */}
+              {docs.length > 0 && (
+                <button className={`btn ${rightTab === 'uploaded' ? 'btn-primary' : 'btn-outline'}`}
+                  style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
+                  onClick={() => setRightTab('uploaded')}>📎 Uploaded ({docs.length})</button>
+              )}
             </div>
 
             {rightTab === 'report' && (
@@ -1196,6 +1205,33 @@ function DoctorDashboard({ doctor }) {
                   !loading && <p style={{ color: 'var(--text-light)' }}>No report generated yet for this patient.</p>
                 )}
               </>
+            )}
+
+            {/* Patient-uploaded documents (prescriptions, lab reports, etc.) —
+                the ORIGINAL images from MinIO, every one the patient uploaded. */}
+            {rightTab === 'uploaded' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {docs.map(d => (
+                  <div key={d.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-light)' }}>{d.created_at ? fmtVisitDate(d.created_at) : ''}</span>
+                    </div>
+                    <div style={{ padding: 12 }}>
+                      {d.image_key ? (
+                        <a href={`/api/ocr/documents/image/${d.id}`} target="_blank" rel="noreferrer">
+                          <img src={`/api/ocr/documents/image/${d.id}`} alt="uploaded document"
+                            style={{ width: '100%', objectFit: 'contain', borderRadius: 6, border: '1px solid #EEF2F6', background: '#fff', cursor: 'zoom-in' }} />
+                        </a>
+                      ) : (
+                        <p style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                          Original file not available — this was uploaded before document storage was enabled.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* Kept mounted (just hidden) once opened so the saved prescription +

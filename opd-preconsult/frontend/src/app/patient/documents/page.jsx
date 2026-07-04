@@ -21,6 +21,7 @@ export default function Documents() {
   const [loading, setLoading] = useState(false);
   const [selectedType, setSelectedType] = useState('prescription');
   const [skipWarning, setSkipWarning] = useState(false);
+  const [mustReview, setMustReview] = useState(false);   // uploaded doc(s) not yet reviewed
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export default function Documents() {
     if (!doc.doc_id) return;
     await api.confirmDocument(doc.doc_id, true);
     setDocs(prev => prev.map((d, i) => i === idx ? { ...d, confirmed: true } : d));
+    setMustReview(false);   // they're reviewing — clear the nudge
   }
 
   async function handleReject(idx) {
@@ -59,6 +61,7 @@ export default function Documents() {
     if (!doc.doc_id) return;
     await api.confirmDocument(doc.doc_id, false);
     setDocs(prev => prev.filter((_, i) => i !== idx));
+    setMustReview(false);
   }
 
   const langKey = (dt) => dt[`label_${lang}`] || dt.label_en;
@@ -190,12 +193,20 @@ export default function Documents() {
         )}
 
         <div style={{ flex: 1 }} />
-        {skipWarning && (
+        {mustReview && (
+          <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>
+            {t('review_docs_first', lang)}
+          </p>
+        )}
+        {skipWarning && !mustReview && (
           <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>
             {t('skip_no_docs', lang)}
           </p>
         )}
         <button className="btn btn-primary" onClick={() => {
+          // Every uploaded document must be reviewed (✓ Correct or ✗ Remove) before
+          // continuing — the patient confirms whether each extraction is accurate.
+          if (docs.some(d => !d.confirmed)) { setMustReview(true); return; }
           if (docs.length === 0 && !skipWarning) { setSkipWarning(true); return; }
           // Continue to the health questionnaire.
           router.push('/patient/interview');

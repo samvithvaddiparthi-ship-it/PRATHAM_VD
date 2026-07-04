@@ -22,6 +22,8 @@ export const api = {
   scan: (qr_payload) => apiFetch('/api/session/scan', { method: 'POST', body: JSON.stringify({ qr_payload }) }),
   register: (data) => apiFetch('/api/session/register', { method: 'POST', body: JSON.stringify(data) }),
   // Phone OTP verification (gates registration)
+  // Is this person (session's verified phone + name) already in an open visit?
+  checkActive: (name) => apiFetch('/api/session/active-check', { method: 'POST', body: JSON.stringify({ name }) }),
   requestOtp: (phone) => apiFetch('/api/otp/request', { method: 'POST', body: JSON.stringify({ phone }) }),
   verifyOtp: (phone, code) => apiFetch('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone, code }) }),
   consent: () => apiFetch('/api/session/consent', { method: 'POST', body: '{}' }),

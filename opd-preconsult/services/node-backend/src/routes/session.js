@@ -183,6 +183,34 @@ router.post('/register', authMiddleware, async (req, res) => {
   }
 });
 
+// Is THIS person (the session's verified phone + the given name) already in an
+// open visit — registered/in-progress/being-consulted but not finished? Lets the
+// entry form warn the moment a name is chosen (before the department step),
+// instead of only at the final register. Same rule as the /register guard.
+router.post('/active-check', authMiddleware, async (req, res) => {
+  try {
+    const { session_id } = req.session_data;
+    const name = String((req.body || {}).name || '').trim();
+    if (!name) return res.json({ active: false });
+    const s = await pool.query('SELECT patient_phone FROM sessions WHERE id = $1', [session_id]);
+    const phone = s.rows[0]?.patient_phone;
+    if (!phone) return res.json({ active: false });
+    const r = await pool.query(
+      `SELECT 1 FROM sessions
+        WHERE patient_phone = $1
+          AND lower(trim(patient_name)) = lower(trim($2))
+          AND id <> $3
+          AND removed_at IS NULL
+          AND dispatched_at IS NULL
+        LIMIT 1`,
+      [phone, name, session_id]
+    );
+    res.json({ active: r.rows.length > 0 });
+  } catch (err) {
+    res.json({ active: false });   // fail open — the /register guard is the backstop
+  }
+});
+
 // Give consent
 router.post('/consent', authMiddleware, async (req, res) => {
   try {

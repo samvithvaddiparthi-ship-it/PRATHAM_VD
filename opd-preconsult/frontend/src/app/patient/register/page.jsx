@@ -150,7 +150,7 @@ export default function Register() {
   }
 
   // ── Step 3 → 4: validate the chosen identity, then go to the department step ──
-  function goToDepartment(e) {
+  async function goToDepartment(e) {
     if (e) e.preventDefault();
     setError('');
 
@@ -168,6 +168,17 @@ export default function Register() {
     } else {
       setError(t('who_title', lang));   // nudge: pick someone
       return;
+    }
+
+    // Block a duplicate entry for the same person while their prior visit is still
+    // open — surfaced HERE, the moment the name is chosen, not after the department
+    // step. (The /register call is still the authoritative backstop.)
+    setLoading(true);
+    try {
+      const { active } = await api.checkActive(id.patient_name).catch(() => ({ active: false }));
+      if (active) { setError(t('already_consulting', lang)); return; }
+    } finally {
+      setLoading(false);
     }
 
     setIdentity(id);

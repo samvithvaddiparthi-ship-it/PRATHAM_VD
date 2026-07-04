@@ -126,6 +126,8 @@ function HISDashboard() {
   const [filters, setFilters] = useState({ department: '', doctor_id: '', triage: '', state: '' });
   const [showFilters, setShowFilters] = useState(false);   // filter popover open?
   const [search, setSearch] = useState('');                // name / phone search
+  const [refreshing, setRefreshing] = useState(false);     // brief spin on the header refresh
+  const [refreshKey, setRefreshKey] = useState(0);         // bumped to remount the active tab
   const { toast, toastView } = useToast();
   // Monotonic request id — only the most recently issued all-sessions response
   // is allowed to update state, so a slow/older request (or an overlapping poll)
@@ -171,6 +173,20 @@ function HISDashboard() {
       // Drop the result if a newer request has been issued since.
       if (seq === loadSeq.current) setSessions(rows);
     } catch {}
+  }
+
+  // Global refresh — reloads the active view's data. Spins only for the actual
+  // fetch (no artificial delay). Reloads the parent-owned lists (Patients + the
+  // shared dept/doctor lists) and remounts the active sub-tab so it re-fetches.
+  async function refreshActive() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([loadData(), loadDepts(), loadDoctors()]);
+      setRefreshKey(k => k + 1);
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   async function selectSession(s) {
@@ -230,11 +246,19 @@ function HISDashboard() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: 16, minHeight: '100vh' }}>
       {toastView}
+      <style>{`@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 20, color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
         <span style={{ fontSize: 13, color: 'var(--text-light)' }}>Hospital Information System</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+        {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
+        <button onClick={refreshActive} disabled={refreshing}
+          title="Refresh" aria-label="Refresh"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+          <span style={{ display: 'inline-block', fontSize: 15, animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+          {refreshing ? 'Refreshing' : 'Refresh'}
+        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className={`btn ${tab === 'sessions' ? 'btn-primary' : 'btn-outline'}`}
             style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('sessions')}>Patients</button>
@@ -263,19 +287,19 @@ function HISDashboard() {
       </div>
 
       {tab === 'rxtemplate' ? (
-        <RxTemplateManager />
+        <RxTemplateManager key={refreshKey} />
       ) : tab === 'formulary' ? (
-        <FormularyManager />
+        <FormularyManager key={refreshKey} />
       ) : tab === 'doctors' ? (
         <DoctorInfo doctors={doctors} depts={depts} onChange={loadDoctors} />
       ) : tab === 'questions' ? (
-        <QuestionsManager depts={depts} />
+        <QuestionsManager key={refreshKey} depts={depts} />
       ) : tab === 'departments' ? (
         <DepartmentsManager depts={depts} onChange={loadDepts} />
       ) : tab === 'protocols' ? (
-        <ProtocolsManager depts={depts} />
+        <ProtocolsManager key={refreshKey} depts={depts} />
       ) : tab === 'analytics' ? (
-        <AnalyticsDashboard />
+        <AnalyticsDashboard key={refreshKey} />
       ) : (<>
 
       {/* Filters — a single "Filter" button opens a popover holding every filter
@@ -2017,8 +2041,6 @@ function AnalyticsDashboard() {
             {h <= 24 ? `${h}h` : `${h / 24}d`}
           </button>
         ))}
-        <button className="btn btn-outline" style={{ fontSize: 12, minHeight: 30, width: 'auto', padding: '0 12px', marginLeft: 'auto' }}
-          onClick={loadData}>Refresh</button>
       </div>
 
       {/* Throughput — the numbers an OPD head watches all day */}
