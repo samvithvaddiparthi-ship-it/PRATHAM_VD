@@ -17,18 +17,21 @@ router.post('/scan', async (req, res) => {
     }
 
     const { hospital_id, department, queue_slot } = decoded;
-    if (!hospital_id || !department) {
-      return res.status(400).json({ error: 'Missing hospital_id or department' });
+    if (!hospital_id) {
+      return res.status(400).json({ error: 'Missing hospital_id' });
     }
+    // department is OPTIONAL now — the patient chooses it after OTP + details, and
+    // it's set at /register (before the queue token is issued). A legacy
+    // department-scoped QR may still carry one, which we honour if present.
 
     const result = await pool.query(
       `INSERT INTO sessions (hospital_id, department, queue_slot, state)
        VALUES ($1, $2, $3, 'INIT') RETURNING *`,
-      [hospital_id, department, queue_slot || null]
+      [hospital_id, department || null, queue_slot || null]
     );
 
     const session = result.rows[0];
-    const token = signToken({ session_id: session.id, hospital_id, department, role: 'patient' });
+    const token = signToken({ session_id: session.id, hospital_id, department: department || null, role: 'patient' });
 
     res.json({ session, token });
   } catch (err) {
@@ -41,7 +44,8 @@ router.post('/scan', async (req, res) => {
 router.post('/register', authMiddleware, async (req, res) => {
   try {
     const { session_id } = req.session_data;
-    const { patient_name, patient_phone, patient_age, patient_gender, language } = req.body;
+    const { patient_name, patient_phone, patient_age, patient_gender, language,
+            department, preferred_doctor_id, preferred_doctor_name } = req.body;
 
     if (!patient_name || !patient_phone) {
       return res.status(400).json({ error: 'Name and phone required' });
@@ -100,17 +104,27 @@ router.post('/register', authMiddleware, async (req, res) => {
       `UPDATE sessions SET
         patient_name = $1, patient_phone = $2, patient_age = $3,
         patient_gender = $4, language = COALESCE($5, language),
+        department = COALESCE($6, department),
+        preferred_doctor_id = $7, preferred_doctor_name = $8,
         state = 'REGISTERED', updated_at = NOW()
-       WHERE id = $6 RETURNING *`,
-      [patient_name, normalizedPhone, patient_age || null, patient_gender || null, language, session_id]
+       WHERE id = $9 RETURNING *`,
+      [patient_name, normalizedPhone, patient_age || null, patient_gender || null, language,
+       department ? String(department).toUpperCase() : null,
+       preferred_doctor_id || null, (preferred_doctor_name || '').trim() || null, session_id]
     );
 
     if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
 
+    // The department is now chosen after details, so it must be present before we
+    // issue a queue token (the session was created without one at scan).
+    let sess = result.rows[0];
+    if (!sess.department) {
+      return res.status(400).json({ error: 'Department required' });
+    }
+
     // Assign a daily, per-department token (gov-OPD style) — once per session, so
     // navigating Back and re-submitting keeps the same number. The atomic upsert
     // is race-safe and the counter resets each day (keyed by service_date).
-    let sess = result.rows[0];
     if (sess.token_number == null) {
       const tok = await pool.query(
         `INSERT INTO queue_counters (hospital_id, department, service_date, last_token)

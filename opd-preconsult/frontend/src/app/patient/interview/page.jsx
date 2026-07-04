@@ -21,6 +21,11 @@ export default function Interview() {
   const [loading, setLoading] = useState(true);
   const [triageAlert, setTriageAlert] = useState(null);
   const [sessionId, setSessionId] = useState('');
+  // Total questions for the "Question X/Y" counter. The questionnaire is a
+  // branching DAG, so the exact number a patient answers varies by their path —
+  // we use the department's active question count as an upper bound (numerator is
+  // clamped so it never exceeds it). 0 = unknown → we show just "Question X".
+  const [totalQ, setTotalQ] = useState(0);
 
   useEffect(() => {
     const l = sessionStorage.getItem('lang') || 'en';
@@ -30,7 +35,23 @@ export default function Interview() {
     const sid = sessionStorage.getItem('session_id');
     setSessionId(sid);
     if (sid) init(sid);
+    loadTotal(sid);
   }, []);
+
+  // Count the department's visible questions for the counter denominator. Excludes
+  // the hidden auto-answered visit-type node and any TERMINAL nodes (not asked).
+  async function loadTotal(sid) {
+    try {
+      let dept = sessionStorage.getItem('department');
+      if (!dept && sid) { try { dept = (await api.getSession(sid))?.department; } catch {} }
+      if (!dept) return;
+      const nodes = await api.getQuestionnaireSchema(dept);
+      const count = (nodes || []).filter(n =>
+        n && n.is_active !== false && n.q_type !== 'TERMINAL' && !String(n.id).endsWith('_visit_type')
+      ).length;
+      setTotalQ(count);
+    } catch { /* best-effort — fall back to "Question X" */ }
+  }
 
   // Rebuild `history` and `answers` from the server's DAG-walk history
   // before loading the current question. Without this, every remount (e.g.
@@ -190,7 +211,11 @@ export default function Interview() {
 
   return (
     <div className="screen">
-      <ProgressBar stepId="interview" lang={lang} note={`${QUESTION_WORD[lang] || QUESTION_WORD.en} ${history.length + 1}`} />
+      <ProgressBar stepId="interview" lang={lang} note={
+        totalQ > 0
+          ? `${QUESTION_WORD[lang] || QUESTION_WORD.en} ${Math.min(history.length + 1, totalQ)}/${totalQ}`
+          : `${QUESTION_WORD[lang] || QUESTION_WORD.en} ${history.length + 1}`
+      } />
       <h3 style={{ textAlign: 'center', color: 'var(--text-light)', marginBottom: 8 }}>{t('interview_title', lang)}</h3>
       {question && <QuestionCard question={question} lang={lang} onAnswer={handleAnswer} initialValue={answers[question.id] || ''} />}
       <button className="btn btn-outline" onClick={handleGoBack} style={{ marginTop: 12 }}>

@@ -31,6 +31,9 @@ export const api = {
 
   // Public waiting-room board (no auth) — token numbers only
   queueBoard: (department) => apiFetch(`/api/queue/board?department=${encodeURIComponent(department)}`),
+  // Last issued token per department (no auth) — powers the kiosk department picker.
+  // Omit `department` to get every department's latest token in one call.
+  queueLast: (department) => apiFetch(`/api/queue/last${department ? `?department=${encodeURIComponent(department)}` : ''}`),
 
   // Questionnaire
   nextQuestion: (sessionId) => apiFetch(`/api/q/next/${sessionId}`),

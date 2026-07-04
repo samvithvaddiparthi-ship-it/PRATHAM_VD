@@ -1485,11 +1485,19 @@ function QuestionsManager({ depts = [] }) {
 }
 
 
+// Common department icons offered in the picker modal (admins can also type any
+// emoji). Mirrors the patient-side fallback set.
+const ICON_CHOICES = ['🫀', '🩺', '🦴', '👂', '👁️', '🧴', '🧒', '🤰', '🧠', '🦷', '🧑‍⚕️', '🫁', '🩸', '💉', '🩹', '🦻', '🦶', '🫄', '🧬', '🥼', '🚑', '🏥'];
+
 function DepartmentsManager({ depts, onChange }) {
-  const [form, setForm] = useState({ code: '', name: '', collect_vitals: true });
+  const [form, setForm] = useState({ code: '', name: '', collect_vitals: true, icon: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  // Icon-picker modal: the department being edited + the pending emoji value.
+  const [iconEdit, setIconEdit] = useState(null);
+  const [iconValue, setIconValue] = useState('');
+  const [iconSaving, setIconSaving] = useState(false);
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
@@ -1501,7 +1509,7 @@ function DepartmentsManager({ depts, onChange }) {
     try {
       const created = await api.createDepartment(form);
       setSuccess(`Department "${created.name}" (${created.code}) added`);
-      setForm({ code: '', name: '', collect_vitals: true });
+      setForm({ code: '', name: '', collect_vitals: true, icon: '' });
       onChange();
     } catch (err) {
       setError(err.message);
@@ -1518,6 +1526,27 @@ function DepartmentsManager({ depts, onChange }) {
       onChange();
     } catch (err) {
       toast(err.message, 'error');
+    }
+  }
+
+  // Open the icon-picker modal for a department (see the modal near the bottom of
+  // this component). Blank clears the icon → frontend falls back to an auto icon.
+  function handleEditIcon(d) {
+    setIconValue(d.icon || '');
+    setIconEdit(d);
+  }
+  async function saveIcon(override) {
+    if (!iconEdit) return;
+    const next = (override !== undefined ? override : iconValue).trim();
+    setIconSaving(true);
+    try {
+      await api.updateDepartment(iconEdit.code, { icon: next });
+      setIconEdit(null);
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setIconSaving(false);
     }
   }
 
@@ -1540,6 +1569,47 @@ function DepartmentsManager({ depts, onChange }) {
     <div style={{ display: 'flex', gap: 16 }}>
       {dialog}
       {toastView}
+
+      {/* Icon picker modal — replaces the browser prompt with a tap-an-emoji grid. */}
+      {iconEdit && (
+        <>
+          <div onClick={() => setIconEdit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+            width: 430, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+              <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Icon for {iconEdit.name}</h3>
+              <button onClick={() => setIconEdit(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+              </button>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 14 }}>
+              Pick the icon patients see on the department picker, or type your own emoji.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 16 }}>
+              {ICON_CHOICES.map(em => (
+                <button key={em} onClick={() => setIconValue(em)} title={em}
+                  style={{ fontSize: 24, padding: '8px 0', borderRadius: 10, cursor: 'pointer',
+                    border: iconValue === em ? '2px solid var(--primary)' : '1px solid #E0E0E0',
+                    background: iconValue === em ? '#EAF2F8' : '#fff' }}>
+                  {em}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+              <div style={{ fontSize: 30, width: 52, height: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #E0E0E0', borderRadius: 10 }}>
+                {iconValue || '🏥'}
+              </div>
+              <input className="input" value={iconValue} maxLength={8} style={{ fontSize: 18 }}
+                onChange={e => setIconValue(e.target.value)} placeholder="Custom emoji (blank = auto)" />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline" onClick={() => saveIcon('')} disabled={iconSaving}>Clear (auto)</button>
+              <button className="btn btn-primary" onClick={() => saveIcon()} disabled={iconSaving}>{iconSaving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Add form */}
       <div style={{ width: 360, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: 'fit-content' }}>
         <h3 style={{ fontSize: 16, marginBottom: 16, color: 'var(--primary)' }}>Add New Department</h3>
@@ -1556,6 +1626,15 @@ function DepartmentsManager({ depts, onChange }) {
               onChange={e => setForm({ ...form, name: e.target.value })}
               placeholder="Orthopaedics" />
           </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Icon (emoji, optional)</label>
+            <input className="input" value={form.icon}
+              onChange={e => setForm({ ...form, icon: e.target.value })}
+              placeholder="🦴" maxLength={8} style={{ fontSize: 18 }} />
+            <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+              Shown to patients on the department picker. Leave blank for an automatic icon.
+            </p>
+          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
             <input type="checkbox" checked={form.collect_vitals}
               onChange={e => setForm({ ...form, collect_vitals: e.target.checked })} />
@@ -1569,9 +1648,10 @@ function DepartmentsManager({ depts, onChange }) {
         </form>
         <div style={{ marginTop: 20, padding: 12, background: '#F8F9FA', borderRadius: 8, fontSize: 12, color: 'var(--text-light)', lineHeight: 1.6 }}>
           <p><strong>After adding a department:</strong></p>
-          <p>1. Go to <strong>Questionnaires</strong> tab to add questions for it</p>
-          <p>2. Go to <strong>Manage Doctors</strong> tab to assign doctors to it</p>
-          <p>3. Use the <strong>Copy QR</strong> button to generate a patient entry QR payload</p>
+          <p>1. Set an <strong>icon</strong> so patients recognise it on the picker</p>
+          <p>2. Go to <strong>Questionnaires</strong> tab to add questions for it</p>
+          <p>3. Go to <strong>Manage Doctors</strong> tab to assign doctors to it</p>
+          <p style={{ marginTop: 6 }}>Patients reach every department through the single hospital QR — no per-department QR needed.</p>
         </div>
       </div>
 
@@ -1581,20 +1661,22 @@ function DepartmentsManager({ depts, onChange }) {
         <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
           <thead>
             <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 13 }}>
+              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Icon</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Code</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Name</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Collect Vitals</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>QR Payload</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {depts.map(d => {
-              const qr = typeof btoa !== 'undefined'
-                ? btoa(JSON.stringify({ hospital_id: 'demo_hospital_01', department: d.code, queue_slot: 1 }))
-                : '';
-              return (
+            {depts.map(d => (
                 <tr key={d.code} style={{ borderBottom: '1px solid #F0F0F0' }}>
+                  <td style={{ padding: '10px 12px' }}>
+                    <button onClick={() => handleEditIcon(d)} title="Set the icon patients see for this department"
+                      style={{ background: 'none', border: '1px solid #E0E0E0', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>
+                      {d.icon || '➕'}
+                    </button>
+                  </td>
                   <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 600 }}>{d.code}</td>
                   <td style={{ padding: '10px 12px', fontSize: 14 }}>{d.name}</td>
                   <td style={{ padding: '10px 12px' }}>
@@ -1607,20 +1689,13 @@ function DepartmentsManager({ depts, onChange }) {
                     </button>
                   </td>
                   <td style={{ padding: '10px 12px' }}>
-                    <button onClick={() => { navigator.clipboard?.writeText(qr); toast('QR payload copied to clipboard', 'success'); }}
-                      style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
-                      Copy QR
-                    </button>
-                  </td>
-                  <td style={{ padding: '10px 12px' }}>
                     <button onClick={() => handleDelete(d.code)}
                       style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
                       Delete
                     </button>
                   </td>
                 </tr>
-              );
-            })}
+            ))}
           </tbody>
         </table>
         {depts.length === 0 && (
@@ -1926,9 +2001,10 @@ function AnalyticsDashboard() {
   if (loading) return <p style={{ textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>Loading analytics...</p>;
   if (!data) return <p style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>Failed to load analytics</p>;
 
-  const cardStyle = { background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: '1 1 200px', minWidth: 200 };
+  const cardStyle = { background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: '1 1 160px', minWidth: 160 };
   const thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 12, background: 'var(--primary)', color: '#fff' };
   const tdStyle = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid #F0F0F0' };
+  const fmtMin = (v) => (v == null ? '—' : `${Math.round(v)} min`);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1945,19 +2021,36 @@ function AnalyticsDashboard() {
           onClick={loadData}>Refresh</button>
       </div>
 
+      {/* Throughput — the numbers an OPD head watches all day */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Total Sessions</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--primary)' }}>{data.total_sessions}</p>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Registered</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--primary)' }}>{data.registered ?? data.total_sessions}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Completed</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--green)' }}>{data.completed_count}</p>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Completed pre-consult</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--green)' }}>{data.completed ?? data.completed_count}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Avg Total Time</p>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Consulted</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{data.consulted ?? '—'}</p>
+        </div>
+        <div style={cardStyle}>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Waiting now</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: (data.waiting ?? 0) > 0 ? 'var(--amber)' : 'var(--text-light)' }}>{data.waiting ?? '—'}</p>
+        </div>
+        <div style={cardStyle}>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Avg wait · arrival→seen</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_wait_minutes)}</p>
+        </div>
+        <div style={cardStyle}>
+          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Avg total time</p>
           <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{data.avg_total_minutes} min</p>
         </div>
+      </div>
+
+      {/* Triage mix — safety + staffing signal */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {data.by_triage?.map(t => (
           <div key={t.level} style={cardStyle}>
             <p style={{ fontSize: 12, color: 'var(--text-light)' }}>{t.level || 'GREEN'} Triage</p>
@@ -1967,37 +2060,45 @@ function AnalyticsDashboard() {
       </div>
 
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Department</h3>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Department · throughput & live load</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            <th style={thStyle}>Department</th><th style={thStyle}>Total</th><th style={thStyle}>Completed</th><th style={thStyle}>%</th>
+            <th style={thStyle}>Department</th><th style={thStyle}>Registered</th><th style={thStyle}>Completed</th>
+            <th style={thStyle}>Consulted</th><th style={thStyle}>Waiting</th><th style={thStyle}>Avg wait</th><th style={thStyle}>%</th>
           </tr></thead>
           <tbody>
-            {data.by_department?.map(d => (
-              <tr key={d.department}>
-                <td style={tdStyle}><strong>{d.department}</strong></td>
-                <td style={tdStyle}>{d.total}</td>
-                <td style={tdStyle}>{d.completed}</td>
-                <td style={tdStyle}>{d.total > 0 ? Math.round(d.completed / d.total * 100) : 0}%</td>
-              </tr>
-            ))}
+            {data.by_department?.map(d => {
+              const reg = d.registered ?? d.total;
+              return (
+                <tr key={d.department}>
+                  <td style={tdStyle}><strong>{d.department}</strong></td>
+                  <td style={tdStyle}>{reg}</td>
+                  <td style={tdStyle}>{d.completed}</td>
+                  <td style={tdStyle}>{d.consulted ?? '—'}</td>
+                  <td style={{ ...tdStyle, color: (d.waiting ?? 0) > 0 ? 'var(--amber)' : 'inherit', fontWeight: (d.waiting ?? 0) > 0 ? 700 : 400 }}>{d.waiting ?? '—'}</td>
+                  <td style={tdStyle}>{fmtMin(d.avg_wait_minutes)}</td>
+                  <td style={tdStyle}>{reg > 0 ? Math.round(d.completed / reg * 100) : 0}%</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Doctor</h3>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Doctor · productivity</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            <th style={thStyle}>Doctor</th><th style={thStyle}>Dept</th><th style={thStyle}>Total</th><th style={thStyle}>Done</th><th style={thStyle}>RED</th>
+            <th style={thStyle}>Doctor</th><th style={thStyle}>Dept</th><th style={thStyle}>Seen</th><th style={thStyle}>Done</th><th style={thStyle}>Avg consult</th><th style={thStyle}>RED</th>
           </tr></thead>
           <tbody>
             {data.by_doctor?.map(d => (
               <tr key={d.name}>
                 <td style={tdStyle}><strong>{d.name}</strong></td>
                 <td style={tdStyle}>{d.department}</td>
-                <td style={tdStyle}>{d.total}</td>
+                <td style={tdStyle}>{d.seen ?? '—'}</td>
                 <td style={tdStyle}>{d.completed}</td>
+                <td style={tdStyle}>{fmtMin(d.avg_consult_minutes)}</td>
                 <td style={{ ...tdStyle, color: d.red_count > 0 ? 'var(--red)' : 'inherit', fontWeight: d.red_count > 0 ? 700 : 400 }}>{d.red_count}</td>
               </tr>
             ))}
@@ -2006,6 +2107,30 @@ function AnalyticsDashboard() {
         {(!data.by_doctor || data.by_doctor.length === 0) && (
           <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 16, fontSize: 13 }}>No doctor-assigned sessions</p>
         )}
+      </div>
+
+      {/* Peak-hour load — registrations by hour of day, the #1 staffing lever */}
+      <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>Registrations by hour · peak load</h3>
+        {(() => {
+          const counts = Array(24).fill(0);
+          (data.by_hour || []).forEach(h => { if (h.hour >= 0 && h.hour < 24) counts[h.hour] = h.registrations; });
+          const max = Math.max(1, ...counts);
+          const anyData = counts.some(c => c > 0);
+          if (!anyData) return <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 8, fontSize: 13 }}>No registrations in this period</p>;
+          return (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130 }}>
+              {counts.map((c, h) => (
+                <div key={h} title={`${String(h).padStart(2, '0')}:00 — ${c} registration${c === 1 ? '' : 's'}`}
+                  style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+                  <div style={{ width: '100%', height: `${(c / max) * 100}%`, minHeight: c > 0 ? 3 : 0,
+                    background: c === max ? 'var(--primary)' : 'var(--secondary)', borderRadius: '3px 3px 0 0' }} />
+                  <span style={{ fontSize: 8, color: 'var(--text-light)', marginTop: 3 }}>{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pratham OPD — Check-in QR Poster</title>
+  <!-- Client-side QR generator (renders locally in the browser once loaded). -->
+  <script src="https://cdn.jsdelivr.net/gh/davidshimjs/qrcodejs@master/qrcode.min.js"></script>
+  <style>
+    :root { --primary: #1B4F72; --secondary: #2E86AB; --text-light: #7F8C8D; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0; background: #f4f6f8; color: #1a2b3c;
+      display: flex; flex-direction: column; align-items: center; padding: 24px;
+    }
+    /* ── Controls (hidden when printing) ── */
+    .controls {
+      width: 100%; max-width: 620px; background: #fff; border: 1px solid #e2e8ee;
+      border-radius: 12px; padding: 18px 20px; margin-bottom: 24px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
+    }
+    .controls h2 { grid-column: 1 / -1; margin: 0 0 4px; font-size: 16px; color: var(--primary); }
+    .controls label { font-size: 13px; color: var(--text-light); display: flex; flex-direction: column; gap: 4px; }
+    .controls input {
+      padding: 9px 11px; border: 1.5px solid #cbd6e0; border-radius: 8px; font-size: 14px;
+    }
+    .controls .full { grid-column: 1 / -1; }
+    .controls button {
+      grid-column: 1 / -1; padding: 11px; border: none; border-radius: 8px;
+      background: var(--primary); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    .hint { grid-column: 1 / -1; font-size: 12px; color: var(--text-light); margin: 0; }
+    .url {
+      grid-column: 1 / -1; font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 11px; word-break: break-all; color: var(--secondary);
+      background: #f4f8fb; border-radius: 6px; padding: 8px 10px;
+    }
+
+    /* ── The printable poster ── */
+    .poster {
+      width: 100%; max-width: 620px; background: #fff; border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08); padding: 40px 32px; text-align: center;
+    }
+    .poster .brand { font-size: 15px; letter-spacing: 2px; color: var(--secondary); font-weight: 700; text-transform: uppercase; }
+    .poster h1 { font-size: 30px; color: var(--primary); margin: 6px 0 2px; }
+    .poster .sub { font-size: 17px; color: var(--text-light); margin: 0 0 24px; }
+    #qr { display: inline-flex; padding: 16px; background: #fff; border: 3px solid var(--primary); border-radius: 16px; }
+    #qr img, #qr canvas { display: block; }
+    .steps { margin: 26px auto 0; max-width: 420px; text-align: left; }
+    .steps .step { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+    .steps .n {
+      flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--primary); color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700;
+    }
+    .steps .txt { font-size: 15px; line-height: 1.4; }
+    .steps .txt small { color: var(--text-light); }
+    .hospital { margin-top: 22px; font-size: 13px; color: var(--text-light); }
+    .disclaimer { margin-top: 14px; font-size: 11px; color: var(--text-light); font-style: italic; }
+
+    @media print {
+      body { background: #fff; padding: 0; }
+      .controls { display: none; }
+      .poster { box-shadow: none; max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Configure, then Print. Hidden on the printed page. -->
+  <div class="controls">
+    <h2>Poster settings</h2>
+    <label>Hospital ID
+      <input id="hospitalId" value="demo_hospital_01" />
+    </label>
+    <label>Hospital name (display)
+      <input id="hospitalName" value="Pratham OPD" />
+    </label>
+    <label class="full">App base URL
+      <input id="baseUrl" placeholder="https://your-domain OR http://192.168.x.x" value="http://localhost" />
+    </label>
+    <p class="hint">
+      ⚠️ A phone camera can't reach <code>localhost</code> — for a real poster set the base URL to your
+      deployed domain or the host machine's LAN IP (e.g. <code>http://192.168.1.20</code>).
+    </p>
+    <button onclick="render()">Generate / Update</button>
+    <div class="url" id="urlOut"></div>
+  </div>
+
+  <!-- The poster itself -->
+  <div class="poster">
+    <div class="brand">Pratham · AI Pre-Consultation</div>
+    <h1 id="posterHospital">Pratham OPD</h1>
+    <p class="sub">स्कैन करें · Scan · స్కాన్ చేయండి</p>
+
+    <div id="qr"></div>
+
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div class="txt">Scan this QR with your phone camera<br><small>अपने फ़ोन कैमरे से स्कैन करें · మీ ఫోన్ కెమెరాతో స్కాన్ చేయండి</small></div></div>
+      <div class="step"><div class="n">2</div><div class="txt">Choose your language & department<br><small>अपनी भाषा और विभाग चुनें · మీ భాష, విభాగాన్ని ఎంచుకోండి</small></div></div>
+      <div class="step"><div class="n">3</div><div class="txt">Get your token & fill in a few details<br><small>टोकन लें और कुछ जानकारी भरें · టోకెన్ పొంది వివరాలు నింపండి</small></div></div>
+    </div>
+
+    <div class="hospital" id="posterHospitalId"></div>
+    <div class="disclaimer">Investigational — not for clinical use.</div>
+  </div>
+
+  <script>
+    // Plain, human-readable check-in URL: the QR simply carries the app URL with a
+    // readable ?h=<hospital_id>. The app reads ?h=, then shows the on-screen
+    // department picker (single-QR entry). No base64 — you can read the URL, and a
+    // single-tenant deployment can even drop ?h= entirely (the app defaults it).
+    function buildUrl() {
+      const hospitalId = document.getElementById('hospitalId').value.trim() || 'demo_hospital_01';
+      const base = (document.getElementById('baseUrl').value.trim() || 'http://localhost').replace(/\/+$/, '');
+      return `${base}/?h=${encodeURIComponent(hospitalId)}`;
+    }
+
+    function render() {
+      const url = buildUrl();
+      const name = document.getElementById('hospitalName').value.trim() || 'Pratham OPD';
+
+      document.getElementById('posterHospital').textContent = name;
+      document.getElementById('posterHospitalId').textContent =
+        'Hospital ID: ' + (document.getElementById('hospitalId').value.trim() || 'demo_hospital_01');
+      document.getElementById('urlOut').textContent = url;
+
+      const box = document.getElementById('qr');
+      box.innerHTML = '';
+      new QRCode(box, {
+        text: url,
+        width: 300,
+        height: 300,
+        colorDark: '#1B4F72',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+    }
+
+    // Draw once on load with the defaults.
+    window.addEventListener('load', render);
+  </script>
+</body>
+</html>

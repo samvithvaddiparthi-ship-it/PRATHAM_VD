@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 
-// Generates a base64 QR payload for demo use
-// Usage: node generate-qr.js [department]
+// Prints the single, hospital-level check-in URL for the kiosk poster. The QR is
+// just this plain URL (human-readable, ?h=<hospital_id>) — the patient chooses
+// their department on-screen after scanning, and the token is issued
+// per-department at registration. For a printable poster use scripts/qr-poster.html.
+// Usage: node generate-qr.js [baseUrl]
+//   e.g. node generate-qr.js https://opd.hospital.gov.in
+const hospitalId = process.env.DEMO_HOSPITAL_ID || 'demo_hospital_01';
+const base = (process.argv[2] || 'http://localhost').replace(/\/+$/, '');
+const url = `${base}/?h=${encodeURIComponent(hospitalId)}`;
 
-const department = process.argv[2] || 'CARD';
-const payload = {
-  hospital_id: process.env.DEMO_HOSPITAL_ID || 'demo_hospital_01',
-  department: department,
-  queue_slot: Math.floor(Math.random() * 100) + 1,
-  ts: Date.now()
-};
-
-const encoded = Buffer.from(JSON.stringify(payload)).toString('base64');
-console.log('QR Payload (base64):');
-console.log(encoded);
-console.log('\nPatient App URL:');
-console.log(`http://localhost/?qr=${encodeURIComponent(encoded)}`);
-console.log('\nDecoded:');
-console.log(JSON.stringify(payload, null, 2));
+console.log('Hospital ID:', hospitalId);
+console.log('\nPatient check-in URL (encode this as the QR):');
+console.log(url);
+console.log('\nTip: a single-hospital deployment can drop ?h= — the app defaults it.');

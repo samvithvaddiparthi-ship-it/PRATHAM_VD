@@ -61,14 +61,14 @@ router.get('/departments', async (req, res) => {
 // Create department
 router.post('/departments', ...adminOnly, async (req, res) => {
   try {
-    const { code, name, collect_vitals } = req.body;
+    const { code, name, collect_vitals, icon } = req.body;
     if (!code || !name) return res.status(400).json({ error: 'code and name required' });
     const cleanCode = code.toUpperCase().replace(/[^A-Z0-9_]/g, '');
     if (cleanCode.length < 2) return res.status(400).json({ error: 'Code must be at least 2 characters (letters/numbers only)' });
 
     const result = await pool.query(
-      'INSERT INTO departments (code, name, collect_vitals) VALUES ($1, $2, $3) RETURNING *',
-      [cleanCode, name, collect_vitals === undefined ? true : !!collect_vitals]
+      'INSERT INTO departments (code, name, collect_vitals, icon) VALUES ($1, $2, $3, $4) RETURNING *',
+      [cleanCode, name, collect_vitals === undefined ? true : !!collect_vitals, (icon || '').trim() || null]
     );
 
     // Seed the shared base intake questions for the new department so it starts
@@ -96,7 +96,7 @@ router.post('/departments', ...adminOnly, async (req, res) => {
 router.patch('/departments/:code', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const { name, collect_vitals } = req.body;
+    const { name, collect_vitals, icon } = req.body;
     const sets = [];
     const params = [];
 
@@ -106,6 +106,10 @@ router.patch('/departments/:code', ...adminOnly, async (req, res) => {
     }
     if (collect_vitals !== undefined) {
       params.push(!!collect_vitals); sets.push(`collect_vitals = $${params.length}`);
+    }
+    if (icon !== undefined) {
+      // Empty string clears the icon (falls back to the code-based guess).
+      params.push(String(icon).trim() || null); sets.push(`icon = $${params.length}`);
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
 

@@ -5,24 +5,52 @@ import { api, setToken } from '../../../lib/api';
 import { t, tf } from '../../../lib/i18n';
 import { normalizeIndianPhone } from '../../../lib/phone';
 import ProgressBar from '../../../components/ProgressBar';
+import ListenButton from '../../../components/ListenButton';
 
-// Patient entry is now a three-step flow:
-//   1. phone     — enter mobile number, request an SMS OTP
-//   2. otp       — enter the 6-digit code to verify the number is reachable
-//   3. identify  — pick WHICH person is visiting (one number may serve a whole
-//                  family), or add a new person (name/age/gender). Only after a
-//                  person is chosen do we POST /register.
+// Friendly per-department icon (matched by a substring of the code); admin-set
+// icon from the DB wins, else a code guess, else the generic hospital symbol.
+const DEPT_ICONS = [
+  [/CARD/, '🫀'], [/GEN|MED/, '🩺'], [/ORTH/, '🦴'], [/ENT/, '👂'],
+  [/EYE|OPH/, '👁️'], [/DERM|SKIN/, '🧴'], [/PED|CHILD/, '🧒'], [/GYN|OBS/, '🤰'],
+  [/NEUR/, '🧠'], [/DENT/, '🦷'], [/PSY/, '🧑‍⚕️'], [/PULM|CHEST|RESP/, '🫁'],
+];
+function deptIcon(dept) {
+  if (dept && dept.icon && String(dept.icon).trim()) return String(dept.icon).trim();
+  const c = String(dept?.code || '').toUpperCase();
+  for (const [re, icon] of DEPT_ICONS) if (re.test(c)) return icon;
+  return '🏥';
+}
+
+// Patient entry flow:
+//   1. phone       — enter mobile number, request an SMS OTP
+//   2. otp         — enter the 6-digit code to verify the number is reachable
+//   3. identify    — pick WHICH person is visiting (one number may serve a whole
+//                    family), or add a new person (name/age/gender)
+//   4. department  — choose the department + an optional preferred doctor, then
+//                    POST /register (department is now set here, not at scan)
 export default function Register() {
   const router = useRouter();
   const [lang, setLang] = useState('en');
 
-  const [phase, setPhase] = useState('phone');     // phone | otp | identify
+  const [phase, setPhase] = useState('phone');     // phone | otp | identify | department
   const [phone, setPhone] = useState('');          // 10-digit national, while typing
   const [code, setCode] = useState('');
   const [people, setPeople] = useState([]);        // prior people on this number
   const [selected, setSelected] = useState(null);  // index into people, or 'new'
   const [verifiedPhone, setVerifiedPhone] = useState(''); // the number already OTP-verified
   const [form, setForm] = useState({ patient_name: '', patient_age: '', patient_gender: '' });
+  const [identity, setIdentity] = useState(null);  // chosen identity, carried into the department step
+
+  // Department picker (step 4) — chosen after details now.
+  const [departments, setDepartments] = useState([]);
+  const [deptLoading, setDeptLoading] = useState(false);
+  const [deptQuery, setDeptQuery] = useState('');
+  const [lastTokens, setLastTokens] = useState({});
+  const [chosenDept, setChosenDept] = useState('');
+  // Preferred-doctor picker (optional): active doctors in the CHOSEN department.
+  const [doctors, setDoctors] = useState([]);
+  const [prefDoctorId, setPrefDoctorId] = useState('');   // '' = no preference / first available
+  const [docQuery, setDocQuery] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -77,9 +105,6 @@ export default function Register() {
       setResendIn(60);
       setPhase('otp');
     } catch (err) {
-      // Any stale-credential failure (expired/invalid/missing token, or a session
-      // that no longer exists) → there's nothing the patient can do here; send
-      // them back to re-scan instead of dead-ending on a cryptic error.
       if (/session expired|invalid token|no token|not verified|session not found/i.test(err.message || '')) {
         sessionStorage.removeItem('token');
         sessionStorage.removeItem('otp_verified');
@@ -111,9 +136,6 @@ export default function Register() {
       }));
       setPhase('identify');
     } catch (err) {
-      // Any stale-credential failure (expired/invalid/missing token, or a session
-      // that no longer exists) → there's nothing the patient can do here; send
-      // them back to re-scan instead of dead-ending on a cryptic error.
       if (/session expired|invalid token|no token|not verified|session not found/i.test(err.message || '')) {
         sessionStorage.removeItem('token');
         sessionStorage.removeItem('otp_verified');
@@ -127,31 +149,76 @@ export default function Register() {
     }
   }
 
-  // ── Step 3: register the chosen identity ──
-  async function submitIdentity(e) {
+  // ── Step 3 → 4: validate the chosen identity, then go to the department step ──
+  function goToDepartment(e) {
     if (e) e.preventDefault();
     setError('');
 
-    let identity;
+    let id;
     if (selected === 'new') {
       if (!String(form.patient_name).trim()) { setError(t('err_name', lang)); return; }
       if (!form.patient_gender) { setError(t('err_gender', lang)); return; }
       if (String(form.patient_age).trim() === '') { setError(t('err_age_required', lang)); return; }
       const age = parseInt(form.patient_age);
       if (Number.isNaN(age) || age < 0 || age > 120) { setError(t('err_age_range', lang)); return; }
-      identity = { patient_name: form.patient_name.trim(), patient_age: age, patient_gender: form.patient_gender };
+      id = { patient_name: form.patient_name.trim(), patient_age: age, patient_gender: form.patient_gender };
     } else if (selected !== null && people[selected]) {
       const p = people[selected];
-      identity = { patient_name: p.name, patient_age: p.age, patient_gender: p.gender };
+      id = { patient_name: p.name, patient_age: p.age, patient_gender: p.gender };
     } else {
       setError(t('who_title', lang));   // nudge: pick someone
       return;
     }
 
+    setIdentity(id);
+    setPhase('department');
+    loadDepartments();
+  }
+
+  async function loadDepartments() {
+    setDeptLoading(true);
+    try {
+      const [depts, last] = await Promise.all([
+        api.getDepartments(),
+        api.queueLast().catch(() => ({ departments: [] })),
+      ]);
+      setDepartments((depts || []).filter(d => d && d.code && d.is_active !== false));
+      const map = {};
+      (last?.departments || []).forEach(x => { map[x.department] = { label: x.token_label, count: x.last_token || 0 }; });
+      setLastTokens(map);
+    } catch {
+      setError(t('try_again', lang));
+    } finally {
+      setDeptLoading(false);
+    }
+  }
+
+  // Choosing a department loads that department's doctors for the preference picker
+  // and resets any previous preference.
+  function selectDept(code) {
+    setChosenDept(code);
+    setPrefDoctorId('');
+    setDocQuery('');
+    setError('');
+    api.listDoctors(code)
+      .then(list => setDoctors((list || []).filter(d => d && d.is_active !== false)))
+      .catch(() => setDoctors([]));
+  }
+
+  // ── Step 4: final submit — register identity + department + preferred doctor ──
+  async function submitFinal() {
+    if (!chosenDept) { setError(t('choose_department', lang)); return; }
+    if (!identity) { setPhase('identify'); return; }
     setLoading(true);
+    setError('');
     try {
       const { e164 } = normalizeIndianPhone(phone);
-      await api.register({ ...identity, patient_phone: e164, language: lang });
+      const prefName = prefDoctorId ? (doctors.find(d => d.id === prefDoctorId)?.name || null) : null;
+      await api.register({
+        ...identity, patient_phone: e164, language: lang, department: chosenDept,
+        preferred_doctor_id: prefDoctorId || null, preferred_doctor_name: prefName,
+      });
+      try { sessionStorage.setItem('department', chosenDept); } catch {}
       router.push('/patient/consent');
     } catch (err) {
       if (/session not found|phone not verified|session_finished/i.test(err.message || '')) {
@@ -159,8 +226,6 @@ export default function Register() {
         setTimeout(() => { sessionStorage.removeItem('token'); router.push('/'); }, 1500);
         return;
       }
-      // This person already has an open visit that isn't finished yet — stay on
-      // the chooser and tell them to wait (or pick a different person).
       if (/already_active/i.test(err.message || '')) {
         setError(t('already_consulting', lang));
         return;
@@ -215,9 +280,6 @@ export default function Register() {
   if (phase === 'otp') {
     const { e164 } = normalizeIndianPhone(phone);
 
-    // Switch to a fresh number: forget the old one entirely (its OTP, verified
-    // state, and any prior-people we'd loaded for it), so the next number starts
-    // clean and the next OTP is the one that counts.
     const changeNumber = () => {
       setPhase('phone');
       setCode('');
@@ -229,9 +291,6 @@ export default function Register() {
       sessionStorage.removeItem('otp_verified');
     };
 
-    // This number is already verified (e.g. the patient came back from the next
-    // step). Don't ask for the code again — just confirm it's verified and let
-    // them continue or change it.
     const alreadyVerified = verifiedPhone && verifiedPhone === phone;
 
     return (
@@ -244,7 +303,6 @@ export default function Register() {
           </p>
 
           {alreadyVerified ? (
-            // ── Verified confirmation (no code entry, no error noise) ──
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, background: '#E8F6EE', border: '1px solid #9AD3B2', borderRadius: 12, padding: '18px 14px' }}>
               <div style={{ fontSize: 32 }}>✅</div>
               <p style={{ fontSize: 15, fontWeight: 700, color: '#1F6F43', textAlign: 'center' }}>{t('number_verified', lang)}</p>
@@ -271,8 +329,6 @@ export default function Register() {
           )}
 
           {alreadyVerified ? (
-            // Number is locked once verified. Changing it means a fresh form
-            // (new session) — not looping back into this same rate-limited one.
             <p style={{ fontSize: 12.5, color: 'var(--text-light)', textAlign: 'center', lineHeight: 1.6 }}>
               {t('change_number_locked', lang)}{' '}
               <button type="button" onClick={() => { sessionStorage.removeItem('otp_verified'); router.push('/'); }}
@@ -302,13 +358,124 @@ export default function Register() {
     );
   }
 
+  // ─────────────────────────── Step 4: department + preferred doctor ───────────────────────────
+  if (phase === 'department') {
+    const q = deptQuery.trim().toLowerCase();
+    const visibleDepts = departments
+      .filter(d => !q || String(d.name || '').toLowerCase().includes(q) || String(d.code || '').toLowerCase().includes(q))
+      .sort((a, b) => {
+        const ca = lastTokens[a.code]?.count || 0;
+        const cb = lastTokens[b.code]?.count || 0;
+        if (cb !== ca) return cb - ca;
+        return String(a.name || a.code).localeCompare(String(b.name || b.code));
+      });
+
+    return (
+      <div className="screen">
+        <ProgressBar stepId="register" lang={lang} />
+        <div className="card" style={{ gap: 14 }}>
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <div style={{ fontSize: 34 }}>🏥</div>
+            <h2 style={{ fontSize: 20, color: 'var(--primary)' }}>{t('choose_department', lang)}</h2>
+            <p style={{ color: 'var(--text-light)', fontSize: 13 }}>{t('choose_department_sub', lang)}</p>
+            <ListenButton text={`${t('choose_department', lang)}. ${t('choose_department_sub', lang)}`} lang={lang} label={t('listen', lang)} />
+          </div>
+
+          <input className="input" type="text" inputMode="search" placeholder={t('search_department', lang)}
+            value={deptQuery} onChange={e => setDeptQuery(e.target.value)} />
+
+          {deptLoading ? (
+            <p style={{ textAlign: 'center', color: 'var(--text-light)' }}>{t('loading', lang)}</p>
+          ) : visibleDepts.length === 0 ? (
+            <p style={{ textAlign: 'center', color: 'var(--text-light)' }}>{t('no_departments', lang)}</p>
+          ) : (
+            <div style={{ maxHeight: '34vh', overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
+                {visibleDepts.map(d => {
+                  const active = chosenDept === d.code;
+                  return (
+                    <button key={d.code} type="button" onClick={() => selectDept(d.code)}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '16px 10px',
+                        borderRadius: 12, cursor: 'pointer', textAlign: 'center', minHeight: 116, justifyContent: 'center',
+                        border: active ? '3px solid var(--primary)' : '2px solid #E2E6EA',
+                        background: active ? '#EAF2F8' : '#fff', color: 'var(--primary)',
+                      }}>
+                      <span style={{ fontSize: 32, lineHeight: 1 }} aria-hidden="true">{deptIcon(d)}</span>
+                      <span style={{ fontSize: 15, fontWeight: 600 }}>{d.name || d.code}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
+                        {t('last_token', lang)}: {lastTokens[d.code]?.label || t('no_token_yet', lang)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Preferred doctor for the chosen department (optional) */}
+          {chosenDept && doctors.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #EEE', paddingTop: 12 }}>
+              <div>
+                <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('preferred_doctor', lang)}</label>
+                <p style={{ fontSize: 11.5, color: 'var(--text-light)', marginTop: 2, lineHeight: 1.4 }}>{t('preferred_doctor_hint', lang)}</p>
+              </div>
+              {doctors.length > 5 && (
+                <input className="input" value={docQuery}
+                  onChange={e => setDocQuery(e.target.value)} placeholder={t('search_doctor', lang)} />
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
+                <button type="button" onClick={() => setPrefDoctorId('')}
+                  style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+                    border: !prefDoctorId ? '2px solid var(--primary)' : '1px solid #E2E6EA',
+                    background: !prefDoctorId ? 'rgba(0,0,0,0.02)' : '#fff',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{t('no_preference', lang)}</span>
+                  <span style={{ fontSize: 16, color: !prefDoctorId ? 'var(--primary)' : '#C7CDD2' }}>{!prefDoctorId ? '◉' : '◯'}</span>
+                </button>
+                {doctors
+                  .filter(d => !docQuery.trim() || String(d.name || '').toLowerCase().includes(docQuery.trim().toLowerCase()))
+                  .map(d => {
+                    const active = prefDoctorId === d.id;
+                    return (
+                      <button key={d.id} type="button" onClick={() => setPrefDoctorId(d.id)}
+                        style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+                          border: active ? '2px solid var(--primary)' : '1px solid #E2E6EA',
+                          background: active ? 'rgba(0,0,0,0.02)' : '#fff',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block', fontWeight: 700, fontSize: 14, overflowWrap: 'anywhere' }}>👨‍⚕️ {d.name}</span>
+                          {d.registration_no && <span style={{ display: 'block', fontSize: 11, color: 'var(--text-light)' }}>{d.registration_no}</span>}
+                        </span>
+                        <span style={{ fontSize: 16, color: active ? 'var(--primary)' : '#C7CDD2' }}>{active ? '◉' : '◯'}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {error && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>{error}</p>}
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-primary" onClick={submitFinal} disabled={loading || !chosenDept}>
+            {loading ? '...' : t('submit', lang)}
+          </button>
+          {/* Back button at the BOTTOM */}
+          <button type="button" className="btn btn-outline" onClick={() => { setPhase('identify'); setError(''); }}>
+            ← {t('go_back', lang)}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ─────────────────────────── Step 3: identify ───────────────────────────
   const hasHistory = people.length > 0;
   const showNewFields = selected === 'new';
   return (
     <div className="screen">
       <ProgressBar stepId="register" lang={lang} />
-      <form className="card" style={{ gap: 16 }} onSubmit={submitIdentity} noValidate>
+      <form className="card" style={{ gap: 16 }} onSubmit={goToDepartment} noValidate>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>
           {hasHistory ? t('who_title', lang) : t('new_person_title', lang)}
         </h2>

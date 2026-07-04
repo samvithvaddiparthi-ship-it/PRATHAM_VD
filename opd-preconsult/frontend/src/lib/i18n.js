@@ -38,6 +38,15 @@ const strings = {
     speak: 'Tap to speak',
     language: 'Language',
     continue_questions: 'Continue Questions',
+    // ── Department picker (single-QR entry) ──
+    choose_department: 'Choose your department',
+    choose_department_sub: 'Tap the department you are here to visit',
+    search_department: 'Search department…',
+    last_token: 'Last token',
+    no_token_yet: 'No tokens yet',
+    no_departments: 'No departments found',
+    listen: 'Listen',
+    choose_language: 'Select your language to begin',
     // ── Validation / error messages ──
     err_name: 'Please enter your name.',
     err_phone: 'Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.',
@@ -82,6 +91,11 @@ const strings = {
     someone_else: 'Someone else (new person)',
     new_person_title: 'Tell us about the patient',
     last_visit_label: 'Last visit',
+    // ── Preferred doctor (optional) ──
+    preferred_doctor: 'Preferred doctor (optional)',
+    preferred_doctor_hint: 'Choose a doctor you have seen before, or leave as first available.',
+    no_preference: 'No preference — first available',
+    search_doctor: 'Search doctor…',
     // ── Documents page ──
     doc_type: 'Document type',
     processing: 'Processing...',
@@ -167,6 +181,15 @@ const strings = {
     speak: 'बोलने के लिए टैप करें',
     language: 'भाषा',
     continue_questions: 'प्रश्न जारी रखें',
+    // ── Department picker (single-QR entry) ──
+    choose_department: 'अपना विभाग चुनें',
+    choose_department_sub: 'जिस विभाग में आना है उस पर टैप करें',
+    search_department: 'विभाग खोजें…',
+    last_token: 'अंतिम टोकन',
+    no_token_yet: 'अभी कोई टोकन नहीं',
+    no_departments: 'कोई विभाग नहीं मिला',
+    listen: 'सुनें',
+    choose_language: 'शुरू करने के लिए अपनी भाषा चुनें',
     // ── Validation / error messages ──
     err_name: 'कृपया अपना नाम दर्ज करें।',
     err_phone: '6, 7, 8 या 9 से शुरू होने वाला मान्य 10 अंकों का मोबाइल नंबर दर्ज करें।',
@@ -211,6 +234,11 @@ const strings = {
     someone_else: 'कोई और (नया व्यक्ति)',
     new_person_title: 'मरीज़ के बारे में बताएं',
     last_visit_label: 'पिछली विज़िट',
+    // ── Preferred doctor (optional) ──
+    preferred_doctor: 'पसंदीदा डॉक्टर (वैकल्पिक)',
+    preferred_doctor_hint: 'जिस डॉक्टर को आपने पहले दिखाया है उसे चुनें, या पहले उपलब्ध डॉक्टर के लिए खाली छोड़ें।',
+    no_preference: 'कोई पसंद नहीं — पहले उपलब्ध डॉक्टर',
+    search_doctor: 'डॉक्टर खोजें…',
     // ── Documents page ──
     doc_type: 'दस्तावेज़ का प्रकार',
     processing: 'प्रोसेस हो रहा है...',
@@ -296,6 +324,15 @@ const strings = {
     speak: 'మాట్లాడటానికి టాప్ చేయండి',
     language: 'భాష',
     continue_questions: 'ప్రశ్నలు కొనసాగించండి',
+    // ── Department picker (single-QR entry) ──
+    choose_department: 'మీ విభాగాన్ని ఎంచుకోండి',
+    choose_department_sub: 'మీరు వచ్చిన విభాగంపై నొక్కండి',
+    search_department: 'విభాగం వెతకండి…',
+    last_token: 'చివరి టోకెన్',
+    no_token_yet: 'ఇంకా టోకెన్‌లు లేవు',
+    no_departments: 'విభాగాలు కనబడలేదు',
+    listen: 'వినండి',
+    choose_language: 'ప్రారంభించడానికి మీ భాషను ఎంచుకోండి',
     // ── Validation / error messages ──
     err_name: 'దయచేసి మీ పేరును నమోదు చేయండి.',
     err_phone: '6, 7, 8 లేదా 9తో ప్రారంభమయ్యే చెల్లుబాటు అయ్యే 10 అంకెల మొబైల్ నంబర్‌ను నమోదు చేయండి.',
@@ -340,6 +377,11 @@ const strings = {
     someone_else: 'మరొకరు (కొత్త వ్యక్తి)',
     new_person_title: 'రోగి గురించి చెప్పండి',
     last_visit_label: 'చివరి సందర్శన',
+    // ── Preferred doctor (optional) ──
+    preferred_doctor: 'ఇష్టమైన వైద్యుడు (ఐచ్ఛికం)',
+    preferred_doctor_hint: 'మీరు గతంలో చూపించుకున్న వైద్యుడిని ఎంచుకోండి, లేదా మొదట అందుబాటులో ఉన్నవారి కోసం ఖాళీగా వదిలేయండి.',
+    no_preference: 'ప్రాధాన్యత లేదు — మొదట అందుబాటులో ఉన్నవారు',
+    search_doctor: 'వైద్యుడిని వెతకండి…',
     // ── Documents page ──
     doc_type: 'పత్రం రకం',
     processing: 'ప్రాసెస్ అవుతోంది...',

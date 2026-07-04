@@ -59,4 +59,52 @@ router.get('/board', async (req, res) => {
   }
 });
 
+// PUBLIC "last issued token" per department — lets the kiosk department picker
+// show how far each department has counted today (e.g. CARD-042) so a patient can
+// gauge how busy it is before choosing. Token numbers only, no PHI, no auth (same
+// contract as /board). Reads the same daily counter (queue_counters) that
+// /register increments; label format mirrors session.js exactly (DEPT-NNN).
+//   ?department=CARD → that one department
+//   (no param)       → every department that has issued a token today (one call)
+router.get('/last', async (req, res) => {
+  try {
+    const label = (dept, n) => `${dept}-${String(n).padStart(3, '0')}`;
+    const department = (req.query.department || '').trim();
+
+    if (department) {
+      const r = await pool.query(
+        `SELECT COALESCE(MAX(last_token), 0) AS last_token
+           FROM queue_counters
+          WHERE department = $1 AND service_date = CURRENT_DATE`,
+        [department]
+      );
+      const n = r.rows[0].last_token;
+      return res.json({
+        department,
+        last_token: n,
+        token_label: n > 0 ? label(department, n) : null,
+      });
+    }
+
+    // Aggregate across hospitals defensively (demo is single-hospital, but the
+    // counter is keyed by hospital too) — the picker only cares about the highest
+    // token issued per department today.
+    const r = await pool.query(
+      `SELECT department, MAX(last_token) AS last_token
+         FROM queue_counters
+        WHERE service_date = CURRENT_DATE
+        GROUP BY department`
+    );
+    const departments = r.rows.map((row) => ({
+      department: row.department,
+      last_token: row.last_token,
+      token_label: row.last_token > 0 ? label(row.department, row.last_token) : null,
+    }));
+    res.json({ departments, updated_at: new Date().toISOString() });
+  } catch (err) {
+    console.error('queue last error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router;

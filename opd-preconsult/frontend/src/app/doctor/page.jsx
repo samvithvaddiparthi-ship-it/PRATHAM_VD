@@ -66,6 +66,9 @@ function groupByPatient(list) {
       // consultation, so a patient just handed to me isn't counted as "open".
       consultedAt: latest.dispatched_at ? null : (latest.consulted_at || null),
       triage: filledNow ? latest.triage_level : null,
+      // Optional patient-chosen preferred doctor (shown as a badge; not auto-routed).
+      preferredDoctorId: latest.preferred_doctor_id || null,
+      preferredDoctorName: latest.preferred_doctor_name || null,
     });
   }
   patients.sort((a, b) => {
@@ -776,6 +779,17 @@ function DoctorDashboard({ doctor }) {
                   {pendingHandoff && (
                     <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10.5, fontWeight: 700, color: '#0D47A1', background: '#E3F2FD', border: '1px solid #64B5F6', borderRadius: 4, padding: '3px 7px' }}>
                       ⇄ Assigned to you by {p.latest.reassigned_by}
+                    </span>
+                  )}
+                  {p.preferredDoctorName && (
+                    // Patient's preferred doctor — green "prefers you" when it's this
+                    // doctor, amber otherwise. A hint for manual routing, not a lock.
+                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10.5, fontWeight: 700,
+                      color: p.preferredDoctorId === doctor.id ? '#1E8449' : '#8A6D1A',
+                      background: p.preferredDoctorId === doctor.id ? '#E8F6EE' : '#FCF3D9',
+                      border: `1px solid ${p.preferredDoctorId === doctor.id ? '#9AD3B2' : '#E5C77A'}`,
+                      borderRadius: 4, padding: '3px 7px' }}>
+                      ⭐ Prefers {p.preferredDoctorName}{p.preferredDoctorId === doctor.id ? ' (you)' : ''}
                     </span>
                   )}
                 </div>
