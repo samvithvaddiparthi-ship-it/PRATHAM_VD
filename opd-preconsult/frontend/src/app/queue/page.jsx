@@ -152,7 +152,7 @@ function Board() {
       {/* Footer */}
       <div style={{ borderTop: '1px solid rgba(143,180,203,0.25)', paddingTop: 12, marginTop: 20,
         display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, color: '#7ea7bd', fontSize: 'clamp(11px, 1.1vw, 15px)' }}>
-        <span>⚠️ Urgent cases may be seen first. Investigational — not for clinical use.</span>
+        <span>⚠️ Urgent cases may be seen first.</span>
         <span>{updated ? 'Updated ' + updated.toLocaleTimeString() : 'Loading…'}</span>
       </div>
     </div>

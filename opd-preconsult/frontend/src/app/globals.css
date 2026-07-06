@@ -26,15 +26,12 @@ body {
   -webkit-font-smoothing: antialiased;
   /* Base size scales with --fs so headings (em-based) and body text grow together. */
   font-size: calc(16px * var(--fs, 1));
-  /* Reserve space for the fixed "not for clinical use" disclaimer bar so it never
-     covers page content or action buttons. */
-  padding-bottom: 44px;
 }
 
 /* Reserve a top strip for the fixed accessibility bar (A11yProvider: Text size +
    Assist), added only on patient routes. Without this the bar overlaps the top of
    the card on phones, where the card spans almost the full viewport width. */
-body.has-a11y-bar { padding-top: 52px; }
+body.has-a11y-bar { padding-top: 46px; }
 
 .screen {
   min-height: 100dvh;
@@ -45,10 +42,17 @@ body.has-a11y-bar { padding-top: 52px; }
   margin: 0 auto;
 }
 
+/* The a11y bar reserve (body padding-top above) already provides the top gap on
+   patient routes, so the screen's own 16px top padding was doubling it and
+   wasting vertical space under the fixed Text-size / Assist pill. Trim just the
+   top (left/right/bottom keep 16px) — the pill sits at top:8 and is ~33px tall,
+   so 46px of body padding still clears it without overlap. */
+body.has-a11y-bar .screen { padding-top: 2px; }
+
 .card {
   background: var(--card-bg);
   border-radius: 16px;
-  padding: 24px;
+  padding: 16px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   flex: 1;
   display: flex;

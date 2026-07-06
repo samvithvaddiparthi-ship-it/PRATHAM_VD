@@ -200,11 +200,26 @@ router.get('/queue', async (req, res) => {
          ), '[]'::json) AS prescription_items
        FROM sessions s
        LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
-       WHERE s.department = $1
-         AND s.state = 'COMPLETE'
+       WHERE s.state = 'COMPLETE'
          AND s.removed_at IS NULL
+         AND (
+           -- this department's completed visits (defines who's in the queue), PLUS
+           s.department = $1
+           -- every OTHER-department completed visit belonging to a patient who is in
+           -- this department's queue — so a patient reassigned across departments
+           -- still shows their full prior-visit history (grouped by phone+name).
+           OR (
+             s.patient_phone IS NOT NULL
+             AND (s.patient_phone, lower(trim(coalesce(s.patient_name, '')))) IN (
+               SELECT patient_phone, lower(trim(coalesce(patient_name, '')))
+                 FROM sessions
+                WHERE department = $1 AND state = 'COMPLETE' AND removed_at IS NULL
+                  AND patient_phone IS NOT NULL
+             )
+           )
+         )
        ORDER BY s.created_at DESC
-       LIMIT 200`,
+       LIMIT 400`,
       [department]
     );
     res.json(result.rows);
@@ -436,7 +451,8 @@ router.post('/reassign/:session_id', async (req, res) => {
       const result = await pool.query(
         `UPDATE sessions SET assigned_doctor_id = $1, department = $2,
                 reassigned_by = $3, reassigned_at = NOW(),
-                consulted_at = NULL, dispatched_at = NULL, updated_at = NOW()
+                consulted_at = NULL, dispatched_at = NULL,
+                released_at = NOW(), updated_at = NOW()
          WHERE id = $4 RETURNING *`,
         [target_doctor_id, dept, fromName, req.params.session_id]
       );
@@ -457,7 +473,8 @@ router.post('/reassign/:session_id', async (req, res) => {
       const result = await pool.query(
         `UPDATE sessions SET department = $1, assigned_doctor_id = NULL,
                 reassigned_by = NULL, reassigned_at = NULL,
-                consulted_at = NULL, dispatched_at = NULL, updated_at = NOW()
+                consulted_at = NULL, dispatched_at = NULL,
+                released_at = NOW(), updated_at = NOW()
          WHERE id = $2 RETURNING *`,
         [department, req.params.session_id]
       );

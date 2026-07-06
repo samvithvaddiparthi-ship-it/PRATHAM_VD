@@ -27,7 +27,7 @@ function fmtVisitDate(ts) {
 // patient is treated as "filled now" — which drives the highlight and the
 // triage colour on the patient heading. Patients with a filled-now visit float
 // to the top (ordered by triage severity), the rest follow by recency.
-function groupByPatient(list) {
+function groupByPatient(list, myDept) {
   const map = new Map();
   for (const s of list) {
     // One phone may serve a whole family, so a patient is keyed by phone + name
@@ -46,7 +46,12 @@ function groupByPatient(list) {
   const patients = [];
   for (const [key, visits] of map) {
     visits.sort((a, b) => recencyOf(b) - recencyOf(a));
-    const latest = visits[0];
+    // Queue status (lock/consulting/triage/recency) is driven by the most recent
+    // visit IN THIS DOCTOR'S department, so a patient reassigned across departments
+    // never looks "active" in the wrong queue. `visits` still lists every visit
+    // (all departments) so the full prior-visit history shows when expanded.
+    const dep = myDept ? String(myDept).toUpperCase() : null;
+    const latest = (dep && visits.find(v => String(v.department || '').toUpperCase() === dep)) || visits[0];
     const filledNow = !!latest.is_recent;
     patients.push({
       key,
@@ -231,7 +236,7 @@ function DoctorDashboard({ doctor }) {
   // vanish. Patients who never had a recent fill are never pinned, so they stay
   // hidden. Resets on a full page reload (then the recent-only rule applies).
   useEffect(() => {
-    const recent = groupByPatient(sessions).filter(p => p.filledNow).map(p => p.key);
+    const recent = groupByPatient(sessions, doctor?.department).filter(p => p.filledNow).map(p => p.key);
     if (!recent.length) return;
     setPinned(prev => {
       let changed = false;
@@ -249,7 +254,7 @@ function DoctorDashboard({ doctor }) {
     // My active consultation = a patient assigned to me that I've OPENED
     // (consulted_at set). A patient merely reassigned to me (consulted_at null)
     // is NOT an active consultation, so it never holds the single-consult lock.
-    const mine = groupByPatient(sessions).find(p => p.lockedById === doctor.id && p.consultedAt && !p.dispatched);
+    const mine = groupByPatient(sessions, doctor?.department).find(p => p.lockedById === doctor.id && p.consultedAt && !p.dispatched);
     if (mine && activeLock !== mine.key) setActiveLock(mine.key);
     else if (!mine && activeLock) setActiveLock(null);
   }, [sessions]);
@@ -589,7 +594,7 @@ function DoctorDashboard({ doctor }) {
   // IN-PROGRESS (Consulting). A patient a doctor has opened (consulted_at set) is
   // being consulted → Consulting tab; everyone else openable → Queue. This keeps
   // the Queue from filling up with patients already under consultation.
-  const allActive = groupByPatient(sessions).filter(p => !p.dispatched);
+  const allActive = groupByPatient(sessions, doctor?.department).filter(p => !p.dispatched);
   const waitingPatients = allActive.filter(p => (p.filledNow || pinned[p.key]) && !p.consultedAt);
   const consultingPatients = allActive.filter(p => !!p.consultedAt);
   const patients = tab === 'consulting' ? consultingPatients : waitingPatients; // active tab's list
