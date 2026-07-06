@@ -61,6 +61,12 @@ router.post('/request', authMiddleware, async (req, res) => {
     const { e164: phone, valid } = normalizeIndianPhone((req.body || {}).phone);
     if (!valid) return res.status(400).json({ error: 'Invalid phone number' });
 
+    // In production, refuse to run without a real SMS provider — otherwise OTPs
+    // are never delivered and the dev code would be exposed. Dev/dry-run is fine.
+    if (process.env.NODE_ENV === 'production' && !smsConfigured()) {
+      return res.status(503).json({ error: 'SMS delivery is not configured.' });
+    }
+
     // The session this token points at must still exist — otherwise the OTP row's
     // FK to sessions would fail. (A session can vanish if the DB was reset between
     // scanning and verifying.) Return a clean "rescan" signal, not a 500.

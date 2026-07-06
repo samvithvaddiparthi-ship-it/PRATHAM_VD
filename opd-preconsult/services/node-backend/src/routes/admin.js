@@ -23,17 +23,22 @@ router.post('/login', async (req, res) => {
     }
     const passcode = String((req.body || {}).passcode || '');
     if (!passcode) return res.status(400).json({ error: 'Passcode required' });
+    // Named-admin audit (A9): each admin identifies themselves so their actions are
+    // attributable in audit_log. This is NOT a second credential — the passcode is
+    // still the gate — just a label carried in the token for the audit trail.
+    const adminName = String((req.body || {}).admin_name || '').trim().slice(0, 80);
+    if (adminName.length < 2) return res.status(400).json({ error: 'Enter your name' });
     // Constant-time comparison (avoids timing leaks); unequal lengths => reject.
     const a = Buffer.from(passcode);
     const b = Buffer.from(expected);
     const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
     if (!ok) return res.status(401).json({ error: 'Invalid passcode' });
 
-    const token = signToken({ role: 'admin' });
+    const token = signToken({ role: 'admin', admin_name: adminName });
     try {
       await pool.query(
         `INSERT INTO audit_log (event_type, actor, payload) VALUES ('admin_login', $1, $2)`,
-        ['admin', JSON.stringify({})]
+        [adminName, JSON.stringify({})]
       );
     } catch { /* audit_log optional */ }
     res.json({ token });

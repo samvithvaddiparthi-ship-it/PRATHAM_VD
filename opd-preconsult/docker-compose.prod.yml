@@ -1,4 +1,15 @@
-version: '3.8'
+# Production topology for a SELF-HOSTED server.
+#
+#   caddy (:80/:443, automatic HTTPS)  →  gateway (internal)  →  services
+#
+# Nothing except Caddy publishes a host port — Postgres/Redis/MinIO/backends are
+# reachable only on the internal opd-net. node-backend runs with NODE_ENV=production
+# (which makes middleware/auth.js refuse to boot without a strong JWT_SECRET).
+#
+# Run:  DOMAIN=opd.hospital.in docker compose -f docker-compose.prod.yml up -d --build
+# Prereqs: a filled, secured .env (see `node scripts/gen-secrets.js`) and DNS for $DOMAIN
+# pointing at this server. This is a standalone file (not an override) so published
+# ports are exact — keep it in sync with docker-compose.yml when services change.
 
 networks:
   opd-net:
@@ -8,18 +19,34 @@ volumes:
   pg-data:
   redis-data:
   minio-data:
+  caddy-data:
+  caddy-config:
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN to your hospital domain (e.g. opd.hospital.in)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - gateway
+    networks:
+      - opd-net
+
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-opd_preconsult}
       POSTGRES_USER: ${POSTGRES_USER:-opd_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
-    ports:
-      # Bound to loopback: reachable for local dev tools, NOT exposed on the
-      # network. Production (docker-compose.prod.yml) publishes no infra ports.
-      - "127.0.0.1:5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong POSTGRES_PASSWORD}
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d/migrations
@@ -34,8 +61,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
     volumes:
       - redis-data:/data
     networks:
@@ -48,13 +74,11 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-changeme_in_production}
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set a strong MINIO_SECRET_KEY}
     volumes:
       - minio-data:/data
     networks:
@@ -67,8 +91,7 @@ services:
 
   gateway:
     image: nginx:alpine
-    ports:
-      - "80:80"
+    restart: unless-stopped
     volumes:
       - ./services/gateway/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
@@ -83,15 +106,13 @@ services:
 
   node-backend:
     build: ./services/node-backend
-    ports:
-      - "127.0.0.1:4001:4001"
+    restart: unless-stopped
     env_file: .env
     environment:
       PORT: 4001
-      NODE_ENV: development
+      NODE_ENV: production
       MIGRATIONS_DIR: /migrations
     volumes:
-      # Auto-apply pending DB migrations on startup (see src/migrate.js).
       - ./db/migrations:/migrations:ro
     depends_on:
       postgres:
@@ -108,8 +129,7 @@ services:
 
   python-backend:
     build: ./services/python-backend
-    ports:
-      - "127.0.0.1:4002:4002"
+    restart: unless-stopped
     env_file: .env
     environment:
       PORT: 4002
@@ -128,8 +148,7 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_BASE: ""
     networks:

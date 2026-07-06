@@ -23,6 +23,9 @@ pg-data/
 redis-data/
 minio-data/
 
+# Backups (pg_dump + MinIO archives from scripts/backup.sh)
+backups/
+
 # OS
 .DS_Store
 Thumbs.db

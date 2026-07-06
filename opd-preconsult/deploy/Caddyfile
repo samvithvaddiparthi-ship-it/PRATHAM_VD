@@ -1,0 +1,17 @@
+# Automatic HTTPS (Let's Encrypt) for the hospital domain, terminating TLS in
+# front of the internal nginx gateway. $DOMAIN is injected from the environment
+# (set it before starting docker-compose.prod.yml).
+#
+# Caddy obtains + renews the certificate automatically once $DOMAIN's DNS points
+# at this server and ports 80/443 are reachable.
+
+{$DOMAIN} {
+	encode gzip
+
+	# Long-lived streaming for the nursing-alert SSE endpoint.
+	reverse_proxy /api/alerts* gateway:80 {
+		flush_interval -1
+	}
+
+	reverse_proxy gateway:80
+}

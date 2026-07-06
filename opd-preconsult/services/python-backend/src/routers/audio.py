@@ -14,16 +14,20 @@ of the browser speech engine — no change to capture or playback.
 """
 import io
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 
 from ..db import query, execute
 from .. import storage
+from ..auth import require_auth
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
 
-@router.post("/answer")
+# NOTE on auth: /answer and /session/{id} require a valid JWT. /clip/{id} is left
+# open because it's consumed as an <audio src> (see api.answerAudioUrl), which
+# can't send an Authorization header; it only serves bytes for an opaque clip id.
+@router.post("/answer", dependencies=[Depends(require_auth)])
 async def upload_answer_audio(
     file: UploadFile = File(...),
     session_id: str = Form(...),
@@ -51,7 +55,7 @@ async def upload_answer_audio(
     return {"id": str(rows[0]["id"]) if rows else None}
 
 
-@router.get("/session/{session_id}")
+@router.get("/session/{session_id}", dependencies=[Depends(require_auth)])
 async def list_session_audio(session_id: str):
     rows = query(
         """SELECT id, question_id, mime, duration_ms, transcript, created_at

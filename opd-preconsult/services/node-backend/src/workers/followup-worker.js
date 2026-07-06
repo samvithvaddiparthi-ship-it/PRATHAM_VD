@@ -3,6 +3,7 @@
  * Called from index.js after server starts.
  */
 const pool = require('../models/db');
+const { maskPhone } = require('../utils/phone');
 
 const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -53,9 +54,10 @@ async function processDueFollowups() {
             to: toNumber,
             body: followup.message,
           });
-          console.log(`[followup-worker] Sent ${followup.channel} to ${followup.patient_phone}`);
+          console.log(`[followup-worker] Sent ${followup.channel} to ${maskPhone(followup.patient_phone)}`);
         } else {
-          console.log(`[followup-worker] (dry-run) Would send to ${followup.patient_phone}: ${followup.message.slice(0, 50)}...`);
+          // Never log the recipient number or message body (PHI) — mask + length only.
+          console.log(`[followup-worker] (dry-run) Would send ${followup.channel} to ${maskPhone(followup.patient_phone)} (${(followup.message || '').length} chars)`);
         }
 
         // Mark as sent

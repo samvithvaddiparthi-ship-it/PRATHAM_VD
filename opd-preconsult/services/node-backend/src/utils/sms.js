@@ -5,6 +5,8 @@
  * surface the code locally for testing. This mirrors the dry-run pattern in
  * services/node-backend/src/workers/followup-worker.js.
  */
+const { maskPhone } = require('./phone');
+
 let twilioClient = null; // null = not yet initialised, false = unavailable
 
 function getTwilioClient() {
@@ -33,13 +35,13 @@ function getTwilioClient() {
 async function sendSms(to, body) {
   const client = getTwilioClient();
   if (!client) {
-    console.log(`[sms] (dry-run) Would SMS ${to}: ${body}`);
+    console.log(`[sms] (dry-run) Would SMS ${maskPhone(to)} (${(body || '').length} chars)`);
     return { sent: false, dryRun: true };
   }
   const from = process.env.TWILIO_SMS_FROM;
   if (!from) {
     console.warn('[sms] TWILIO_SMS_FROM not set — cannot send; dry-run.');
-    console.log(`[sms] (dry-run) Would SMS ${to}: ${body}`);
+    console.log(`[sms] (dry-run) Would SMS ${maskPhone(to)} (${(body || '').length} chars)`);
     return { sent: false, dryRun: true };
   }
   await client.messages.create({ from, to, body });

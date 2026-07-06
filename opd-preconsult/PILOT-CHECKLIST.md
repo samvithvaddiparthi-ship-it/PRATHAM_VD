@@ -14,21 +14,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **P0** must-have before
 ## Track A — Software & Security
 
 ### P0 — blockers before ANY real patient data
-- [ ] **A1 · Authenticate the python-backend.** `/api/ocr, /api/report, /api/triage, /api/scribe, /api/drugs, /api/audio, /api/transcribe` are currently unauthenticated (anyone reaching the gateway can submit/extract PHI). Add cross-service auth (shared service token or forward + verify the JWT in FastAPI).
-- [ ] **A2 · HTTPS/TLS everywhere.** Gateway currently listens on plain `:80`. Terminate TLS (Caddy/nginx + Let's Encrypt, or a host/LB that provides HTTPS). No PHI over HTTP.
-- [ ] **A3 · `NODE_ENV=production` in the real deploy.** `docker-compose.yml` sets `NODE_ENV: development`, which bypasses the JWT fail-closed guard. Use a hardened `docker-compose.prod.yml`.
-- [ ] **A4 · Rotate every secret.** `.env.example` ships `changeme_*` defaults for `POSTGRES_PASSWORD`, `MINIO_SECRET_KEY`, `ADMIN_PASSCODE`, `JWT_SECRET`, and `DEMO_QR_SECRET` (the last HMAC-signs prescription QRs — weak = forgeable). Generate strong random values; never commit real `.env`.
-- [ ] **A5 · Stop exposing infra ports.** Compose publishes postgres `5432`, redis `6379`, minio `9000/9001` to the host. Keep them on the internal network only in prod.
-- [ ] **A6 · Remove demo/testing artifacts:** the 10-digit phone hard-cap in the register page; force a PIN reset for the seeded demo doctors (PIN `1234`); require a real SMS provider (no inline OTP dev-code) in prod.
+- [x] **A1 · Authenticate the python-backend.** Done — `services/python-backend/src/auth.py` verifies the login JWT (shared `JWT_SECRET`, HS256, stdlib — no pyjwt) via a `require_auth` dependency applied to all sensitive routers in `main.py`. Media-`<src>` GETs (`/api/audio/clip/{id}`, `/api/ocr/documents/image/{id}`) and `/api/transcribe/health` stay open by design. **Requires `JWT_SECRET` set in `.env` (dev too).** *Refinement left: per-role gating of doctor-only routers (currently any valid token).*
+- [x] **A2 · HTTPS/TLS.** Done (config) — `docker-compose.prod.yml` + `deploy/Caddyfile` put Caddy (auto Let's Encrypt) in front of the gateway; only Caddy publishes 80/443. **Needs a real domain + DNS at deploy time.**
+- [x] **A3 · `NODE_ENV=production`.** Done — set in `docker-compose.prod.yml` (activates the node JWT fail-closed guard).
+- [x] **A4 · Rotate every secret.** Done (tooling + guard) — `scripts/gen-secrets.js` prints strong values; `DEMO_QR_SECRET` now fails closed in production (`prescription.js`); `.env.example` notes sharpened. **Operational step remains: generate + set them in the real deploy `.env`.**
+- [x] **A5 · Stop exposing infra ports.** Done — base `docker-compose.yml` binds postgres/redis/minio/backends to `127.0.0.1`; prod compose publishes only Caddy 80/443.
+- [x] **A6 · Remove demo/testing artifacts.** Done — removed the phone-cap testing banner; OTP returns **503** in prod when SMS isn't configured (no dev-code leak); startup **warns** if any active doctor still uses the default PIN `1234`. *Forcing a PIN reset (a `must_change_pin` column) is deferred — needs a migration; reset via `POST /api/doctor/change-pin` / HIS for now.*
 
 ### P1 — before pilot go-live
-- [ ] **A7 · Backups + tested restore** for Postgres and MinIO (none today). Automated `pg_dump` + MinIO mirror; verify a restore.
-- [ ] **A8 · Real SMS / WhatsApp.** Twilio is in sandbox. India needs **DLT registration** (SMS) and **WhatsApp Business API** approval — long lead time, start now.
-- [ ] **A9 · Admin RBAC/audit.** Single shared `ADMIN_PASSCODE` = no "who did what." At least per-user admin accounts for the pilot.
-- [ ] **A10 · Persist WhatsApp conversation state** (currently in-memory — a restart drops mid-flow patients).
-- [ ] **A11 · Smoke tests** for the critical path (scan → register → triage → report) so a rebuild can't silently break intake. (No automated tests exist today.)
-- [ ] **A12 · Error monitoring + uptime** (e.g. Sentry + a healthcheck monitor) so you know when it's down during the pilot.
-- [ ] **A13 · Gateway hardening:** security headers + rate limiting on OTP and upload endpoints (none today).
+- [x] **A7 · Backups + tested restore.** Done — `scripts/backup.sh` (pg_dump + MinIO volume archive → `backups/<ts>/`, 14-day retention) + `scripts/restore.sh`; verified locally (DB + object archive produced). Cron / off-box copy / restore-drill steps in `deploy/OPERATIONS.md`. **Do a real restore drill before go-live.**
+- [ ] **A8 · Real SMS / WhatsApp.** ⏸ **Parked pending mentor clarity.** Long lead: India **DLT registration** (SMS) + **WhatsApp Business API** approval — start once the direction is confirmed.
+- [x] **A9 · Admin RBAC/audit** *(pilot scope: named-admin audit, no migration).* Done — HIS login now requires the admin's **name** (carried in the token); a global middleware in `index.js` stamps every successful admin **mutation** into `audit_log` (`admin_action`, who/what/status). Shared passcode is still the gate. *Full per-user accounts (a `admin_users` table + per-user auth) deferred as a fast-follow — needs a migration.*
+- [ ] **A10 · Persist WhatsApp conversation state.** ⏸ Parked with A8 (WhatsApp).
+- [x] **A11 · Smoke tests.** Done — `scripts/smoke.js` runs scan → OTP → register → triage (incl. the A1 auth assertions); all pass.
+- [~] **A12 · Error monitoring + uptime.** Uptime done — `/healthz` liveness endpoint + monitor wiring in `deploy/OPERATIONS.md`. **Error tracking (Sentry) deferred** — needs a package + DSN.
+- [x] **A13 · Gateway hardening.** Done — rate limits on OTP + upload endpoints, security headers, real-client-IP behind Caddy (`services/gateway/nginx.conf`).
 
 ### P2 — during/after pilot
 - [ ] **A14 · Load/soak test** at realistic OPD volume.
@@ -42,7 +42,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **P0** must-have before
 - [ ] **B3 · De-identification of any test/benchmark data** (DPDP data-minimization). See Presidio note below.
 - [ ] **B4 · Consent language reviewed** by the hospital + counsel (capture + audit log already exist — good foundation).
 - [ ] **B5 · Data Processing Agreement (DPA)** between your team and the hospital (who is data fiduciary vs processor).
-- [ ] **B6 · PHI never in logs** — verify/enforce (grep + a redaction pass). Audio: scribe is zero-retention, but per-answer voice clips ARE stored (that's PHI).
+- [x] **B6 · PHI never in logs** — Done — masked patient phone numbers in logs (`utils/phone.js maskPhone`, applied in `sms.js` + `followup-worker.js`), and stopped logging SMS/follow-up message bodies. Also tightened python-backend **CORS** to an env-configurable origin (`CORS_ALLOW_ORIGINS`). Python error logs carry only exception types, not patient data. *Residual: `/api/audio/clip/{id}` + `/api/ocr/documents/image/{id}` serve PHI by unguessable UUID without auth (media `<src>` can't send a header) — acceptable for pilot; harden with signed URLs later.*
 - [ ] **B7 · Access log / audit trail** for who viewed which patient (extend `audit_log`; consider pgAudit).
 
 ---

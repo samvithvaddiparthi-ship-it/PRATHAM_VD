@@ -3,7 +3,7 @@ import re
 import io
 import json
 import logging
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional
 from PIL import Image, ImageFilter, ImageEnhance
@@ -11,6 +11,7 @@ import pytesseract
 
 from ..db import execute, query
 from .. import storage
+from ..auth import require_auth
 from ..llm_client import complete_with_image, has_llm, has_vision
 from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
 
@@ -267,7 +268,7 @@ def extract_with_vision(image_bytes: bytes, mime_type: str, ocr_text: str, ocr_c
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.post("/process")
+@router.post("/process", dependencies=[Depends(require_auth)])
 async def process_document(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
@@ -406,7 +407,7 @@ async def process_document(
     }
 
 
-@router.post("/confirm/{doc_id}")
+@router.post("/confirm/{doc_id}", dependencies=[Depends(require_auth)])
 async def confirm_document(doc_id: str, body: dict = {}):
     """Patient confirms or rejects OCR output."""
     confirmed = body.get('confirmed', True)
@@ -414,7 +415,7 @@ async def confirm_document(doc_id: str, body: dict = {}):
     return {'confirmed': confirmed}
 
 
-@router.get("/documents/{session_id}")
+@router.get("/documents/{session_id}", dependencies=[Depends(require_auth)])
 async def get_documents(session_id: str):
     """Get all documents for a session."""
     return query(

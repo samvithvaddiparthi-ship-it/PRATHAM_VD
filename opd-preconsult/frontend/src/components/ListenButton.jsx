@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
+import { getToken } from '../lib/api';
 
 // Read-aloud (text-to-speech) for low-literacy / elderly patients.
 // Primary: Bhashini TTS via /api/tts (natural Indian-language voices, on-shore).
@@ -45,8 +46,14 @@ export default function ListenButton({ text, segments, lang = 'en', label = 'Lis
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   async function fetchAudio(part) {
+    // /api/tts is auth-gated now; attach the login token. Read from getToken()
+    // with a sessionStorage fallback (autoPlay can fire before the page's
+    // setToken() runs, since child effects run before parent effects).
+    const headers = { 'Content-Type': 'application/json' };
+    const tok = getToken() || (typeof window !== 'undefined' ? sessionStorage.getItem('token') : null);
+    if (tok) headers['Authorization'] = `Bearer ${tok}`;
     const res = await fetch('/api/tts', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers,
       body: JSON.stringify({ text: part, lang }),
     });
     if (!res.ok) throw new Error('tts ' + res.status);

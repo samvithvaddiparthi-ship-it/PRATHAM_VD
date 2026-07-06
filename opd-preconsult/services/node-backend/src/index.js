@@ -11,6 +11,23 @@ app.use(express.json({ limit: '20mb' }));
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Named-admin audit (A9): after any successful admin *mutation*, record WHO did it
+// (the admin's name from their token) and WHAT. req.session_data is set by
+// authMiddleware on the admin-gated routes and is still available when 'finish'
+// fires. GETs and failed requests are skipped, so this is a low-noise action log.
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    const sd = req.session_data;
+    if (sd && sd.role === 'admin' && req.method !== 'GET' && res.statusCode < 400) {
+      pool.query(
+        `INSERT INTO audit_log (event_type, actor, payload) VALUES ('admin_action', $1, $2)`,
+        [sd.admin_name || 'admin', JSON.stringify({ method: req.method, path: req.originalUrl, status: res.statusCode })]
+      ).catch(() => {});
+    }
+  });
+  next();
+});
+
 // Routes
 app.use('/api/session', require('./routes/session'));
 app.use('/api/queue', require('./routes/queue'));
@@ -116,6 +133,23 @@ async function start() {
   }
 
   await seedQuestionnaires();
+
+  // Pilot safety: warn loudly if any active doctor still uses the seeded demo
+  // PIN (1234) in production. Reset via POST /api/doctor/change-pin or HIS doctor
+  // management before going live. (Forcing a reset needs a schema flag — deferred.)
+  try {
+    const DEFAULT_PIN_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
+    const pool = require('./models/db');
+    const { rows } = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM doctors WHERE is_active = true AND pin_hash = $1',
+      [DEFAULT_PIN_HASH]
+    );
+    if (rows[0].n > 0) {
+      const msg = `[security] ${rows[0].n} active doctor(s) still use the default demo PIN (1234). Reset before real use.`;
+      if (process.env.NODE_ENV === 'production') console.error('⚠️  ' + msg);
+      else console.warn(msg);
+    }
+  } catch { /* non-fatal — doctors table may not exist yet on a brand-new DB */ }
 
   app.listen(PORT, () => {
     console.log(`[node-backend] Running on port ${PORT}`);

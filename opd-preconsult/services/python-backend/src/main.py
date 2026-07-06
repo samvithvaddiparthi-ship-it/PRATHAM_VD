@@ -1,20 +1,26 @@
 import logging
+import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import llm, triage, report, ocr, prescription, scribe, drugs, audio, transcribe, tts
 from .llm_client import LLMUnavailable
+from .auth import require_auth
 from . import drug_repo
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OPD Pre-Consult Python Backend")
 
+# The app is same-origin (browser → gateway → here), so CORS isn't needed for it;
+# `*` is kept as a dev default but should be locked to the real origin in prod via
+# CORS_ALLOW_ORIGINS=https://opd.hospital.in (comma-separated).
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -35,16 +41,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 
-app.include_router(llm.router)
-app.include_router(triage.router)
-app.include_router(report.router)
+# All routers below require a valid login JWT (verified against the shared
+# JWT_SECRET). /health stays open. The audio, ocr and transcribe routers gate
+# per-route internally, because each has one endpoint consumed as a media <src>
+# or a public health check that can't carry an Authorization header:
+#   audio      → /clip/{id} (<audio src>) stays open
+#   ocr        → /documents/image/{id} (<img src>) stays open
+#   transcribe → /health stays open
+_auth = [Depends(require_auth)]
+app.include_router(llm.router, dependencies=_auth)
+app.include_router(triage.router, dependencies=_auth)
+app.include_router(report.router, dependencies=_auth)
 app.include_router(ocr.router)
-app.include_router(prescription.router)
-app.include_router(scribe.router)
-app.include_router(drugs.router)
+app.include_router(prescription.router, dependencies=_auth)
+app.include_router(scribe.router, dependencies=_auth)
+app.include_router(drugs.router, dependencies=_auth)
 app.include_router(audio.router)
 app.include_router(transcribe.router)
-app.include_router(tts.router)
+app.include_router(tts.router, dependencies=_auth)
 
 @app.on_event("startup")
 def _init_drug_formulary():

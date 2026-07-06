@@ -14,10 +14,11 @@ POST /api/transcribe   multipart: file, lang (REQUIRED), patient_name?,
 GET  /api/transcribe/health -> { bhashini, llm }
 """
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 
 from ..db import execute
 from .. import storage
+from ..auth import require_auth
 from ..bhashini import asr, medcorrect, _llm
 
 router = APIRouter(prefix="/api/transcribe", tags=["transcribe"])
@@ -30,7 +31,7 @@ async def health():
     return {"bhashini": asr.have_keys(), "llm": _llm.have_llm()}
 
 
-@router.post("/translate")
+@router.post("/translate", dependencies=[Depends(require_auth)])
 async def translate(text: str = Form(...), source_lang: str = Form(...)):
     """On-demand Bhashini NMT translation of a transcript to English. Called when
     the patient taps 'Show translation'. No LLM — IndicTrans2 via Bhashini."""
@@ -46,7 +47,7 @@ async def translate(text: str = Form(...), source_lang: str = Form(...)):
         raise HTTPException(status_code=502, detail="Translation unavailable")
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_auth)])
 async def transcribe(
     file: UploadFile = File(...),
     lang: str = Form(...),                 # REQUIRED — never default to a language

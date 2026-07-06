@@ -62,6 +62,7 @@ export default function HISPage() {
 }
 
 function AdminLogin({ onSuccess }) {
+  const [name, setName] = useState('');
   const [passcode, setPasscode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,7 +72,7 @@ function AdminLogin({ onSuccess }) {
     setError('');
     setLoading(true);
     try {
-      const { token } = await api.adminLogin(passcode);
+      const { token } = await api.adminLogin(passcode, name.trim());
       setToken(token);
       onSuccess();
     } catch (err) {
@@ -93,17 +94,24 @@ function AdminLogin({ onSuccess }) {
       }}>
         <h2 style={{ textAlign: 'center', margin: 0 }}>HIS Admin</h2>
         <p style={{ color: 'var(--text-light)', fontSize: 14, textAlign: 'center', margin: 0 }}>
-          Enter the admin passcode to continue.
+          Enter your name and the admin passcode to continue.
         </p>
-        <PasswordInput
+        <input
           className="input"
           autoFocus
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Your name"
+          maxLength={80}
+        />
+        <PasswordInput
+          className="input"
           value={passcode}
           onChange={e => setPasscode(e.target.value)}
           placeholder="Admin passcode"
         />
         {error && <div style={{ color: 'var(--red)', fontSize: 14, textAlign: 'center' }}>{error}</div>}
-        <button className="btn btn-primary" type="submit" disabled={loading || !passcode}>
+        <button className="btn btn-primary" type="submit" disabled={loading || !passcode || name.trim().length < 2}>
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
       </form>

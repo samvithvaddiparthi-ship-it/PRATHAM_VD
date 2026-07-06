@@ -134,7 +134,7 @@ export const api = {
   },
 
   // Admin (HIS dashboard)
-  adminLogin: (passcode) => apiFetch('/api/admin/login', { method: 'POST', body: JSON.stringify({ passcode }) }),
+  adminLogin: (passcode, adminName) => apiFetch('/api/admin/login', { method: 'POST', body: JSON.stringify({ passcode, admin_name: adminName }) }),
 
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),

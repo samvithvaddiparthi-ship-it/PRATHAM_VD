@@ -264,14 +264,11 @@ export default function Register() {
 
           <div>
             <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('phone', lang)} *</label>
-            {/* TESTING-ONLY HARD CAP — remove before production (see note). */}
+            {/* 10 digits = a standard Indian mobile number; normalizeIndianPhone validates. */}
             <input className="input" type="tel" inputMode="numeric" maxLength={10}
               placeholder="9876543210"
               value={phone}
               onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} />
-            <p style={{ fontSize: 11, color: '#B7791F', background: '#FFF8E1', border: '1px dashed #F0C36D', borderRadius: 6, padding: '4px 8px', marginTop: 4 }}>
-              ⚠️ Testing: phone is hard-capped to 10 digits. Remove this cap before production.
-            </p>
           </div>
 
           {error && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>{error}</p>}
