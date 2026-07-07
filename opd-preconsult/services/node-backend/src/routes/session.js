@@ -2,6 +2,7 @@ const { Router } = require('express');
 const pool = require('../models/db');
 const { signToken, authMiddleware } = require('../middleware/auth');
 const { normalizeIndianPhone } = require('../utils/phone');
+const { APP_TIMEZONE } = require('../utils/time');
 
 const router = Router();
 
@@ -124,15 +125,17 @@ router.post('/register', authMiddleware, async (req, res) => {
 
     // Assign a daily, per-department token (gov-OPD style) — once per session, so
     // navigating Back and re-submitting keeps the same number. The atomic upsert
-    // is race-safe and the counter resets each day (keyed by service_date).
+    // is race-safe and the counter resets each day. The "service day" rolls over
+    // at LOCAL (IST) midnight, not the DB server's UTC midnight — so tokens reset
+    // at 12am hospital time regardless of server timezone.
     if (sess.token_number == null) {
       const tok = await pool.query(
         `INSERT INTO queue_counters (hospital_id, department, service_date, last_token)
-         VALUES ($1, $2, CURRENT_DATE, 1)
+         VALUES ($1, $2, (NOW() AT TIME ZONE $3)::date, 1)
          ON CONFLICT (hospital_id, department, service_date)
          DO UPDATE SET last_token = queue_counters.last_token + 1
          RETURNING last_token`,
-        [sess.hospital_id, sess.department]
+        [sess.hospital_id, sess.department, APP_TIMEZONE]
       );
       const n = tok.rows[0].last_token;
       const label = `${sess.department}-${String(n).padStart(3, '0')}`;

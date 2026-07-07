@@ -2,6 +2,8 @@
 
 AI-powered OPD system for Indian hospitals. Collects patient history, documents, and vitals DURING the wait, delivers structured reports to doctors, enables prescription writing with drug interaction checks, ambient consultation recording, automated follow-ups, and analytics.
 
+> Original base repository: [github.com/crtx-sg/pratham](https://github.com/crtx-sg/pratham). This is the actively-developed continuation. See [CLAUDE.md](CLAUDE.md) for the detailed engineering/production-intent notes and the mandatory DB-migration rule.
+
 ## Why
 
 Indian OPDs see 2,000–15,000 patients/day. Doctors get under 1 minute per patient. Patients wait 2–6 hours. This system turns waiting time into data collection and gives doctors an AI-enriched pre-consultation summary before the patient walks in.
@@ -86,15 +88,16 @@ Indian OPDs see 2,000–15,000 patients/day. Doctors get under 1 minute per pati
 
 | Layer | Tech |
 |-------|------|
-| Frontend | Next.js 14 (App Router), React 18, mobile-first |
-| Node backend | Express, PostgreSQL (pg), JWT auth, ioredis |
-| Python backend | FastAPI, Gemini/Claude SDK, Tesseract OCR, OpenAI Whisper |
-| Database | PostgreSQL 16 |
+| Frontend | Next.js 14 (App Router), React 18, mobile-first (`qrcode`, `react-markdown`) |
+| Node backend | Express, PostgreSQL (pg), `jsonwebtoken` (JWT auth + roles), ioredis, Twilio |
+| Python backend | FastAPI, Gemini/Groq/Claude/OpenAI SDKs, Tesseract OCR, Bhashini ASR/NMT/TTS, JWT-gated (stdlib) |
+| Indic language | Bhashini (`indic-transliteration`) for speech-to-text, translation, and read-aloud (hi/te); `av` for audio |
+| Database | PostgreSQL 16 (26 migrations, auto-applied on node-backend startup) |
 | Cache | Redis 7 (pub/sub for SSE alerts) |
-| Object storage | MinIO (S3-compatible) |
-| Gateway | Nginx reverse proxy |
-| Messaging | Twilio (WhatsApp sandbox / SMS) |
-| Orchestration | Docker Compose (local) / single-container (Railway) |
+| Object storage | MinIO (S3-compatible; SSE-S3 encryption-at-rest for PHI) |
+| Gateway | Nginx reverse proxy (dev) / Caddy TLS in front of it (self-hosted prod) |
+| Messaging | Twilio — WhatsApp sandbox + SMS (used for phone-OTP verification; dry-run without keys) |
+| Orchestration | Docker Compose (dev) / `docker-compose.prod.yml` (self-hosted) / single-container (Railway) |
 | Languages | English, Hindi, Telugu |
 
 ## Architecture
@@ -193,10 +196,16 @@ opd-preconsult/
 ## Prerequisites
 
 - Docker and Docker Compose
-- (Optional) API keys:
-  - `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` — for LLM reports (rule-based fallback works without)
-  - `OPENAI_API_KEY` — for Whisper transcription in ambient scribe
-  - `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` — for WhatsApp/SMS follow-ups (dry-run mode without)
+- Node.js (only to run the helper scripts locally, e.g. `scripts/gen-secrets.js`)
+- **Required secrets** (see [Environment & Secrets](#environment--secrets) below) — the app auth is now on by default, so these must be set even for local dev:
+  - `JWT_SECRET` — signs/verifies login tokens; **shared by node-backend AND python-backend**
+  - `ADMIN_PASSCODE` — HIS admin dashboard login (≥6 chars)
+  - `DEMO_QR_SECRET` — HMAC-signs prescription QR slips
+  - Generate all of them at once with `node scripts/gen-secrets.js`
+- **(Optional) API keys** — every AI feature degrades gracefully without them:
+  - `GEMINI_API_KEY` / `GROQ_API_KEY` / `ANTHROPIC_API_KEY` — LLM reports & OCR (rule-based/Tesseract fallback works without)
+  - `OPENAI_API_KEY` — Whisper transcription in ambient scribe
+  - `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` (+ `TWILIO_SMS_FROM`) — real SMS OTP & WhatsApp/SMS follow-ups (dry-run/on-screen code without)
 
 ## Setup
 
@@ -205,57 +214,61 @@ opd-preconsult/
 ```bash
 cd opd-preconsult
 
-# Copy env template
+# 1. Copy env template
 cp .env.example .env
 
-# Set API keys in .env (all optional — system degrades gracefully)
-# GEMINI_API_KEY=AIzaSy...        # LLM reports (preferred)
-# ANTHROPIC_API_KEY=sk-ant-...    # LLM reports (fallback)
-# OPENAI_API_KEY=sk-...           # Whisper transcription
-# TWILIO_ACCOUNT_SID=AC...        # WhatsApp/SMS
-# TWILIO_AUTH_TOKEN=...
+# 2. Generate the REQUIRED secrets (JWT_SECRET, ADMIN_PASSCODE, DEMO_QR_SECRET,
+#    MINIO_KMS_SECRET_KEY, OTP_SECRET) and write them into .env in one shot:
+node scripts/gen-secrets.js
 
-# Build and start all services
+# 3. (Optional) add AI/messaging keys in .env — all optional, system degrades gracefully:
+# GEMINI_API_KEY=AIzaSy...        # LLM reports & OCR (preferred, free tier)
+# GROQ_API_KEY=gsk_...            # free fallback LLM
+# ANTHROPIC_API_KEY=sk-ant-...    # LLM reports (fallback)
+# OPENAI_API_KEY=sk-...           # Whisper transcription (ambient scribe)
+# TWILIO_ACCOUNT_SID=AC... / TWILIO_AUTH_TOKEN=... / TWILIO_SMS_FROM=+91...  # real SMS OTP
+
+# 4. Build and start all services
 docker compose up --build
 ```
 
 First-run takes ~5 minutes (image pulls, Tesseract OCR models). Subsequent starts are fast.
 
-All 9 migrations run automatically on startup. 3 demo doctors and 2 departments are seeded.
+All DB migrations (currently **26**, in `db/migrations/`) run automatically on node-backend startup — no manual step. 3 demo doctors and 2 departments are seeded.
+
+> **Note on secrets:** if you skip step 2, node-backend falls back to a *random ephemeral* JWT key in dev — which python-backend cannot verify, so OCR/triage/report/scribe will return `401`. Set a real `JWT_SECRET` (both backends read the same `.env`). In production, node-backend and python-backend **refuse to start** without strong `JWT_SECRET` / `DEMO_QR_SECRET`.
 
 ### Updating After Code Changes
 
+> **Important:** the images **bake the source at build time** (no bind mounts), so `docker compose restart` re-runs the OLD code. **Any source change needs a rebuild**, not a restart.
+
 ```bash
-# After changing Node backend code
-docker compose restart node-backend
+# After changing frontend / node-backend / python-backend source (rebuild, not restart):
+docker compose build <service> && docker compose up -d <service>
+docker compose restart gateway     # after a backend rebuild — drops stale upstream IPs (avoids 502s)
+# (you can build several at once, e.g. `docker compose build node-backend frontend`)
 
-# After changing Python backend code
-docker compose restart python-backend
+# After a TEAMMATE's pull that adds a DB migration (files in db/migrations/):
+# you MUST rebuild node-backend — migrate.js auto-applies pending migrations on startup:
+docker compose build node-backend && docker compose up -d node-backend
+docker compose restart gateway
 
-# After changing frontend code
-docker compose restart frontend
+# Verify a migration ran:
+docker compose exec postgres psql -U opd_user -d opd_preconsult -c "\d <table_name>"
 
-# After changing dependencies (requirements.txt, package.json)
-docker compose build <service> && docker compose up -d
-
-# After adding new migrations
-docker compose exec -T postgres psql -U opd_user -d opd_preconsult < db/migrations/007_prescriptions.sql
-docker compose exec -T postgres psql -U opd_user -d opd_preconsult < db/migrations/008_followups.sql
-docker compose exec -T postgres psql -U opd_user -d opd_preconsult < db/migrations/009_scribe.sql
-
-# Or restart everything (migrations run on Node backend startup for new tables)
-docker compose down && docker compose up --build
+# `docker compose restart <svc>` only helps for config/env (.env) changes, NOT source edits.
 ```
 
 ## Access URLs
 
 | Service | URL |
 |---------|-----|
-| Patient app | `http://localhost:3000/?qr=<BASE64_QR>` |
+| Patient app (single hospital QR) | `http://localhost:3000/?h=demo_hospital_01` |
 | Doctor app | `http://localhost:3000/doctor` |
 | HIS admin | `http://localhost:3000/his` |
+| Public "Now Serving" board | `http://localhost:3000/queue?dept=CARD` (no auth, token numbers only) |
 | Mock HIS FHIR | `http://localhost/his/dashboard` |
-| MinIO console | `http://localhost:9001` (minioadmin / changeme_in_production) |
+| MinIO console | `http://localhost:9001` (`minioadmin` / your `MINIO_SECRET_KEY`) |
 
 ## Demo Credentials
 
@@ -268,24 +281,62 @@ PIN for all demo doctors: `1234`
 | Dr. Anil Reddy | 9876500002 | CARD |
 | Dr. Kavitha Menon | 9876500003 | GEN |
 
-### QR Payload for Patient App
+### HIS Admin Login (`/his`)
+Enter the **admin's name** + the **`ADMIN_PASSCODE`** you set in `.env` (the name is recorded in the audit log; the passcode is a shared credential — per-user admin accounts/SSO is a later decision).
+
+### Patient App — single hospital QR
+The kiosk QR is now just the plain app URL `…/?h=<hospital_id>` (no base64). The patient scans it with their phone camera → picks a language → phone + OTP → details → **department picker** (department is chosen in the app, not encoded in the QR).
 
 ```bash
-# Cardiology, queue slot 42
-echo '{"hospital_id":"demo_hospital_01","department":"CARD","queue_slot":42}' | base64 -w0
-
-# Or use the helper
-node scripts/generate-qr.js CARD
+# Print the URL / render a printable poster
+node scripts/generate-qr.js               # prints the plain URL for demo_hospital_01
+# scripts/qr-poster.html                   # open in a browser for a printable poster
 ```
 
-Quick link: `http://localhost:3000/?qr=eyJob3NwaXRhbF9pZCI6ImRlbW9faG9zcGl0YWxfMDEiLCJkZXBhcnRtZW50IjoiQ0FSRCIsInF1ZXVlX3Nsb3QiOjQyfQ==`
+Quick link: `http://localhost:3000/?h=demo_hospital_01`
+(Legacy base64 `?qr=<payload>` and department-scoped QRs still work for backward compatibility.)
+
+## Environment & Secrets
+
+All config lives in `.env` (gitignored; template in `.env.example`). Run `node scripts/gen-secrets.js` to generate every secret below at once.
+
+### Required (auth is on by default)
+
+| Var | What it does | Notes |
+|-----|--------------|-------|
+| `JWT_SECRET` | Signs & verifies all login tokens (patient / doctor / admin roles). | **Shared by node-backend AND python-backend** (python verifies the same token). Must be strong even in dev. In prod, node **refuses to start** without it. |
+| `ADMIN_PASSCODE` | HIS admin dashboard login (`POST /api/admin/login`). | Shared credential, **≥6 chars**. |
+| `DEMO_QR_SECRET` | HMAC-signs prescription QR slips (tamper-proof). | Node **refuses to start in prod** with the weak default (otherwise prescriptions are forgeable). |
+
+### Optional / environment-specific
+
+| Var | What it does |
+|-----|--------------|
+| `MINIO_KMS_SECRET_KEY` | Encryption-at-rest (B1) for uploaded PHI (documents/audio) via SSE-S3. **Required in production**, blank = off in dev. Format `<name>:<base64 of 32 bytes>` (gen-secrets makes it). **Back it up — losing it makes encrypted objects unreadable.** |
+| `OTP_SECRET` | Binds OTP hashes; defaults to `JWT_SECRET` if unset. |
+| `OTP_MAX_PER_HOUR` / `OTP_RESEND_SECONDS` | OTP rate limits (per phone). Loosen in dev (e.g. `1000` / `0`); strict defaults (5/hour, 60s) in prod. |
+| `CORS_ALLOW_ORIGINS` | Locks python-backend to your domain in prod (comma-separated). `*` for local dev. |
+| `NEXT_PUBLIC_HOSPITAL_ID` | Frontend build-time default hospital id when a bare domain QR is scanned (else `demo_hospital_01`). |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | LLM/OCR/transcription providers (all optional; graceful fallback). |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_SMS_FROM` / `TWILIO_WHATSAPP_FROM` | Real SMS OTP + WhatsApp/SMS follow-ups. Without them, OTP runs in **dry-run** (code shown on-screen). |
+| `POSTGRES_*` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | Datastore credentials — **change before any real deployment**. |
+
+## Authentication & Access Control
+
+- **JWT roles.** Every login token carries a role — `patient` (from QR scan), `doctor` (PIN login), or `admin` (passcode login). Enforced by `requireRole` (`node-backend/src/middleware/auth.js`). `dev_secret` fallback removed — fails closed in prod, random ephemeral key in dev.
+- **python-backend is JWT-gated too.** Its sensitive routers (`/api/ocr`, `/api/triage`, `/api/report`, `/api/scribe`, `/api/transcribe`) verify the **same** login token (`python-backend/src/auth.py`, HS256, shared `JWT_SECRET`). Media `<src>` GETs (`/api/audio/clip/{id}`, `/api/ocr/documents/image/{id}`) and `/api/transcribe/health` stay open per-route.
+- **HIS admin login** requires the admin's **name** + `ADMIN_PASSCODE`; every successful admin mutation is written to `audit_log` (who/what).
+- **Phone OTP.** Patient entry gates on an SMS OTP (Twilio, dry-run on-screen code without keys) — 6-digit, hashed, expiring, attempt-capped, rate-limited.
+- **Prescription QR** is HMAC-signed with `DEMO_QR_SECRET` and verified at `/api/prescription/verify-qr`.
+- **Encryption & audit (DPDP).** Uploaded PHI encrypted at rest in MinIO (SSE-S3) when `MINIO_KMS_SECRET_KEY` is set; viewing a patient report logs a `patient_viewed` audit row. Postgres relies on host/volume disk encryption in prod.
+- **Still open (release blockers):** single shared admin passcode (no per-user SSO), no per-hospital tenancy, patient-data retention/deletion (B2) TODO. See [CLAUDE.md](CLAUDE.md) for the full status.
 
 ## Testing Each Feature
 
-### 1. Patient Intake (QR)
-1. Open patient URL with QR parameter
-2. Select language → Register → Consent → Upload documents → Answer questionnaire → Enter vitals
-3. Verify: triage badge appears, report is generated, session shows in doctor queue
+### 1. Patient Intake (single QR + OTP)
+1. Open `http://localhost:3000/?h=demo_hospital_01`
+2. Pick a language → enter phone → **enter the OTP** (shown on-screen in dev/dry-run) → enter details → **pick a department** (+ optional preferred doctor) → Consent → Upload documents → Answer questionnaire → Enter vitals
+3. Verify: a per-department token (e.g. `CARD-007`) is issued, triage badge appears, report is generated, session shows in the doctor queue and on the public board (`/queue?dept=CARD`)
 
 ### 2. WhatsApp Intake
 1. Configure Twilio sandbox: set webhook URL to `https://<your-domain>/api/whatsapp/webhook`
@@ -407,12 +458,9 @@ docker compose logs -f node-backend | grep followup-worker
 
 The system is designed as a POC with clear extension points for production:
 
-### Transcription: Whisper → Bhasini
-The ambient scribe uses OpenAI Whisper for POC. For production Indian language support:
-- **Bhasini API** (bhashini.gov.in) provides ASR for 22 Indian languages
-- Replace the `openai.audio.transcriptions.create()` call in `scribe.py` with Bhasini's ASR endpoint
-- The rest of the pipeline (SOAP extraction via LLM) works unchanged
-- `VoiceButton.jsx` already supports `hi-IN` and `te-IN` via Web Speech API — Bhasini extends this to server-side transcription
+### Indic language: Bhashini (DONE) — server-side ASR / NMT / TTS
+- **Bhashini** (bhashini.gov.in) is integrated for patient intake: server-side **speech-to-text** (patient answers in Hindi/Telugu, transcript kept in the spoken language), **on-demand translation to English** (NMT), and **read-aloud (TTS)** for low-literacy/elderly patients — see `python-backend/src/bhashini/` and `routers/transcribe.py` / `routers/tts.py`.
+- The ambient scribe still uses OpenAI Whisper for the doctor-consultation recording; SOAP extraction via LLM is unchanged. Swapping the scribe's ASR to Bhashini is the same drop-in pattern.
 
 ### Drug Interactions: Static → DrugBank/Indian Pharmacopoeia
 - Current: static JSON matrix of ~50 critical interactions in `drug_interactions.py`
@@ -439,10 +487,9 @@ The ambient scribe uses OpenAI Whisper for POC. For production Indian language s
 - Production: HAPI FHIR terminology server or WHO ICD API for comprehensive coding
 - LLM fallback already handles free-text → ICD-10 mapping
 
-### Authentication: PIN → SSO/ABDM
-- Current: SHA-256 hashed PIN, no admin auth on HIS endpoints
-- Production: integrate hospital SSO, ABDM Health ID for patients, role-based access control
-- JWT infrastructure is already in place
+### Authentication: hardened (DONE) → SSO/ABDM next
+- Current: JWT with `patient`/`doctor`/`admin` roles enforced by `requireRole`; **admin passcode login on the HIS** with named-admin audit; doctor SHA-256 PIN; **python-backend endpoints JWT-gated** with the shared secret; prescription QR HMAC-signed; PHI encrypted at rest (MinIO SSE-S3) + report-view audit. Node/python fail closed in prod without strong secrets.
+- Next for production: per-user admin accounts / hospital SSO, ABDM Health ID for patients, per-hospital tenancy, retention/deletion (DPDP B2).
 
 ### Analytics: Raw SQL → Materialized Views
 - Current: on-demand aggregate queries (fine for <1000 sessions/day)

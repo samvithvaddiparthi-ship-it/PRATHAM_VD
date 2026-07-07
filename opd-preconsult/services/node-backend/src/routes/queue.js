@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
+const { APP_TIMEZONE } = require('../utils/time');
 
 const router = Router();
 
@@ -75,8 +76,8 @@ router.get('/last', async (req, res) => {
       const r = await pool.query(
         `SELECT COALESCE(MAX(last_token), 0) AS last_token
            FROM queue_counters
-          WHERE department = $1 AND service_date = CURRENT_DATE`,
-        [department]
+          WHERE department = $1 AND service_date = (NOW() AT TIME ZONE $2)::date`,
+        [department, APP_TIMEZONE]
       );
       const n = r.rows[0].last_token;
       return res.json({
@@ -92,8 +93,9 @@ router.get('/last', async (req, res) => {
     const r = await pool.query(
       `SELECT department, MAX(last_token) AS last_token
          FROM queue_counters
-        WHERE service_date = CURRENT_DATE
-        GROUP BY department`
+        WHERE service_date = (NOW() AT TIME ZONE $1)::date
+        GROUP BY department`,
+      [APP_TIMEZONE]
     );
     const departments = r.rows.map((row) => ({
       department: row.department,

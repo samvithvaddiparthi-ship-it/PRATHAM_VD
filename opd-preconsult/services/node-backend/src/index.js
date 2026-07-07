@@ -81,23 +81,30 @@ async function seedQuestionnaires() {
       );
     }
 
-    // 1) Base intake questions for every department in the table (fallback to the
-    //    two we ship seed files for if the table isn't populated yet).
+    // 1) Base intake questions for every department that EXISTS in the table.
+    //    No demo fallback: a blank install (no departments) seeds nothing, so a
+    //    clean hospital deployment stays clean and a wipe survives restarts.
+    //    Creating a department in HIS seeds its base questions (routes/admin.js).
     let deptCodes = [];
     try {
       const d = await pool.query('SELECT code FROM departments');
       deptCodes = d.rows.map(r => r.code);
     } catch { /* departments table may not exist yet */ }
-    if (deptCodes.length === 0) deptCodes = ['CARD', 'GEN'];
+    if (deptCodes.length === 0) {
+      console.log('[seed] No departments present — skipping questionnaire seed (clean install)');
+      return;
+    }
 
     for (const code of deptCodes) {
       for (const node of baseNodesForDept(code)) await insertNode(node);
     }
     console.log(`[seed] Base questions seeded for: ${deptCodes.join(', ')}`);
 
-    // 2) Department-specific DAG questions from seed files.
-    const seedFiles = ['cardiology.json', 'general.json'];
-    for (const file of seedFiles) {
+    // 2) Department-specific DAG questions from seed files — ONLY for departments
+    //    that actually exist, so a blank install never resurrects demo content.
+    const seedFiles = { CARD: 'cardiology.json', GEN: 'general.json' };
+    for (const [code, file] of Object.entries(seedFiles)) {
+      if (!deptCodes.includes(code)) continue;
       const filePath = path.join(__dirname, 'seed', file);
       const nodes = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       for (const node of nodes) await insertNode(node);
