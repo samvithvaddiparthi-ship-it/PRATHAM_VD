@@ -79,6 +79,10 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set a strong MINIO_SECRET_KEY}
+      # Encryption at rest (B1): REQUIRED in prod. Format `key-name:base64-32-bytes`
+      # (scripts/gen-secrets.js prints a valid value). BACK THIS KEY UP — losing it
+      # makes encrypted objects unreadable. python-backend enables bucket SSE-S3.
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:?set MINIO_KMS_SECRET_KEY for encryption at rest (see scripts/gen-secrets.js)}
     volumes:
       - minio-data:/data
     networks:

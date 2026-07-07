@@ -5,12 +5,14 @@ import uuid
 import traceback
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 import anthropic
 
 from ..db import query, execute
+from ..auth import require_auth
+from ..view_audit import record_view
 
 router = APIRouter(prefix="/api/report", tags=["report"])
 
@@ -153,13 +155,16 @@ async def _generate_report_impl(req: ReportRequest):
 
 
 @router.get("/{session_id}")
-async def get_report(session_id: str):
+async def get_report(session_id: str, claims: dict = Depends(require_auth)):
     reports = query(
         "SELECT * FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
         (session_id,),
     )
     if not reports:
         raise HTTPException(status_code=404, detail="Report not found")
+    # B7 access audit: record that this clinician viewed the patient's record
+    # (deduped + non-blocking; never affects the response).
+    record_view(session_id, claims)
     r = reports[0]
     return {
         "report_md": r["report_md"],

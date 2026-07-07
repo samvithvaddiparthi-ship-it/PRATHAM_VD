@@ -40,9 +40,35 @@ def _get_client():
     else:
         print(f"[storage] Bucket ready: {bucket}", flush=True)
 
+    _maybe_enable_encryption(client, bucket)
+
     _client = client
     _bucket = bucket
     return _client, _bucket
+
+
+def _maybe_enable_encryption(client, bucket: str) -> None:
+    """B1 — encryption at rest for uploaded PHI (prescriptions, reports, audio).
+
+    When a KMS key is configured on the MinIO server (`MINIO_KMS_SECRET_KEY`, set
+    by docker-compose.prod.yml), turn on the bucket's DEFAULT encryption to
+    SSE-S3 so every newly uploaded object is encrypted on disk transparently —
+    PUT/GET are unchanged (MinIO encrypts on write, decrypts on read). Existing
+    objects stay readable (they're just unencrypted).
+
+    Guarded by the env var so dev (no KMS) is untouched: without a KMS key on the
+    server, requesting SSE would make uploads fail, so we only enable it when the
+    key is present. Best-effort + non-fatal — a failure here must never break
+    uploads.
+    """
+    if not (os.getenv("MINIO_KMS_SECRET_KEY") or "").strip():
+        return
+    try:
+        from minio.sseconfig import Rule, SSEConfig
+        client.set_bucket_encryption(bucket, SSEConfig(Rule.new_sse_s3_rule()))
+        print(f"[storage] Encryption at rest (SSE-S3) ensured on bucket: {bucket}", flush=True)
+    except Exception as e:
+        print(f"[storage] Could not set bucket encryption (non-fatal): {type(e).__name__}: {e}", flush=True)
 
 
 def upload_document(file_bytes: bytes, filename: str, session_id: str, content_type: str = "image/jpeg") -> str:

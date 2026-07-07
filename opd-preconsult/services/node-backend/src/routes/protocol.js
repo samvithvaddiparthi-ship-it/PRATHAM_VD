@@ -117,13 +117,14 @@ router.get('/evaluate/:session_id', async (req, res) => {
     if (!session.rows.length) return res.status(404).json({ error: 'Session not found' });
     const dept = session.rows[0].department;
 
-    // Get session answers
+    // Get session answers. NB: the column is answer_raw (the raw answer value,
+    // e.g. "yes"/"on_exertion") — what trigger_conditions compare against.
     const answers = await pool.query(
-      'SELECT question_id, answer_value FROM session_answers WHERE session_id = $1',
+      'SELECT question_id, answer_raw FROM session_answers WHERE session_id = $1',
       [sessionId]
     );
     const answerMap = {};
-    answers.rows.forEach(a => { answerMap[a.question_id] = a.answer_value; });
+    answers.rows.forEach(a => { answerMap[a.question_id] = a.answer_raw; });
 
     // Get active protocols for this department
     const protocols = await pool.query(

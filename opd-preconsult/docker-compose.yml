@@ -52,6 +52,10 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-changeme_in_production}
+      # Encryption at rest (B1): empty in dev (KMS disabled). Set MINIO_KMS_SECRET_KEY
+      # in .env (see scripts/gen-secrets.js) to encrypt uploaded PHI at rest; the
+      # python-backend then turns on the bucket's default SSE-S3 (storage.py).
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:-}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"

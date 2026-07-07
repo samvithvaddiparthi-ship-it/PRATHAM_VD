@@ -7,6 +7,18 @@ from ..db import query, execute
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
 
+# Triage is MONOTONIC (non-decreasing) for the automated pipeline: this holistic
+# evaluator may ESCALATE a session but must never silently DOWNGRADE a level that
+# a per-question safety tripwire already raised during the interview (e.g. "chest
+# pain? -> yes" flags RED via node's questionnaire.js). Downgrading is a clinical
+# decision reserved for a human (doctor). Preserving the higher level keeps the
+# patient-facing message, the queue ordering, and the RED nursing alert all
+# consistent with what the patient was already told.
+_SEVERITY = {"GREEN": 0, "AMBER": 1, "RED": 2}
+
+def _more_severe(a: str, b: str) -> str:
+    return a if _SEVERITY.get(a, 0) >= _SEVERITY.get(b, 0) else b
+
 # Redis for publishing RED alerts to nursing station SSE
 _redis = None
 def _get_redis():
@@ -88,7 +100,16 @@ async def evaluate(req: TriageRequest):
             triggered.append("bp_systolic_elevated")
             level = "AMBER"
 
-    # Update session triage level
+    # Never downgrade a level already raised by an interview safety tripwire.
+    prior_rows = query("SELECT triage_level FROM sessions WHERE id = %s", (req.session_id,))
+    prior_level = (prior_rows[0]["triage_level"] if prior_rows else None) or "GREEN"
+    final_level = _more_severe(level, prior_level)
+    if final_level != level:
+        # A prior tripwire (e.g. chest pain) outranks the holistic score — keep it.
+        triggered.append(f"prior_flag_preserved:{prior_level}")
+    level = final_level
+
+    # Update session triage level (monotonic — see _more_severe above)
     execute(
         "UPDATE sessions SET triage_level = %s, updated_at = NOW() WHERE id = %s",
         (level, req.session_id),

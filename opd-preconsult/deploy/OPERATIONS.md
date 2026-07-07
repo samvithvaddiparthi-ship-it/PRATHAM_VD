@@ -49,3 +49,81 @@ node scripts/smoke.js https://$DOMAIN    # scan → OTP → register → triage;
 - `node scripts/gen-secrets.js` regenerates all secrets. Rotating `JWT_SECRET` logs everyone out.
 - node-backend refuses to boot in production with a weak `JWT_SECRET` or `DEMO_QR_SECRET`.
 - On startup, node warns if any active doctor still uses the default PIN `1234` — reset via HIS or `POST /api/doctor/change-pin`.
+
+## Encryption at rest (B1)
+- **Uploaded PHI (MinIO):** set `MINIO_KMS_SECRET_KEY` in `.env` (format `key-name:base64-of-32-bytes`;
+  `node scripts/gen-secrets.js` prints a valid value). `docker-compose.prod.yml` **requires** it; on
+  first upload the python-backend turns on the bucket's default **SSE-S3** so new objects (documents,
+  audio) are encrypted on disk. Existing objects stay readable. **Back this key up securely and never
+  rotate it once objects are encrypted — losing it makes them unreadable.**
+- **Database (Postgres):** use **host disk / volume encryption** on the server (LUKS/dm-crypt on Linux,
+  or an encrypted cloud volume). This is a one-time OS/infra step done when provisioning the server —
+  encrypt the disk that backs the `pg-data` volume *before* loading real data. (In-app column encryption
+  is intentionally avoided for the pilot: it needs schema + code changes and complicates queries.)
+- **In transit:** Caddy terminates TLS for everything outside the box (A2); infra ports aren't published (A5).
+
+## Access audit — who viewed which patient (B7)
+Every clinician who opens a patient's summary is logged. Query it:
+```bash
+docker compose exec postgres psql -U opd_user -d opd_preconsult -c \
+  "SELECT created_at, actor, event_type, session_id FROM audit_log \
+   WHERE event_type IN ('patient_viewed','doctor_opened','doctor_dispatched') \
+   ORDER BY created_at DESC LIMIT 50;"
+```
+`patient_viewed` rows come from report views (deduped ~5 min per doctor+patient so the log stays
+readable); consultation actions (`doctor_opened/assigned/dispatched/released/reassigned`, `admin_action`)
+are also there. Keep this for incident review; export before pruning old rows.
+
+---
+
+## Paper fallback / downtime SOP (D5)
+**Goal: the OPD never stops because the app is down.** The queue can always run on paper.
+
+**When to switch to paper**
+- Dashboard won't load, patients can't reach the form, or a core service is unhealthy for >5 min.
+- Shift lead (not individual staff) makes the call and announces "paper mode" to the floor.
+
+**Immediate steps**
+1. Help-desk stops sending patients to the QR; hands out **pre-printed paper token slips**
+   (per department, sequential — mirror the `DEPT-NNN` format so numbering doesn't clash).
+2. Patients wait as normal; doctors call tokens from the paper slips in arrival order
+   (pull obvious emergencies first — same triage judgement, no app needed).
+3. Doctors consult and **write prescriptions on paper** as they did before the system.
+4. Keep the paper slips — they're the record of who was seen during the outage.
+
+**Restart the system**
+```bash
+docker compose -f docker-compose.prod.yml ps         # find the unhealthy service
+docker compose -f docker-compose.prod.yml restart gateway   # 502s after a rebuild? do this first
+docker compose -f docker-compose.prod.yml up -d      # bring anything stopped back up
+docker compose -f docker-compose.prod.yml logs --tail=50 <service>   # if still failing
+```
+If it doesn't recover in ~10 min, **stay on paper** and call the support contact — do not attempt
+database/server surgery on a live pilot.
+
+**Coming back online**
+- Resume QR intake for **new** patients only. Do **not** back-enter the outage patients mid-rush.
+- Optionally, admin adds the paper-seen patients later for records; their paper prescriptions stand.
+- Shift lead notes: start time, end time, rough patient count handled on paper, cause if known.
+
+**Keep at every station:** a stack of paper token slips, blank prescription pads, this SOP, and the
+support contact card.
+
+---
+
+## Support & feedback (D7)
+**Support contact (fill in before go-live):**
+```
+Primary (on-site):   __________________________  (name / phone)
+Technical escalation:__________________________  (name / phone / email)
+Hours:               __________________________
+```
+Put this on a card at the help-desk, the doctors' room, and the HIS station.
+
+**Feedback loop**
+- **Doctors** rate every summary **Accurate / Inaccurate** (and edit when wrong) — the main quality
+  signal. Review the mix daily (HIS → Analytics / `session_reports.doctor_feedback`).
+- **All staff** log issues on a **feedback sheet** at each station (or tell the shift lead). The team
+  triages them **daily** during the pilot and files anything actionable.
+- Track recurring problems (bad OCR on a report type, a confusing question, OTP failures) and feed
+  them into the validation/tuning work before scaling beyond one department.
