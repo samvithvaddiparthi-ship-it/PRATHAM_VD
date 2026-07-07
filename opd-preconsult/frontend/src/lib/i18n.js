@@ -125,6 +125,8 @@ const strings = {
     // ── Vitals page ──
     generating_report: 'Generating Report...',
     nurse_later: "A nurse can record your vitals later — you won't lose your place.",
+    confirm_submit_title: 'Almost done!',
+    confirm_submit_body: "Please make sure you've answered all the questions correctly. When you tap Submit, your details are sent to the doctor and you'll get your queue token. You can add your vitals (blood pressure, weight, etc.) on the next screen, or a nurse can add them for you.",
     protocol_required: 'Protocol Required:',
     protocol_vitals: 'Vitals:',
     protocol_tests: 'Tests:',
@@ -269,6 +271,8 @@ const strings = {
     // ── Vitals page ──
     generating_report: 'रिपोर्ट बन रही है...',
     nurse_later: 'एक नर्स आपके वाइटल्स बाद में दर्ज कर सकती है — आपकी जगह नहीं जाएगी।',
+    confirm_submit_title: 'बस हो गया!',
+    confirm_submit_body: 'कृपया सुनिश्चित करें कि आपने सभी प्रश्नों के सही उत्तर दिए हैं। सबमिट दबाने पर आपकी जानकारी डॉक्टर को भेजी जाएगी और आपको आपका क्यू टोकन मिलेगा। आप अगली स्क्रीन पर अपने वाइटल्स (ब्लड प्रेशर, वज़न आदि) जोड़ सकते हैं, या नर्स आपके लिए जोड़ सकती है।',
     protocol_required: 'प्रोटोकॉल आवश्यक:',
     protocol_vitals: 'वाइटल्स:',
     protocol_tests: 'जाँच:',
@@ -413,6 +417,8 @@ const strings = {
     // ── Vitals page ──
     generating_report: 'నివేదిక తయారవుతోంది...',
     nurse_later: 'ఒక నర్సు మీ వైటల్స్‌ను తర్వాత నమోదు చేయవచ్చు — మీ స్థానం పోదు.',
+    confirm_submit_title: 'దాదాపు పూర్తయింది!',
+    confirm_submit_body: 'దయచేసి మీరు అన్ని ప్రశ్నలకు సరిగ్గా సమాధానం ఇచ్చారని నిర్ధారించుకోండి. సబ్మిట్ నొక్కినప్పుడు, మీ వివరాలు వైద్యుడికి పంపబడతాయి మరియు మీకు మీ క్యూ టోకెన్ లభిస్తుంది. మీరు తదుపరి స్క్రీన్‌లో మీ వైటల్స్ (రక్తపోటు, బరువు మొదలైనవి) జోడించవచ్చు, లేదా నర్సు మీ కోసం జోడించవచ్చు.',
     protocol_required: 'ప్రోటోకాల్ అవసరం:',
     protocol_vitals: 'వైటల్స్:',
     protocol_tests: 'పరీక్షలు:',
