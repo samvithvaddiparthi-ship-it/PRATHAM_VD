@@ -1,0 +1,32 @@
+# Build context for the single-container image (Dockerfile at the repo root,
+# used by Railway/Render). frontend/.dockerignore does NOT apply here — that one
+# only takes effect when the build context is frontend/ (docker-compose).
+#
+# Dependencies are installed inside each build stage. Copying a host node_modules
+# over that install pastes platform-native binaries into an Alpine image
+# (@next/swc-win32-x64-msvc, @next/swc-darwin-arm64) and `next build` fails.
+node_modules
+**/node_modules
+.next
+**/.next
+**/__pycache__
+**/.venv
+
+# Never ship secrets or data into a build context.
+.env
+**/.env
+!**/.env.example
+
+# Large, irrelevant, or sensitive to the build. eval/ocr holds ground-truth
+# prescription images and transcripts — real patient documents. Keep them out of
+# any image layer.
+eval/
+backups/
+bhashini-lab/
+ocr-lab/
+stt-lab/
+Pratham-OPD/
+.git
+.gitignore
+**/*.md
+!README.md
