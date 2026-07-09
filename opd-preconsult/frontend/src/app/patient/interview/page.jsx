@@ -184,7 +184,7 @@ export default function Interview() {
       <div className="screen" style={{ background: 'var(--red)', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
         <div style={{ color: '#fff', fontSize: 64 }}>🏥</div>
         <h1 style={{ color: '#fff', fontSize: 28, margin: '16px 0' }}>{t('emergency', lang)}</h1>
-        <TriageBadge level="RED" />
+        <TriageBadge level="RED" lang={lang} />
         <button
           className="btn"
           style={{ background: '#fff', color: 'var(--red)', marginTop: 32, maxWidth: 280 }}

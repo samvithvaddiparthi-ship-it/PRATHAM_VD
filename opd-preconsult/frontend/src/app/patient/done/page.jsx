@@ -65,7 +65,7 @@ export default function Done() {
 
         {session?.triage_level && (
           <div style={{ marginTop: 4 }}>
-            <TriageBadge level={session.triage_level} />
+            <TriageBadge level={session.triage_level} lang={lang} />
           </div>
         )}
 

@@ -1,5 +1,6 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import { useDialogA11y } from './ui/useDialogA11y';
 
 export default function QRScanner({ onScan, onClose }) {
   const videoRef = useRef(null);
@@ -8,6 +9,10 @@ export default function QRScanner({ onScan, onClose }) {
   const [error, setError] = useState('');
   const [scanning, setScanning] = useState(true);
   const scanInterval = useRef(null);
+  // Escape closes; the unmount cleanup below stops the camera, so onClose alone
+  // is enough. Focus is trapped so a keyboard user cannot tab to the page under
+  // a full-screen camera view.
+  const panelRef = useDialogA11y(onClose);
 
   useEffect(() => {
     startCamera();
@@ -98,13 +103,13 @@ export default function QRScanner({ onScan, onClose }) {
   }
 
   return (
-    <div style={{
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Scan QR code" style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 1000,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{ position: 'relative', width: '100%', maxWidth: 400 }}>
         {/* Close button */}
-        <button onClick={() => { stopCamera(); onClose(); }}
+        <button type="button" aria-label="Close scanner" onClick={() => { stopCamera(); onClose(); }}
           style={{ position: 'absolute', top: -40, right: 8, background: 'none', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', zIndex: 2 }}>
           ✕
         </button>

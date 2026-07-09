@@ -144,6 +144,15 @@ const strings = {
     saving: 'Saving…',
     could_not_save_vitals: 'Could not save vitals',
     disclaimer: 'Investigational — not for clinical use. AI outputs are decision-support only and must be verified by a clinician.',
+    // Shown once, on the consent page. Describes only what AI actually does here:
+    // speech-to-text, translation, reading uploaded documents, and drafting the
+    // doctor's summary. It must NOT imply AI decides urgency — triage is set by
+    // fixed clinical rules (questionnaire.js / triage.py) and reviewed by a doctor.
+    ai_notice_title: 'How AI is used in this form',
+    ai_notice_body: 'This form uses AI to convert your speech to text, translate between languages, read the documents you upload, and prepare a summary for your doctor. AI does not decide how urgent your case is and does not diagnose you — a doctor reviews everything before your consultation.',
+    triage_red: 'SEVERE',
+    triage_amber: 'MODERATE',
+    triage_green: 'MILD',
   },
   hi: {
     welcome: 'Pratham में आपका स्वागत है, OPD प्री-कंसल्टेशन AI एजेंट',
@@ -290,6 +299,11 @@ const strings = {
     saving: 'सहेजा जा रहा है…',
     could_not_save_vitals: 'वाइटल्स सहेजे नहीं जा सके',
     disclaimer: 'अनुसंधान चरण — चिकित्सकीय उपयोग हेतु नहीं। AI परिणाम केवल सहायक हैं और चिकित्सक द्वारा सत्यापित किए जाने चाहिए।',
+    ai_notice_title: 'इस फ़ॉर्म में AI का उपयोग कैसे होता है',
+    ai_notice_body: 'यह फ़ॉर्म आपकी आवाज़ को टेक्स्ट में बदलने, भाषाओं के बीच अनुवाद करने, आपके अपलोड किए गए दस्तावेज़ पढ़ने और आपके डॉक्टर के लिए सारांश तैयार करने हेतु AI का उपयोग करता है। AI यह तय नहीं करता कि आपका मामला कितना गंभीर है और न ही कोई निदान करता है — परामर्श से पहले डॉक्टर सब कुछ जाँचते हैं।',
+    triage_red: 'गंभीर',
+    triage_amber: 'मध्यम',
+    triage_green: 'सामान्य',
   },
   te: {
     welcome: 'Pratham కు స్వాగతం, OPD ప్రీ-కన్సల్టేషన్ AI ఏజెంట్',
@@ -436,6 +450,11 @@ const strings = {
     saving: 'సేవ్ అవుతోంది…',
     could_not_save_vitals: 'వైటల్స్ సేవ్ చేయలేకపోయాం',
     disclaimer: 'పరిశోధన దశ — క్లినికల్ ఉపయోగానికి కాదు. AI ఫలితాలు సహాయక సూచనలు మాత్రమే; వైద్యుడు ధృవీకరించాలి.',
+    ai_notice_title: 'ఈ ఫారమ్‌లో AI ఎలా ఉపయోగించబడుతుంది',
+    ai_notice_body: 'ఈ ఫారమ్ మీ మాటను టెక్స్ట్‌గా మార్చడానికి, భాషల మధ్య అనువదించడానికి, మీరు అప్‌లోడ్ చేసిన పత్రాలను చదవడానికి మరియు మీ డాక్టర్ కోసం సారాంశం సిద్ధం చేయడానికి AIని ఉపయోగిస్తుంది. మీ కేసు ఎంత అత్యవసరమో AI నిర్ణయించదు, రోగనిర్ధారణ చేయదు — సంప్రదింపుల ముందు డాక్టర్ అన్నింటినీ సమీక్షిస్తారు.',
+    triage_red: 'తీవ్రం',
+    triage_amber: 'మధ్యస్థం',
+    triage_green: 'స్వల్పం',
   },
 };
 

@@ -196,6 +196,12 @@ opd-preconsult/
 ## Prerequisites
 
 - Docker and Docker Compose
+- **Network access at image-build time.** The frontend loads Noto Sans, Noto Sans
+  Devanagari and Noto Sans Telugu through `next/font/google`, which downloads them
+  during `next build` and emits self-hosted `.woff2` files. Nothing is fetched from
+  Google at runtime — this is what keeps patient IPs off a third party and lets the
+  app work on a firewalled hospital LAN. A fully air-gapped *build* would need
+  `next/font/local` with the fonts vendored into the repo.
 - Node.js (only to run the helper scripts locally, e.g. `scripts/gen-secrets.js`)
 - **Required secrets** (see [Environment & Secrets](#environment--secrets) below) — the app auth is now on by default, so these must be set even for local dev:
   - `JWT_SECRET` — signs/verifies login tokens; **shared by node-backend AND python-backend**
@@ -258,6 +264,53 @@ docker compose exec postgres psql -U opd_user -d opd_preconsult -c "\d <table_na
 
 # `docker compose restart <svc>` only helps for config/env (.env) changes, NOT source edits.
 ```
+
+> **Note:** `frontend/.dockerignore` keeps a host `node_modules` / `.next` out of the
+> build context. Without it, running `npm install` on a Windows or macOS machine
+> leaves platform-specific native binaries (`@next/swc-win32-x64-msvc`) that
+> `COPY . .` would paste over the Linux ones installed inside the image, and
+> `next build` fails in the container. Don't remove it.
+
+## Accessibility & Design Tokens
+
+The UI targets **WCAG 2.1 Level AA**. That is not a nice-to-have here: for a
+government-hospital deployment it is reachable through GIGW 3.0 and IS 17802,
+which hang off the Rights of Persons with Disabilities Act 2016.
+
+All colour lives in CSS custom properties in `frontend/src/app/globals.css`. Each
+token is pinned to a contrast threshold against the surfaces it is actually drawn
+on, and several sit within `0.15` of their floor — so an innocent-looking retint
+can silently drop a triage badge or a destructive button below AA.
+
+A checked-in script guards this:
+
+```bash
+cd frontend
+npm run check:contrast     # asserts all 22 token pairs vs WCAG 2.1 AA; exits 1 on failure
+npm run verify             # check:contrast, then next build
+```
+
+If it fails, darken the foreground or lighten the surface — **do not relax the
+threshold in the script.** When you add a semantic colour, add its pair to
+`frontend/scripts/check-contrast.mjs`.
+
+Conventions worth knowing before touching the UI:
+
+- **Text scales, pages don't zoom.** Every inline `fontSize` in `doctor/page.jsx`
+  and `his/page.jsx` is written `calc(Npx * var(--fs))`. `A11yProvider` drives
+  `--fs` (patient flow: `A / A+ / A++`; dashboards: `100–150%`). A new hardcoded
+  `fontSize: 13` will silently ignore the text-size control. Page zoom is not an
+  option — the doctor shell is `height: 100vh; overflow: hidden` and would clip.
+- **Amber is a light swatch.** It pairs with `--amber-on` (dark ink), never white.
+  For amber *text* on a light surface use `--amber-text`; on a pale amber chip use
+  `--amber-on-tint`. Same idea for `--green` / `--green-on-tint`.
+- **Modals go through `components/ui/`.** Use `useConfirm()` for confirmations and
+  `<Modal>` (or the `useDialogA11y` hook) for content dialogs. Both supply
+  `role="dialog"`, `aria-modal`, a focus trap, Escape, and focus restore. Do not
+  hand-roll another `position: fixed; inset: 0` overlay.
+- **Never render triage on the public queue board.** `/api/queue/board` is
+  unauthenticated and deliberately does not return `triage_level` — see the comment
+  in `services/node-backend/src/routes/queue.js`.
 
 ## Access URLs
 

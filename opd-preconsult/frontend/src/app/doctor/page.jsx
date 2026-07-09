@@ -6,7 +6,7 @@ import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import ReactMarkdown from 'react-markdown';
-import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { useConfirm, ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
 import VitalsForm, { hasVitals } from '../../components/VitalsForm';
 
@@ -151,25 +151,25 @@ function PinLogin({ onLogin }) {
         boxShadow: '0 4px 24px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', gap: 16
       }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>👨‍⚕️</div>
-          <h2 style={{ color: 'var(--primary)', fontSize: 20 }}>Doctor Login</h2>
-          <p style={{ color: 'var(--text-light)', fontSize: 13, marginTop: 4 }}>Enter your phone number and PIN</p>
+          <div style={{ fontSize: 'calc(40px * var(--fs))', marginBottom: 8 }}>👨‍⚕️</div>
+          <h2 style={{ color: 'var(--primary)', fontSize: 'calc(20px * var(--fs))' }}>Doctor Login</h2>
+          <p style={{ color: 'var(--text-light)', fontSize: 'calc(13px * var(--fs))', marginTop: 4 }}>Enter your phone number and PIN</p>
         </div>
         <div>
-          <label style={{ fontSize: 13, color: 'var(--text-light)' }}>Phone Number</label>
+          <label style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Phone Number</label>
           <input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="9876500001" required autoFocus />
         </div>
         <div>
-          <label style={{ fontSize: 13, color: 'var(--text-light)' }}>PIN (4-6 digits)</label>
+          <label style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>PIN (4-6 digits)</label>
           <PasswordInput className="input" inputMode="numeric" maxLength={6} value={pin}
             onChange={e => setPin(e.target.value.replace(/\D/g, ''))} placeholder="••••" required
-            style={{ fontSize: 24, letterSpacing: 8, textAlign: 'center' }} />
+            style={{ fontSize: 'calc(24px * var(--fs))', letterSpacing: 8, textAlign: 'center' }} />
         </div>
-        {error && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>{error}</p>}
+        {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))', textAlign: 'center' }}>{error}</p>}
         <button className="btn btn-primary" type="submit" disabled={loading || pin.length < 4}>
           {loading ? 'Logging in...' : 'Login'}
         </button>
-        <p style={{ fontSize: 11, color: 'var(--text-light)', textAlign: 'center' }}>Demo: Phone 9876500001, PIN 1234</p>
+        <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', textAlign: 'center' }}>Demo: Phone 9876500001, PIN 1234</p>
       </form>
     </div>
   );
@@ -202,8 +202,6 @@ function DoctorDashboard({ doctor }) {
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
-  const [confirmDelete, setConfirmDelete] = useState(false); // delete confirmation modal
-  const [deleteAck, setDeleteAck] = useState(false);     // "I understand" checkbox
   const [deleting, setDeleting] = useState(false);
   const [expanded, setExpanded] = useState({}); // patient phone -> open/closed in the tree
   const [seenNew, setSeenNew] = useState({});   // visit id -> doctor has opened it (clears the NEW badge, like WhatsApp unread)
@@ -418,9 +416,22 @@ function DoctorDashboard({ doctor }) {
     const activelyMine = (p.lockedById === doctor.id && p.consultedAt) || activeLock === p.key;
     const lockedByOther = p.lockedById && p.lockedById !== doctor.id && activeLock !== p.key;
 
-    // Already my open consultation → just toggle the tree open/closed, no confirm.
+    // Already my open consultation → no confirm needed.
     if (activelyMine) {
-      setExpanded(e => ({ ...e, [p.key]: !e[p.key] }));
+      // Desktop: both panes are on screen, so this is a pure accordion — toggle the
+      // visit tree and leave the report pane alone.
+      //
+      // Phone: the report pane is display:none until something is selected, and the
+      // visit tree is the only thing that moves. Tapping your own open patient
+      // therefore looked like a dead tap — you had to know to tap the visit row
+      // underneath. Select the latest visit too, so one tap opens the report (the
+      // tree stays expanded, so "← Back to list" still shows the visit history).
+      if (isMobile) {
+        setExpanded(e => ({ ...e, [p.key]: true }));
+        if (p.latest) { markSeen(p.latest.id); selectSession(p.latest); }
+      } else {
+        setExpanded(e => ({ ...e, [p.key]: !e[p.key] }));
+      }
       return;
     }
     // I'm mid-consultation with someone else → block opening a second one.
@@ -535,15 +546,27 @@ function DoctorDashboard({ doctor }) {
     }
   }
 
-  // Permanently delete the selected patient entry (guarded by the checkbox
-  // confirmation modal). Removes the session and all its associated data.
+  // Permanently delete the selected patient entry. Irreversible, so it is the one
+  // confirmation that also demands an explicit acknowledgement tick.
   async function handleDelete() {
-    if (!selected || !deleteAck) return;
+    if (!selected || deleting) return;
+    const ok = await confirm({
+      title: 'Remove patient entry?',
+      message: (
+        <>
+          This removes <strong>{selected.patient_name}</strong> from the active dashboard (Queue) and from
+          the patient's previous-visit history. If this visit was consulted, it <strong>stays in your
+          Consulted history</strong> for the record — so you keep what they were seen for.
+        </>
+      ),
+      acknowledge: 'I understand this removes the patient from the active dashboard.',
+      confirmLabel: 'Remove from Dashboard',
+      danger: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     try {
       await api.doctorDeleteSession(selected.id);
-      setConfirmDelete(false);
-      setDeleteAck(false);
       setSelected(null);
       setReport(null);
       loadQueue();
@@ -687,21 +710,22 @@ function DoctorDashboard({ doctor }) {
       {toastView}
       {/* Blocked-switch notice — you must finish the current patient first.
           Rendered at the top level (not inside the report pane) so it also shows
-          on phones, where the report pane is display:none while the list is up. */}
+          on phones, where the report pane is display:none while the list is up.
+          Uses ConfirmDialog (hideCancel ⇒ role="alertdialog") for the focus trap
+          and Escape handling. Not routed through useConfirm: the same
+          `switchBlocked` flag also tints the report pane red, so it has to stay a
+          plain boolean rather than a promise. */}
       {switchBlocked && (
-        <div onClick={() => setSwitchBlocked(false)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16 }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 420, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: 'center' }}>
-            <div style={{ fontSize: 34, marginBottom: 8 }}>✋</div>
-            <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish current patient first</h3>
-            <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: '0 0 18px' }}>
-              You're currently consulting a patient. Complete their prescription and click
-              <strong> Save &amp; Generate QR</strong> before opening another patient.
-            </p>
-            <button className="btn btn-primary" style={{ minWidth: 120 }} onClick={() => setSwitchBlocked(false)}>OK</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          hideCancel
+          danger
+          icon="✋"
+          title="Finish current patient first"
+          message={<>You're currently consulting a patient. Complete their prescription and click <strong>Save &amp; Generate QR</strong> before opening another patient.</>}
+          confirmLabel="OK"
+          onConfirm={() => setSwitchBlocked(false)}
+          onCancel={() => setSwitchBlocked(false)}
+        />
       )}
       {/* Left Panel — fixed-height column: the header/tabs/search stay put while
           only the patient list below scrolls in its own scrollbar. On phone it
@@ -717,33 +741,33 @@ function DoctorDashboard({ doctor }) {
         <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } } @keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
-            <p style={{ fontSize: 11, color: 'var(--text-light)', margin: 0 }}>{greeting},</p>
-            <h2 style={{ fontSize: 16, color: 'var(--primary)', margin: '1px 0' }}>{doctor.name}</h2>
-            <p style={{ fontSize: 12, color: 'var(--text-light)', margin: 0 }}>{doctor.department} Department</p>
-            <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 5 }}>🗓️ {dateStr} · {timeStr}</p>
+            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', margin: 0 }}>{greeting},</p>
+            <h2 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', margin: '1px 0' }}>{doctor.name}</h2>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', margin: 0 }}>{doctor.department} Department</p>
+            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 5 }}>🗓️ {dateStr} · {timeStr}</p>
           </div>
-          <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>Logout</button>
+          <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>Logout</button>
         </div>
 
         {/* Tabs: Waiting → In-progress → Done */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
           <button className={`btn ${tab === 'queue' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('queue')}>
+            style={{ flex: 1, fontSize: 'calc(12px * var(--fs))', minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('queue')}>
             Queue ({waitingPatients.length})
           </button>
           <button className={`btn ${tab === 'consulting' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulting')}>
+            style={{ flex: 1, fontSize: 'calc(12px * var(--fs))', minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulting')}>
             Consulting ({consultingPatients.length})
           </button>
           <button className={`btn ${tab === 'consulted' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: 1, fontSize: 12, minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulted')}>
+            style={{ flex: 1, fontSize: 'calc(12px * var(--fs))', minHeight: 36, padding: '0 6px' }} onClick={() => switchTab('consulted')}>
             Consulted
           </button>
         </div>
 
         {/* Search box (both tabs) — filters by name or phone, with inline ghost prediction */}
         <div style={{ position: 'relative', marginBottom: 10 }}>
-          <div aria-hidden style={{ position: 'absolute', inset: 0, padding: '8px 10px', border: '1px solid transparent', fontSize: 13, fontFamily: 'inherit', whiteSpace: 'pre', overflow: 'hidden', pointerEvents: 'none', color: '#b0b8c1', boxSizing: 'border-box' }}>
+          <div aria-hidden style={{ position: 'absolute', inset: 0, padding: '8px 10px', border: '1px solid transparent', fontSize: 'calc(13px * var(--fs))', fontFamily: 'inherit', whiteSpace: 'pre', overflow: 'hidden', pointerEvents: 'none', color: 'var(--text-light)', boxSizing: 'border-box' }}>
             <span style={{ visibility: 'hidden' }}>{search}</span>{shadowRemainder}
           </div>
           <input
@@ -754,7 +778,7 @@ function DoctorDashboard({ doctor }) {
               else if (e.key === 'Escape') setSearch('');
             }}
             placeholder="🔍 Search name or phone…"
-            style={{ position: 'relative', background: 'transparent', width: '100%', padding: '8px 10px', border: '1px solid #ccc', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+            style={{ position: 'relative', background: 'transparent', width: '100%', padding: '8px 10px', border: '1px solid #ccc', borderRadius: 8, fontSize: 'calc(13px * var(--fs))', fontFamily: 'inherit', boxSizing: 'border-box' }}
           />
         </div>
 
@@ -766,7 +790,7 @@ function DoctorDashboard({ doctor }) {
             directly above the list it describes, with a divider, instead of
             floating in the middle of the panel. */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px 7px', borderBottom: '1px solid #e6ebf1', marginBottom: 10 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 'calc(12.5px * var(--fs))', fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
             {tab === 'queue'
               ? <>{filteredPatients.length} waiting</>
               : tab === 'consulting'
@@ -777,7 +801,7 @@ function DoctorDashboard({ doctor }) {
             {(() => {
               const counts = tab === 'consulted' ? consultedTriageCounts : triageCounts;
               return ['RED', 'AMBER', 'GREEN'].some(l => counts[l] > 0) && (
-                <span style={{ display: 'inline-flex', gap: 9, fontSize: 12 }}>
+                <span style={{ display: 'inline-flex', gap: 9, fontSize: 'calc(12px * var(--fs))' }}>
                   {['RED', 'AMBER', 'GREEN'].filter(l => counts[l] > 0).map(l => (
                     <span key={l} title={l === 'RED' ? 'Severe' : l === 'AMBER' ? 'Moderate' : 'Mild'}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: TRIAGE_COLORS[l], fontWeight: 700 }}>
@@ -792,8 +816,8 @@ function DoctorDashboard({ doctor }) {
                 word keeps it discoverable; spins briefly on click. */}
             <button onClick={refreshActive} disabled={refreshing}
               title="Refresh list" aria-label="Refresh"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 10px', borderRadius: 13, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
-              <span style={{ display: 'inline-block', fontSize: 14, animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 10px', borderRadius: 13, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(12px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+              <span style={{ display: 'inline-block', fontSize: 'calc(14px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
               {refreshing ? 'Refreshing' : 'Refresh'}
             </button>
           </span>
@@ -824,23 +848,23 @@ function DoctorDashboard({ doctor }) {
                    another doctor holds the lock. */
                 style={{ display: 'flex', alignItems: 'stretch', gap: 8, cursor: lockedByOther ? 'not-allowed' : 'pointer', padding: '8px 10px', borderRadius: 8, background: lockedByOther ? '#F2F3F5' : (headColor ? `${headColor}14` : '#fff'), boxShadow: '0 1px 3px rgba(0,0,0,0.06)', opacity: lockedByOther ? 0.75 : 1, outline: lockedByMe ? '2px solid var(--secondary)' : 'none', outlineOffset: -2 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</p>
-                  <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{formatPhoneDisplay(p.phone)} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
+                  <p style={{ fontWeight: 700, fontSize: 'calc(14px * var(--fs))', color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</p>
+                  <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{formatPhoneDisplay(p.phone)} · {p.visits.length} visit{p.visits.length > 1 ? 's' : ''}</p>
                   {lockedByOther && (
-                    <p style={{ fontSize: 10.5, color: '#C0392B', fontWeight: 600, marginTop: 2 }}>🔒 Being consulted by {p.lockedByName || 'another doctor'}</p>
+                    <p style={{ fontSize: 'calc(10.5px * var(--fs))', color: '#C0392B', fontWeight: 600, marginTop: 2 }}>🔒 Being consulted by {p.lockedByName || 'another doctor'}</p>
                   )}
                   {lockedByMe && (
-                    <p style={{ fontSize: 10.5, color: 'var(--secondary)', fontWeight: 600, marginTop: 2 }}>● You're consulting</p>
+                    <p style={{ fontSize: 'calc(10.5px * var(--fs))', color: 'var(--secondary)', fontWeight: 600, marginTop: 2 }}>● You're consulting</p>
                   )}
                   {pendingHandoff && (
-                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10.5, fontWeight: 700, color: '#0D47A1', background: '#E3F2FD', border: '1px solid #64B5F6', borderRadius: 4, padding: '3px 7px' }}>
+                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 'calc(10.5px * var(--fs))', fontWeight: 700, color: '#0D47A1', background: '#E3F2FD', border: '1px solid #64B5F6', borderRadius: 4, padding: '3px 7px' }}>
                       ⇄ Assigned to you by {p.latest.reassigned_by}
                     </span>
                   )}
                   {p.preferredDoctorName && (
                     // Patient's preferred doctor — green "prefers you" when it's this
                     // doctor, amber otherwise. A hint for manual routing, not a lock.
-                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10.5, fontWeight: 700,
+                    <span style={{ display: 'inline-block', marginTop: 4, fontSize: 'calc(10.5px * var(--fs))', fontWeight: 700,
                       color: p.preferredDoctorId === doctor.id ? '#1E8449' : '#8A6D1A',
                       background: p.preferredDoctorId === doctor.id ? '#E8F6EE' : '#FCF3D9',
                       border: `1px solid ${p.preferredDoctorId === doctor.id ? '#9AD3B2' : '#E5C77A'}`,
@@ -852,11 +876,14 @@ function DoctorDashboard({ doctor }) {
                 <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between', gap: 6 }}>
                   {p.triage ? <TriageBadge level={p.triage} compact /> : <span />}
                   {lockedByOther ? (
-                    <span style={{ fontSize: 14 }}>🔒</span>
+                    <span style={{ fontSize: 'calc(14px * var(--fs))' }}>🔒</span>
                   ) : (p.filledNow && !seenNew[p.latest.id]) ? (
-                    <span style={{ fontSize: 9, background: headColor || '#888', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
+                    // Not tinted by triage: white on the amber swatch is 1.93:1, and
+                    // the TriageBadge chip directly above already carries the level.
+                    // This badge only means "arrived since you last looked".
+                    <span style={{ fontSize: 'calc(10px * var(--fs))', background: 'var(--primary)', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, letterSpacing: 0.3 }}>NEW</span>
                   ) : (
-                    <span style={{ fontSize: 14, color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
+                    <span style={{ fontSize: 'calc(14px * var(--fs))', color: 'var(--text-light)' }}>{isOpen ? '▾' : '▸'}</span>
                   )}
                 </div>
               </div>
@@ -886,10 +913,10 @@ function DoctorDashboard({ doctor }) {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {v.triage_level && <TriageBadge level={v.triage_level} compact />}
                           <div style={{ flex: 1 }}>
-                            <p style={{ fontSize: 12, fontWeight: 600 }}>
+                            <p style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>
                               {isReleased ? '↩ Returned to queue' : isFilledNow ? '★ Filled now' : fmtVisitDate(v.created_at)}
                             </p>
-                            {(isFilledNow || isReleased) && <p style={{ fontSize: 10, color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
+                            {(isFilledNow || isReleased) && <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>{fmtVisitDate(v.created_at)}</p>}
                           </div>
                         </div>
                       </div>
@@ -920,17 +947,17 @@ function DoctorDashboard({ doctor }) {
             style={{ background: tColor ? `${tColor}14` : undefined, outline: isSel ? '2px solid var(--secondary)' : 'none', outlineOffset: -2 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                <p style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', minWidth: 0, overflowWrap: 'anywhere' }}>{s.patient_name || 'Unregistered'}</p>
+                <p style={{ fontWeight: 700, fontSize: 'calc(14px * var(--fs))', color: 'var(--text)', minWidth: 0, overflowWrap: 'anywhere' }}>{s.patient_name || 'Unregistered'}</p>
                 {s.triage_level && <div style={{ flexShrink: 0 }}><TriageBadge level={s.triage_level} compact /></div>}
               </div>
-              <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>
                 {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''}
               </p>
-              <p style={{ fontSize: 11, color: 'var(--text-light)' }}>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>
                 🕒 Consulted: {fmtVisitDate(s.dispatched_at || s.consulted_at || s.updated_at)}
               </p>
               {s.doctor_feedback && (
-                <span style={{ fontSize: 10, background: s.doctor_feedback === 'accurate' ? '#D5F5E3' : '#FADBD8',
+                <span style={{ fontSize: 'calc(10px * var(--fs))', background: s.doctor_feedback === 'accurate' ? '#D5F5E3' : '#FADBD8',
                   color: s.doctor_feedback === 'accurate' ? '#1E8449' : '#C0392B', padding: '2px 6px', borderRadius: 4 }}>
                   {s.doctor_feedback === 'accurate' ? '✓ Accurate' : '✗ Inaccurate'}
                 </span>
@@ -962,15 +989,15 @@ function DoctorDashboard({ doctor }) {
             consultation lock is kept, so the patient can be reopened. */}
         {isMobile && selected && (
           <button onClick={() => { setSelected(null); setReport(null); }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, background: 'none', border: '1px solid #d5dce4', borderRadius: 8, padding: '7px 12px', fontSize: 13, fontWeight: 600, color: 'var(--secondary)', cursor: 'pointer' }}>
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, background: 'none', border: '1px solid #d5dce4', borderRadius: 8, padding: '7px 12px', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, color: 'var(--secondary)', cursor: 'pointer' }}>
             ← Back to list
           </button>
         )}
         {!selected && (
           <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
-            <div style={{ fontSize: 56, marginBottom: 14, opacity: 0.45 }}>{tab === 'consulted' ? '📋' : tab === 'consulting' ? '🩺' : '🩺'}</div>
-            <p style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: '0 0 6px' }}>No patient selected</p>
-            <p style={{ fontSize: 13, margin: 0 }}>
+            <div style={{ fontSize: 'calc(56px * var(--fs))', marginBottom: 14, opacity: 0.45 }}>{tab === 'consulted' ? '📋' : tab === 'consulting' ? '🩺' : '🩺'}</div>
+            <p style={{ fontSize: 'calc(16px * var(--fs))', fontWeight: 600, color: 'var(--text)', margin: '0 0 6px' }}>No patient selected</p>
+            <p style={{ fontSize: 'calc(13px * var(--fs))', margin: 0 }}>
               {tab === 'queue'
                 ? 'Pick a patient from the queue to view their pre-consult report.'
                 : tab === 'consulting'
@@ -996,7 +1023,7 @@ function DoctorDashboard({ doctor }) {
                 {tab !== 'consulted' && selected.assigned_doctor_id && (
                   <div style={{ position: 'relative' }}>
                     <button onClick={() => setReassignOpen(o => !o)} title="Reassign this patient"
-                      style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                      style={{ background: 'none', border: '1px solid #ccc', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
                       ⇄ Reassign ▾
                     </button>
                     {reassignOpen && (
@@ -1004,9 +1031,9 @@ function DoctorDashboard({ doctor }) {
                         <div onClick={() => setReassignOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
                         <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 10, boxShadow: '0 6px 18px rgba(0,0,0,0.15)', zIndex: 20, width: 280, padding: 12 }}>
                           {/* 1) To a different department → general queue */}
-                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a department (general queue)</label>
+                          <label style={{ fontSize: 'calc(11px * var(--fs))', fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a department (general queue)</label>
                           <select defaultValue="" onChange={e => { const d = departments.find(x => x.code === e.target.value); e.target.value = ''; if (d) handleReassignDept(d); }}
-                            style={{ width: '100%', border: '1px solid #ccc', borderRadius: 8, padding: '6px 8px', fontSize: 13, cursor: 'pointer', marginBottom: 12 }}>
+                            style={{ width: '100%', border: '1px solid #ccc', borderRadius: 8, padding: '6px 8px', fontSize: 'calc(13px * var(--fs))', cursor: 'pointer', marginBottom: 12 }}>
                             <option value="">Choose department…</option>
                             {departments.filter(d => d.code !== selected.department).map(d => (
                               <option key={d.code} value={d.code}>{d.name}</option>
@@ -1014,7 +1041,7 @@ function DoctorDashboard({ doctor }) {
                           </select>
 
                           {/* 2) To a specific doctor → searchable, scrollable */}
-                          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a specific doctor</label>
+                          <label style={{ fontSize: 'calc(11px * var(--fs))', fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>To a specific doctor</label>
                           <DoctorPicker doctors={doctors.filter(d => d.id !== doctor.id && d.is_active !== false)}
                             onPick={handleReassignDoctor} />
                         </div>
@@ -1027,7 +1054,7 @@ function DoctorDashboard({ doctor }) {
                 {tab === 'consulted' && (
                   <button onClick={handleRelease}
                     title="Send this visit back to the active queue"
-                    style={{ background: 'none', border: '1px solid #E74C3C', color: '#E74C3C', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}>
+                    style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
                     ↩ Release to queue
                   </button>
                 )}
@@ -1038,7 +1065,7 @@ function DoctorDashboard({ doctor }) {
                 {tab === 'queue' && (
                   <>
                     <button onClick={() => setMenuOpen(o => !o)} title="More options"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: '2px 8px', color: 'var(--text-light)', borderRadius: 6 }}>
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(22px * var(--fs))', lineHeight: 1, padding: '2px 8px', color: 'var(--text-light)', borderRadius: 6 }}>
                       ⋯
                     </button>
                     {menuOpen && (
@@ -1046,8 +1073,8 @@ function DoctorDashboard({ doctor }) {
                         {/* click-away overlay */}
                         <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
                         <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E0E0E0', borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.14)', zIndex: 10, minWidth: 190, overflow: 'hidden' }}>
-                          <button onClick={() => { setMenuOpen(false); setDeleteAck(false); setConfirmDelete(true); }}
-                            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '11px 14px', cursor: 'pointer', fontSize: 13, color: '#E74C3C' }}>
+                          <button onClick={() => { setMenuOpen(false); handleDelete(); }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '11px 14px', cursor: 'pointer', fontSize: 'calc(13px * var(--fs))', color: 'var(--red)' }}>
                             🗑 Delete patient entry
                           </button>
                         </div>
@@ -1060,9 +1087,9 @@ function DoctorDashboard({ doctor }) {
 
               {/* Patient name on its own line, clearly labelled, with the
                   age / gender / department as a lighter meta line beneath it. */}
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--text-light)', marginBottom: 1 }}>Patient</div>
-              <h2 style={{ fontSize: 22, margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.patient_name}</h2>
-              <p style={{ margin: '3px 0 0', color: 'var(--text-light)', fontSize: 13 }}>
+              <div style={{ fontSize: 'calc(10.5px * var(--fs))', fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--text-light)', marginBottom: 1 }}>Patient</div>
+              <h2 style={{ fontSize: 'calc(22px * var(--fs))', margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.patient_name}</h2>
+              <p style={{ margin: '3px 0 0', color: 'var(--text-light)', fontSize: 'calc(13px * var(--fs))' }}>
                 {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department}
               </p>
 
@@ -1074,9 +1101,9 @@ function DoctorDashboard({ doctor }) {
                   (muted, non-expandable), expandable when clips exist. */}
               <div style={{ marginTop: 12 }}>
                   <button onClick={() => voiceClips.length && setAudioOpen(o => !o)} disabled={voiceClips.length === 0}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: (audioOpen && voiceClips.length) ? '#E8F8F5' : '#fff', border: '1px solid var(--accent)', color: '#138D75', borderRadius: 20, padding: '5px 13px', cursor: voiceClips.length ? 'pointer' : 'default', fontSize: 12.5, fontWeight: 600, opacity: voiceClips.length ? 1 : 0.6 }}>
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: (audioOpen && voiceClips.length) ? '#E8F8F5' : '#fff', border: '1px solid var(--accent)', color: '#117D68', borderRadius: 20, padding: '5px 13px', cursor: voiceClips.length ? 'pointer' : 'default', fontSize: 'calc(12.5px * var(--fs))', fontWeight: 600, opacity: voiceClips.length ? 1 : 0.6 }}>
                     🔊 Patient audio ({voiceClips.length})
-                    {voiceClips.length > 0 && <span style={{ fontSize: 10, color: 'var(--text-light)' }}>{audioOpen ? '▲' : '▼'}</span>}
+                    {voiceClips.length > 0 && <span style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>{audioOpen ? '▲' : '▼'}</span>}
                   </button>
                   {audioOpen && voiceClips.length > 0 && (
                     <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10, borderLeft: '3px solid var(--accent)', paddingLeft: 12 }}>
@@ -1088,7 +1115,7 @@ function DoctorDashboard({ doctor }) {
                           : 'Voice answer';
                         return (
                           <div key={clip.id} style={{ background: '#F7F9FB', border: '1px solid #E6EBF1', borderRadius: 10, padding: '10px 12px' }}>
-                            <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                            <p style={{ margin: '0 0 8px', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, color: 'var(--text)' }}>
                               {label}
                               {clip.duration_ms ? <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {(clip.duration_ms / 1000).toFixed(1)}s</span> : null}
                             </p>
@@ -1101,44 +1128,18 @@ function DoctorDashboard({ doctor }) {
                 </div>
             </div>
 
-            {/* Delete confirmation modal — requires an explicit acknowledgement */}
-            {confirmDelete && (
-              <div onClick={() => { setConfirmDelete(false); setDeleteAck(false); }}
-                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-                <div onClick={e => e.stopPropagation()}
-                  style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 440, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}>
-                  <h3 style={{ color: '#E74C3C', marginBottom: 12, fontSize: 18 }}>Remove patient entry?</h3>
-                  <p style={{ fontSize: 14, lineHeight: 1.55, marginBottom: 16, color: 'var(--text)' }}>
-                    This removes <strong>{selected.patient_name}</strong> from the active dashboard (Queue) and from
-                    the patient's previous-visit history. If this visit was consulted, it <strong>stays in your
-                    Consulted history</strong> for the record — so you keep what they were seen for.
-                  </p>
-                  <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, marginBottom: 18, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={deleteAck} onChange={e => setDeleteAck(e.target.checked)} style={{ marginTop: 2 }} />
-                    <span>I understand this removes the patient from the active dashboard.</span>
-                  </label>
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button className="btn btn-outline" style={{ fontSize: 13, padding: '8px 16px' }}
-                      onClick={() => { setConfirmDelete(false); setDeleteAck(false); }} disabled={deleting}>
-                      Cancel
-                    </button>
-                    <button onClick={handleDelete} disabled={!deleteAck || deleting}
-                      style={{ background: deleteAck ? '#E74C3C' : '#ccc', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: deleteAck && !deleting ? 'pointer' : 'not-allowed' }}>
-                      {deleting ? 'Removing…' : 'Remove from Dashboard'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Delete confirmation lives in handleDelete() via useConfirm — it was
+                the only hand-rolled overlay that was genuinely a confirmation, and
+                it had no dialog semantics, focus trap, or Escape handling. */}
 
             {/* Report / Prescribe tabs */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
               <button className={`btn ${rightTab === 'report' ? 'btn-primary' : 'btn-outline'}`}
-                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
+                style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 16px' }}
                 onClick={() => setRightTab('report')}>Report</button>
               <button className={`btn ${rightTab === 'prescribe' ? 'btn-primary' : 'btn-outline'}`}
                 title={visitDone ? 'Prescription already issued' : (prescribeLocked ? 'Mark the report Accurate or Inaccurate first' : 'Prescribe')}
-                style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px', opacity: (prescribeLocked && !visitDone) ? 0.5 : 1, cursor: (prescribeLocked && !visitDone) ? 'not-allowed' : 'pointer' }}
+                style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 16px', opacity: (prescribeLocked && !visitDone) ? 0.5 : 1, cursor: (prescribeLocked && !visitDone) ? 'not-allowed' : 'pointer' }}
                 onClick={() => {
                   // A finished visit just shows its issued prescription — never locked.
                   if (prescribeLocked && !visitDone) { toast('Review the report first — mark it Accurate or Inaccurate.', 'error'); return; }
@@ -1148,7 +1149,7 @@ function DoctorDashboard({ doctor }) {
                   when the patient actually uploaded something — no empty tab clutter. */}
               {docs.length > 0 && (
                 <button className={`btn ${rightTab === 'uploaded' ? 'btn-primary' : 'btn-outline'}`}
-                  style={{ fontSize: 13, minHeight: 32, width: 'auto', padding: '0 16px' }}
+                  style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 16px' }}
                   onClick={() => setRightTab('uploaded')}>📎 Uploaded ({docs.length})</button>
               )}
             </div>
@@ -1169,17 +1170,17 @@ function DoctorDashboard({ doctor }) {
                         (the AI original is preserved and viewable via the toggle). */}
                     {report.doctor_correction && !showOriginal && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#B9770E', background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 6, padding: '3px 9px' }}>✎ Edited by doctor</span>
-                        <button onClick={() => setShowOriginal(true)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>View original (AI)</button>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'calc(12px * var(--fs))', fontWeight: 600, color: 'var(--amber-on-tint)', background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 6, padding: '3px 9px' }}>✎ Edited by doctor</span>
+                        <button onClick={() => setShowOriginal(true)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>View original (AI)</button>
                       </div>
                     )}
                     {report.doctor_correction && showOriginal && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-light)' }}>Original AI report</span>
-                        <button onClick={() => setShowOriginal(false)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>Back to edited</button>
+                        <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600, color: 'var(--text-light)' }}>Original AI report</span>
+                        <button onClick={() => setShowOriginal(false)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>Back to edited</button>
                       </div>
                     )}
-                    <div style={{ lineHeight: 1.8, fontSize: 15 }}>
+                    <div style={{ lineHeight: 1.8, fontSize: 'calc(15px * var(--fs))' }}>
                       <ReactMarkdown>{(report.doctor_correction && !showOriginal) ? report.doctor_correction : report.report_md}</ReactMarkdown>
                     </div>
 
@@ -1188,12 +1189,12 @@ function DoctorDashboard({ doctor }) {
                       <div style={{ marginTop: 16, background: 'var(--bg)', borderRadius: 12, overflow: 'hidden' }}>
                         <button type="button" onClick={() => { setVitalsErr(''); setVitalsOpen(o => !o); }} aria-expanded={vitalsOpen}
                           style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, background: 'none', border: 'none', padding: 14, cursor: 'pointer' }}>
-                          <span style={{ fontSize: 20, lineHeight: 1 }}>🩺</span>
+                          <span style={{ fontSize: 'calc(20px * var(--fs))', lineHeight: 1 }}>🩺</span>
                           <span style={{ flex: 1, textAlign: 'left' }}>
-                            <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>Vitals not recorded — add them</span>
-                            <span style={{ display: 'block', fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>Patient skipped vitals · entering them updates triage &amp; the report</span>
+                            <span style={{ display: 'block', fontSize: 'calc(14px * var(--fs))', fontWeight: 600, color: 'var(--primary)' }}>Vitals not recorded — add them</span>
+                            <span style={{ display: 'block', fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>Patient skipped vitals · entering them updates triage &amp; the report</span>
                           </span>
-                          <span style={{ color: 'var(--text-light)', fontSize: 12, transition: 'transform .15s', transform: vitalsOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+                          <span style={{ color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', transition: 'transform .15s', transform: vitalsOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
                         </button>
                         {vitalsOpen && (
                           <div style={{ padding: '12px 14px 14px', borderTop: '1px solid #E0E0E0' }}>
@@ -1208,15 +1209,15 @@ function DoctorDashboard({ doctor }) {
                       <div style={{ marginTop: 24, borderTop: '1px solid #E0E0E0', paddingTop: 16 }}>
                         {editing ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>Edit the report — your changes replace what's shown; the original AI version is kept for the record.</label>
+                            <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600, color: 'var(--primary)' }}>Edit the report — your changes replace what's shown; the original AI version is kept for the record.</label>
                             <textarea className="input" value={editText}
                               onChange={e => setEditText(e.target.value)}
                               placeholder="Edit the report text…"
                               style={{ minHeight: 280, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
                             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button className="btn btn-outline" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
+                              <button className="btn btn-outline" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 'calc(13px * var(--fs))' }}
                                 onClick={() => setEditing(false)} disabled={savingEdit}>Cancel</button>
-                              <button className="btn btn-primary" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 13 }}
+                              <button className="btn btn-primary" style={{ width: 'auto', minHeight: 'auto', padding: '8px 16px', fontSize: 'calc(13px * var(--fs))' }}
                                 onClick={saveReportEdit} disabled={savingEdit || !editText.trim()}>
                                 {savingEdit ? 'Saving…' : 'Save report'}
                               </button>
@@ -1225,7 +1226,7 @@ function DoctorDashboard({ doctor }) {
                         ) : feedbackGiven?.id === selected?.id ? (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                             <span style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                              display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, fontSize: 'calc(13px * var(--fs))', fontWeight: 600,
                               background: feedbackGiven.val === 'accurate' ? '#D5F5E3' : feedbackGiven.val === 'error' ? '#FADBD8' : '#FCF3CF',
                               color: feedbackGiven.val === 'accurate' ? '#1E8449' : feedbackGiven.val === 'error' ? '#C0392B' : '#B9770E',
                             }}>
@@ -1234,14 +1235,14 @@ function DoctorDashboard({ doctor }) {
                                 : '✓ Flagged as incorrect history — thank you'}
                             </span>
                             <button onClick={() => setFeedbackGiven(null)}
-                              style={{ background: 'none', border: 'none', color: 'var(--text-light)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+                              style={{ background: 'none', border: 'none', color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>
                               {feedbackGiven.val === 'error' ? 'Retry' : 'Change'}
                             </button>
                           </div>
                         ) : (
                           <>
                             {prescribeLocked && (
-                              <p style={{ fontSize: 12, color: '#B9770E', fontWeight: 600, marginBottom: 8 }}>
+                              <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--amber-on-tint)', fontWeight: 600, marginBottom: 8 }}>
                                 ⚠ Review this report before prescribing — mark it Accurate, or Inaccurate (then save your edit).
                               </p>
                             )}
@@ -1268,8 +1269,8 @@ function DoctorDashboard({ doctor }) {
                 {docs.map(d => (
                   <div key={d.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-light)' }}>{d.created_at ? fmtVisitDate(d.created_at) : ''}</span>
+                      <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{d.created_at ? fmtVisitDate(d.created_at) : ''}</span>
                     </div>
                     <div style={{ padding: 12 }}>
                       {d.image_key ? (
@@ -1278,7 +1279,7 @@ function DoctorDashboard({ doctor }) {
                             style={{ width: '100%', objectFit: 'contain', borderRadius: 6, border: '1px solid #EEF2F6', background: '#fff', cursor: 'zoom-in' }} />
                         </a>
                       ) : (
-                        <p style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                        <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>
                           Original file not available — this was uploaded before document storage was enabled.
                         </p>
                       )}
@@ -1386,18 +1387,18 @@ function DoctorPicker({ doctors, onPick }) {
     <div>
       <input className="input" value={q} onChange={e => setQ(e.target.value)}
         placeholder="Search doctor or department…" autoComplete="off"
-        style={{ fontSize: 13, minHeight: 32 }} />
+        style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 32 }} />
       <div style={{ border: '1px solid #D5D8DC', borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: 'auto' }}>
         {matches.length === 0 && (
-          <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-light)' }}>No doctors match.</div>
+          <div style={{ padding: '8px 10px', fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>No doctors match.</div>
         )}
         {matches.map(d => (
           <div key={d.id}
             onMouseDown={(e) => { e.preventDefault(); onPick(d); }}
             onMouseEnter={e => { e.currentTarget.style.background = '#EBF5FB'; }}
             onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}
-            style={{ padding: '7px 10px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #F0F0F0' }}>
-            {d.name} <span style={{ color: 'var(--text-light)', fontSize: 11 }}>· {d.department}</span>
+            style={{ padding: '7px 10px', fontSize: 'calc(13px * var(--fs))', cursor: 'pointer', borderBottom: '1px solid #F0F0F0' }}>
+            {d.name} <span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>· {d.department}</span>
           </div>
         ))}
       </div>
@@ -1459,7 +1460,7 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
               onMouseDown={(e) => { e.preventDefault(); choose(d); }}
               onMouseEnter={() => setHi(i)}
               style={{
-                padding: '7px 10px', fontSize: 13, cursor: 'pointer',
+                padding: '7px 10px', fontSize: 'calc(13px * var(--fs))', cursor: 'pointer',
                 background: i === hi ? '#EBF5FB' : '#fff',
               }}>
               {titleCase(d)}
@@ -1471,7 +1472,7 @@ function DrugCombobox({ value, onChange, placeholder, style, options = DRUG_LIST
         <div style={{
           position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
           background: '#fff', border: '1px solid #D5D8DC', borderRadius: 6,
-          padding: '7px 10px', fontSize: 12, color: 'var(--text-light)', marginTop: 2,
+          padding: '7px 10px', fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 2,
         }}>
           No match — "{value}" will be used as typed.
         </div>
@@ -1488,7 +1489,7 @@ function WarningRow({ w }) {
   const fg = ai ? '#1B4F72' : (w.severity === 'block' ? '#C0392B' : '#856404');
   const label = ai ? 'AI-ASSESSED · UNVERIFIED' : (w.severity === 'block' ? 'BLOCKED' : 'WARNING');
   return (
-    <div style={{ background: bg, padding: 10, fontSize: 13, borderBottom: '1px solid rgba(0,0,0,0.1)', borderLeft: ai ? '3px solid #2E86AB' : 'none' }}>
+    <div style={{ background: bg, padding: 10, fontSize: 'calc(13px * var(--fs))', borderBottom: '1px solid rgba(0,0,0,0.1)', borderLeft: ai ? '3px solid #2E86AB' : 'none' }}>
       <strong style={{ color: fg }}>{label}{ai && w.severity === 'block' ? ' (severe)' : ''}:</strong>{' '}
       {w.description}
       {w.drug_a && w.drug_b && <span style={{ color: 'var(--text-light)' }}> ({w.drug_a} + {w.drug_b})</span>}
@@ -1970,14 +1971,14 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           a glance. Red when the patient has any (from intake or doctor-added);
           neutral green when explicitly none. */}
       {allergyList.length > 0 ? (
-        <div style={{ background: '#FADBD8', border: '1px solid #E6B0AA', borderRadius: 8, padding: 10, fontSize: 13, color: '#943126' }}>
+        <div style={{ background: '#FADBD8', border: '1px solid #E6B0AA', borderRadius: 8, padding: 10, fontSize: 'calc(13px * var(--fs))', color: '#943126' }}>
           <strong>⚠ Known allergies:</strong> {allergyList.join(', ')}
-          <div style={{ fontSize: 11, color: '#B03A2E', marginTop: 2 }}>
+          <div style={{ fontSize: 'calc(11px * var(--fs))', color: '#B03A2E', marginTop: 2 }}>
             Drugs that clash with these are flagged below and blocked on save.
           </div>
         </div>
       ) : (
-        <div style={{ background: '#EAFAF1', border: '1px solid #ABEBC6', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449' }}>
+        <div style={{ background: '#EAFAF1', border: '1px solid #ABEBC6', borderRadius: 8, padding: 10, fontSize: 'calc(13px * var(--fs))', color: 'var(--green-on-tint)' }}>
           ✓ No known drug allergies reported.
         </div>
       )}
@@ -1985,41 +1986,41 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
       {/* Current medications from session (OCR + patient-reported) */}
       {currentMeds.length > 0 && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 16, border: '1px solid #E0E0E0' }}>
-          <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>Current Medications</h3>
-          <p style={{ fontSize: 11, color: 'var(--text-light)', marginBottom: 8 }}>
+          <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>Current Medications</h3>
+          <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>
             From patient intake (OCR and questionnaire). Edit, delete, or carry forward to prescription.
           </p>
           {currentMeds.map((med, idx) => (
             <div key={med.id || idx} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ flex: 2, minWidth: 140 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Drug</label>}
                 <input className="input" value={med.drug_name}
                   onChange={e => { const u = [...currentMeds]; u[idx] = { ...u[idx], drug_name: e.target.value }; setCurrentMeds(u); }}
-                  style={{ minHeight: 32, fontSize: 13 }} />
+                  style={{ minHeight: 32, fontSize: 'calc(13px * var(--fs))' }} />
                 {med.brand && (
-                  <div style={{ fontSize: 9, color: 'var(--text-light)', marginTop: 2 }}>written as: {med.brand}</div>
+                  <div style={{ fontSize: 'calc(9px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>written as: {med.brand}</div>
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 60 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Dose</label>}
                 <input className="input" value={med.dose}
                   onChange={e => { const u = [...currentMeds]; u[idx] = { ...u[idx], dose: e.target.value }; setCurrentMeds(u); }}
-                  style={{ minHeight: 32, fontSize: 13 }} placeholder="dose" />
+                  style={{ minHeight: 32, fontSize: 'calc(13px * var(--fs))' }} placeholder="dose" />
               </div>
               <div style={{ width: 70 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Freq</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Freq</label>}
                 <select className="input" value={med.frequency}
                   onChange={e => { const u = [...currentMeds]; u[idx] = { ...u[idx], frequency: e.target.value }; setCurrentMeds(u); }}
-                  style={{ minHeight: 32, fontSize: 13 }}>
+                  style={{ minHeight: 32, fontSize: 'calc(13px * var(--fs))' }}>
                   <option value="">-</option>
                   {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
-              <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: med.source === 'document' ? '#EBF5FB' : '#FEF9E7', color: 'var(--text-light)' }}>
+              <span style={{ fontSize: 'calc(9px * var(--fs))', padding: '2px 6px', borderRadius: 4, background: med.source === 'document' ? '#EBF5FB' : '#FEF9E7', color: 'var(--text-light)' }}>
                 {med.source === 'document' ? 'OCR' : 'Patient'}
               </span>
               <button type="button" onClick={() => setCurrentMeds(currentMeds.filter((_, i) => i !== idx))}
-                style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+                style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
             </div>
           ))}
           <button type="button" disabled={allCurrentAdded} onClick={() => {
@@ -2036,7 +2037,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           }} style={{
             background: allCurrentAdded ? '#BDC3C7' : 'var(--secondary)', color: '#fff', border: 'none',
             borderRadius: 6, padding: '6px 14px', cursor: allCurrentAdded ? 'default' : 'pointer',
-            fontSize: 12, marginTop: 8,
+            fontSize: 'calc(12px * var(--fs))', marginTop: 8,
           }}>
             {allCurrentAdded ? '✓ Added to prescription' : 'Continue all in prescription'}
           </button>
@@ -2045,9 +2046,9 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
       {/* Existing prescriptions from this session — click Reuse to load into the form */}
       {existingRx.length > 0 && (
-        <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 10, fontSize: 12 }}>
+        <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 10, fontSize: 'calc(12px * var(--fs))' }}>
           <strong>Previous Rx ({existingRx.length}):</strong>
-          <p style={{ fontSize: 10, color: 'var(--text-light)', margin: '2px 0 6px' }}>
+          <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)', margin: '2px 0 6px' }}>
             Tap “Reuse” to load a past prescription's drugs into the new one.
           </p>
           {existingRx.map((rx, i) => {
@@ -2064,7 +2065,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
                     border: allAdded ? 'none' : '1px solid var(--secondary)',
                     color: allAdded ? '#fff' : 'var(--secondary)',
                     borderRadius: 6, padding: '3px 10px',
-                    cursor: allAdded ? 'default' : 'pointer', fontSize: 11, whiteSpace: 'nowrap',
+                    cursor: allAdded ? 'default' : 'pointer', fontSize: 'calc(11px * var(--fs))', whiteSpace: 'nowrap',
                   }}>
                   {allAdded ? '✓ Added' : '↺ Reuse'}
                 </button>
@@ -2076,13 +2077,13 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
       {/* New Prescription items */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, border: '1px solid #E0E0E0' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>New Prescription</h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>New Prescription</h3>
 
         {draftRestored && (
           <div style={{ background: '#FEF9E7', border: '1px solid #F4D03F', borderRadius: 8, padding: '8px 10px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: '#7D6608' }}>📝 Restored an unsaved prescription draft for this patient.</span>
+            <span style={{ fontSize: 'calc(12px * var(--fs))', color: '#7D6608' }}>📝 Restored an unsaved prescription draft for this patient.</span>
             <button type="button" onClick={clearDraft}
-              style={{ background: '#fff', border: '1px solid #F4D03F', color: '#7D6608', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' }}>
+              style={{ background: '#fff', border: '1px solid #F4D03F', color: '#7D6608', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(11px * var(--fs))', whiteSpace: 'nowrap' }}>
               Clear
             </button>
           </div>
@@ -2094,41 +2095,41 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           <div key={item.id} style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <div style={{ flex: 2, minWidth: 150 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Drug</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Drug</label>}
                 <DrugCombobox value={item.drug_name}
                   onChange={v => updateItem(idx, 'drug_name', v)}
                   options={drugList}
-                  placeholder="Drug name" style={{ minHeight: 34, fontSize: 13 }} />
+                  placeholder="Drug name" style={{ minHeight: 34, fontSize: 'calc(13px * var(--fs))' }} />
               </div>
               <div style={{ flex: 1, minWidth: 70 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Dose</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Dose</label>}
                 <input className="input" value={item.dose}
                   onChange={e => updateItem(idx, 'dose', e.target.value)}
                   placeholder="e.g. 5mg"
-                  style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.dose || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
+                  style={{ minHeight: 34, fontSize: 'calc(13px * var(--fs))', ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.dose || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
               </div>
               <div style={{ width: 80 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Freq</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Freq</label>}
                 <select className="input" value={item.frequency}
                   onChange={e => updateItem(idx, 'frequency', e.target.value)}
-                  style={{ minHeight: 34, fontSize: 13 }}>
+                  style={{ minHeight: 34, fontSize: 'calc(13px * var(--fs))' }}>
                   {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
               <div style={{ flex: 1, minWidth: 70 }}>
-                {idx === 0 && <label style={{ fontSize: 10, color: 'var(--text-light)' }}>Duration</label>}
+                {idx === 0 && <label style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Duration</label>}
                 <input className="input" value={item.duration}
                   onChange={e => updateItem(idx, 'duration', e.target.value)}
                   placeholder="e.g. 7 days"
-                  style={{ minHeight: 34, fontSize: 13, ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.duration || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
+                  style={{ minHeight: 34, fontSize: 'calc(13px * var(--fs))', ...(showItemErrors && String(item.drug_name || '').trim() && !String(item.duration || '').trim() ? { border: '1.5px solid var(--red)', background: '#FDEDEC' } : {}) }} />
               </div>
               <button type="button" onClick={() => removeItem(idx)}
-                style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 18, minHeight: 34 }}>
+                style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))', minHeight: 34 }}>
                 ✕
               </button>
             </div>
             {isAllergyHit && (
-              <div style={{ fontSize: 11, color: '#C0392B', fontWeight: 700, marginTop: 3 }}>
+              <div style={{ fontSize: 'calc(11px * var(--fs))', color: '#C0392B', fontWeight: 700, marginTop: 3 }}>
                 ⚠ allergy contraindication
               </div>
             )}
@@ -2138,11 +2139,11 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button type="button" onClick={addItem}
-            style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 12 }}>
+            style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
             + Add Drug
           </button>
           <button type="button" onClick={checkInteractions}
-            style={{ background: '#fff', border: '1px solid var(--secondary)', color: 'var(--secondary)', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 12 }}>
+            style={{ background: '#fff', border: '1px solid var(--secondary)', color: 'var(--secondary)', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
             Check Interactions
           </button>
         </div>
@@ -2166,17 +2167,17 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
             {/* Single dropdown header for the whole warnings list. */}
             <button type="button" onClick={() => setWarnOpen(o => !o)}
               style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none',
-                background: tone.bg, color: tone.fg, fontWeight: 800, fontSize: 14,
+                background: tone.bg, color: tone.fg, fontWeight: 800, fontSize: 'calc(14px * var(--fs))',
                 padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 16 }}>⚠</span>
+              <span style={{ fontSize: 'calc(16px * var(--fs))' }}>⚠</span>
               <span>{parts.join('  ·  ')}</span>
-              <span style={{ marginLeft: 'auto', fontSize: 13 }}>{warnOpen ? '▾ Hide' : '▸ View'}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 'calc(13px * var(--fs))' }}>{warnOpen ? '▾ Hide' : '▸ View'}</span>
             </button>
             {warnOpen && (
               <>
                 {warnings.map((w, i) => <WarningRow key={i} w={w} />)}
                 {nAi > 0 && (
-                  <div style={{ background: '#F4F8FB', padding: '7px 10px', fontSize: 11, color: 'var(--text-light)' }}>
+                  <div style={{ background: '#F4F8FB', padding: '7px 10px', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>
                     ⓘ AI-assessed items are for a drug not in the formulary — advisory only, do not block, and have been
                     sent to the HIS admin for review. Verify against a clinical reference before relying on them.
                   </div>
@@ -2191,12 +2192,12 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           drugs have also had the AI advisory run; otherwise nudge to run it. */}
       {interactionChecked && warnings.length === 0 && (
         unknownDrugs.length > 0 && !aiChecked ? (
-          <div style={{ background: '#FEF9E7', border: '1px solid #F4D03F', borderRadius: 8, padding: 10, fontSize: 13, color: '#7D6608' }}>
+          <div style={{ background: '#FEF9E7', border: '1px solid #F4D03F', borderRadius: 8, padding: 10, fontSize: 'calc(13px * var(--fs))', color: '#7D6608' }}>
             No issues among known drugs. <strong>{unknownDrugs.join(', ')}</strong> {unknownDrugs.length > 1 ? 'are' : 'is'} not in the formulary —
             click <strong>Check Interactions</strong> for an AI allergy/interaction review.
           </div>
         ) : (
-          <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 13, color: '#1E8449', fontWeight: 600 }}>
+          <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 'calc(13px * var(--fs))', color: 'var(--green-on-tint)', fontWeight: 600 }}>
             ✓ No negative interactions found.
           </div>
         )
@@ -2204,7 +2205,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
       {/* AI availability note */}
       {aiNote && (
-        <div style={{ background: '#FEF9E7', borderRadius: 8, padding: 8, fontSize: 12, color: '#856404' }}>
+        <div style={{ background: '#FEF9E7', borderRadius: 8, padding: 8, fontSize: 'calc(12px * var(--fs))', color: '#856404' }}>
           {aiNote}
         </div>
       )}
@@ -2215,8 +2216,8 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
 
       {/* Doctor's Advice & Instructions + Save */}
       <div>
-        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>Patient summary <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>(printed on the prescription)</span></label>
-        <p style={{ fontSize: 11, color: 'var(--text-light)', margin: '2px 0 6px' }}>
+        <label style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, color: 'var(--primary)' }}>Patient summary <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>(printed on the prescription)</span></label>
+        <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', margin: '2px 0 6px' }}>
           Auto-filled from the consultation scribe — plain-language guidance the patient sees on the printed &amp; digital Rx. Edit before saving.
         </p>
         <textarea className="input" rows={4} value={notes}
@@ -2229,8 +2230,8 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           only fires when a drug IS entered, so the two alerts never overlap. */}
       {!items.some(i => i.drug_name) && String(notes || '').trim() && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: '#FFF8E1', border: '1px solid #F0C36D', borderRadius: 8, padding: '10px 12px' }}>
-          <span style={{ fontSize: 15, lineHeight: 1.2 }}>⚠️</span>
-          <span style={{ fontSize: 12.5, color: '#8A6D1B', lineHeight: 1.5 }}>
+          <span style={{ fontSize: 'calc(15px * var(--fs))', lineHeight: 1.2 }}>⚠️</span>
+          <span style={{ fontSize: 'calc(12.5px * var(--fs))', color: '#8A6D1B', lineHeight: 1.5 }}>
             <strong>No medication added.</strong> This will be saved as an <strong>advice-only</strong> prescription (guidance only, no drugs). You&#39;ll be asked to confirm.
           </span>
         </div>
@@ -2250,7 +2251,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
               {saving ? 'Saving...' : 'Save & Generate QR'}
             </button>
             {nothingToSave && !saving && (
-              <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', marginTop: 2 }}>
+              <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', textAlign: 'center', marginTop: 2 }}>
                 Add a medicine, or type advice in <strong>Patient summary</strong> above, to save.
               </p>
             )}
@@ -2258,7 +2259,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         );
       })()}
       {saveError && (
-        <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', fontWeight: 600 }}>⚠ {saveError}</p>
+        <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))', textAlign: 'center', fontWeight: 600 }}>⚠ {saveError}</p>
       )}
       </>)}
 
@@ -2267,23 +2268,23 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
           open the verified digital Rx at the pharmacy. */}
       {saved && (
         <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 16, textAlign: 'center' }}>
-          <p style={{ fontWeight: 600, color: '#1E8449', marginBottom: 12 }}>✓ Prescription saved!</p>
+          <p style={{ fontWeight: 600, color: 'var(--green-on-tint)', marginBottom: 12 }}>✓ Prescription saved!</p>
 
           {/* Printed prescription card (medications + advice) */}
           <div style={{ background: '#fff', borderRadius: 10, padding: 14, textAlign: 'left', marginBottom: 12, border: '1px solid #cfe9d8' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline', borderBottom: '1px solid #eef1f3', paddingBottom: 6, marginBottom: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--primary)' }}>
+              <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 700, color: 'var(--primary)' }}>
                 {saved.prescription?.patient_name || session?.patient_name || 'Patient'}
               </span>
-              <span style={{ fontSize: 12, color: 'var(--text-light)' }}>
+              <span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>
                 {new Date(saved.issued_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
               </span>
             </div>
             {(saved.items || []).length === 0 ? (
-              <p style={{ fontSize: 13, color: 'var(--text-light)', fontStyle: 'italic' }}>No medication prescribed — advice only.</p>
+              <p style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)', fontStyle: 'italic' }}>No medication prescribed — advice only.</p>
             ) : (
               (saved.items || []).map((it, i) => (
-                <p key={i} style={{ fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>
+                <p key={i} style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text)', marginBottom: 4 }}>
                   • <strong>{it.drug_name}</strong>
                   {it.dose ? ` ${it.dose}` : ''}{it.frequency ? ` — ${it.frequency}` : ''}
                   {it.duration ? `, ${it.duration}` : ''}
@@ -2292,7 +2293,7 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
               ))
             )}
             {saved.prescription?.notes && (
-              <p style={{ fontSize: 12, color: 'var(--text)', marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e0e0e0' }}>
+              <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text)', marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e0e0e0' }}>
                 <strong style={{ color: 'var(--primary)' }}>Advice:</strong> {saved.prescription.notes}
               </p>
             )}
@@ -2304,8 +2305,8 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
               <img src={qrUrl} alt="Prescription QR code" style={{ display: 'block', width: 170, height: 170 }} />
             </div>
           )}
-          {qrError && (<p style={{ fontSize: 12, color: 'var(--red)', marginBottom: 8 }}>{qrError}</p>)}
-          <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 12 }}>
+          {qrError && (<p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--red)', marginBottom: 8 }}>{qrError}</p>)}
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
             Scan to open the verified digital prescription.
           </p>
 
@@ -2463,7 +2464,7 @@ function ScribePanel({ session, embedded = false, onAdvice }) {
 
       {/* Title + always-visible recording control */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>🎙 Consultation Scribe</span>
+        <span style={{ fontSize: 'calc(14px * var(--fs))', fontWeight: 600, color: 'var(--primary)' }}>🎙 Consultation Scribe</span>
         {!recording ? (
           <button className="btn btn-primary" onClick={startRecording} disabled={!!processing}
             style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', padding: '0 20px', marginLeft: 'auto' }}>
@@ -2478,8 +2479,8 @@ function ScribePanel({ session, embedded = false, onAdvice }) {
           </button>
         )}
       </div>
-      {processing && <span style={{ fontSize: 13, color: 'var(--secondary)' }}>{processing}</span>}
-      <p style={{ fontSize: 11, color: 'var(--text-light)', margin: 0 }}>
+      {processing && <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--secondary)' }}>{processing}</span>}
+      <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', margin: 0 }}>
         Record the consultation → editable SOAP note (below) + a plain-language summary added to <strong>Patient summary</strong>. Audio is transcribed then discarded.
       </p>
 
@@ -2487,8 +2488,8 @@ function ScribePanel({ session, embedded = false, onAdvice }) {
       <div style={{ borderTop: '1px solid #EEF1F3', paddingTop: 10 }}>
         <button type="button" onClick={() => setOpen(o => !o)}
           style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 8, padding: 0 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>SOAP Note</span>
-          <span style={{ fontSize: 11, color: 'var(--text-light)' }}>{soapReady ? '✓ note ready' : '(editable — your clinical record)'}</span>
+          <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, color: 'var(--primary)' }}>SOAP Note</span>
+          <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{soapReady ? '✓ note ready' : '(editable — your clinical record)'}</span>
           <span style={{ marginLeft: 'auto', color: 'var(--text-light)' }}>{open ? '▾' : '▸'}</span>
         </button>
         {open && (
@@ -2498,9 +2499,9 @@ function ScribePanel({ session, embedded = false, onAdvice }) {
               onBlur={() => persistSoap(soapText)}
               rows={10}
               placeholder="Record the consultation to auto-generate the SOAP note here, or type it directly…"
-              style={{ fontSize: 13, lineHeight: 1.6, marginTop: 8 }} />
+              style={{ fontSize: 'calc(13px * var(--fs))', lineHeight: 1.6, marginTop: 8 }} />
             {embedded && advised && (
-              <p style={{ fontSize: 11, color: '#1E8449', marginTop: 4 }}>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--green-on-tint)', marginTop: 4 }}>
                 ✓ A plain-language summary was added to <strong>Patient summary</strong> below — review/edit before saving.
               </p>
             )}

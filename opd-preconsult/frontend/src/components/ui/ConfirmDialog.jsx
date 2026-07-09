@@ -1,34 +1,89 @@
 'use client';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useId } from 'react';
+import { useDialogA11y } from './useDialogA11y';
 
 /**
  * Styled confirmation modal that replaces the browser's native confirm().
- * Mirrors the existing delete-confirmation modal styling in doctor/page.jsx.
+ *
+ * This gates destructive, often irreversible actions, so it carries full dialog
+ * semantics via useDialogA11y: announced as a modal, focus trapped while open,
+ * Escape cancels, focus returns to whatever opened it.
+ *
+ * Options:
+ *   danger        red heading, and a red confirm button — but only when there is
+ *                 something to confirm. With `hideCancel` the lone button merely
+ *                 dismisses, so it stays neutral; a red button would claim the
+ *                 click destroys something.
+ *   icon          emoji shown above the heading (decorative, aria-hidden).
+ *   acknowledge   a checkbox the user must tick before Confirm enables. Use for
+ *                 the truly irreversible ones, not as a speed bump on everything.
+ *   hideCancel    one-button notice (role becomes alertdialog, centred layout).
+ *                 `confirm()` still resolves — true on the button, false on
+ *                 Escape/backdrop.
  *
  * Usage:
  *   const { confirm, dialog } = useConfirm();
- *   ...
  *   if (!(await confirm({ title: 'Delete?', message: '…', danger: true }))) return;
- *   ...
  *   return (<> ...page... {dialog} </>);
  */
-export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, danger, busy, onConfirm, onCancel }) {
+export function ConfirmDialog({
+  title, message, confirmLabel, cancelLabel, danger, busy, icon,
+  acknowledge, hideCancel, onConfirm, onCancel,
+}) {
+  const titleId = useId();
+  const messageId = useId();
+  const [acked, setAcked] = useState(false);
+
+  // Open on the safe control, never on the destructive one: a stray Enter must
+  // not fire an action the user has not read yet. With no Cancel button, the
+  // sole button is the safe one.
+  const safeRef = useRef(null);
+  const panelRef = useDialogA11y(onCancel, { focusRef: safeRef });
+
+  const confirmBlocked = busy || (acknowledge && !acked);
+  // An alert's only button dismisses; it destroys nothing. Painting it red would
+  // claim otherwise. `danger` still colours the heading, which is where the
+  // severity actually belongs.
+  const destructiveButton = danger && !hideCancel;
+  // One-button alerts read as a centred notice; confirmations read as a form.
+  const centred = hideCancel;
+
   return (
     <div onClick={onCancel}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div onClick={e => e.stopPropagation()}
-        style={{ background: 'var(--card-bg)', borderRadius: 12, padding: 24, maxWidth: 440, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}>
-        <h3 style={{ color: danger ? 'var(--red)' : 'var(--primary)', marginBottom: 12, fontSize: 18 }}>{title}</h3>
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div ref={panelRef}
+        role={hideCancel ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={message ? messageId : undefined}
+        onClick={e => e.stopPropagation()}
+        style={{ background: 'var(--card-bg)', borderRadius: 12, padding: 24, maxWidth: 440, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: centred ? 'center' : 'left' }}>
+        {icon && <div aria-hidden="true" style={{ fontSize: 'calc(34px * var(--fs, 1))', marginBottom: 8 }}>{icon}</div>}
+        <h3 id={titleId} style={{ color: danger ? 'var(--red)' : 'var(--primary)', marginBottom: 12, fontSize: 'calc(18px * var(--fs, 1))' }}>{title}</h3>
         {message && (
-          <p style={{ fontSize: 14, lineHeight: 1.55, marginBottom: 18, color: 'var(--text)' }}>{message}</p>
+          <p id={messageId} style={{ fontSize: 'calc(14px * var(--fs, 1))', lineHeight: 1.55, marginBottom: 18, color: 'var(--text)' }}>{message}</p>
         )}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button className="btn btn-outline" style={{ fontSize: 13, padding: '8px 16px', minHeight: 'auto', width: 'auto' }}
-            onClick={onCancel} disabled={busy}>
-            {cancelLabel || 'Cancel'}
-          </button>
-          <button onClick={onConfirm} disabled={busy}
-            style={{ background: danger ? 'var(--red)' : 'var(--primary)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+
+        {acknowledge && (
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 'calc(13px * var(--fs, 1))', marginBottom: 18, cursor: 'pointer' }}>
+            <input type="checkbox" checked={acked} onChange={e => setAcked(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>{acknowledge}</span>
+          </label>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: centred ? 'center' : 'flex-end' }}>
+          {!hideCancel && (
+            <button ref={safeRef} className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs, 1))', padding: '8px 16px', minHeight: 'auto', width: 'auto' }}
+              onClick={onCancel} disabled={busy}>
+              {cancelLabel || 'Cancel'}
+            </button>
+          )}
+          <button ref={hideCancel ? safeRef : undefined} onClick={onConfirm} disabled={confirmBlocked}
+            style={{
+              background: confirmBlocked ? '#ccc' : (destructiveButton ? 'var(--red)' : 'var(--primary)'),
+              color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', minWidth: centred ? 120 : undefined,
+              fontSize: 'calc(13px * var(--fs, 1))', cursor: confirmBlocked ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1,
+            }}>
             {busy ? 'Working…' : (confirmLabel || 'Confirm')}
           </button>
         </div>
@@ -55,8 +110,13 @@ export function useConfirm() {
     if (resolver.current) { resolver.current(val); resolver.current = null; }
   }, []);
 
+  const onConfirm = useCallback(() => settle(true), [settle]);
+  const onCancel = useCallback(() => settle(false), [settle]);
+
   const dialog = state
-    ? <ConfirmDialog {...state} onConfirm={() => settle(true)} onCancel={() => settle(false)} />
+    // Keyed so the acknowledge checkbox resets between openings — otherwise a
+    // previously-ticked box would carry over and pre-arm the next deletion.
+    ? <ConfirmDialog key={state.title} {...state} onConfirm={onConfirm} onCancel={onCancel} />
     : null;
 
   return { confirm, dialog };

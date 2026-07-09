@@ -1,31 +1,97 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap');
+/* Fonts come from next/font/google via app/layout.jsx — self-hosted at build time.
+   Do NOT reintroduce an @import from fonts.googleapis.com: it is a render-blocking
+   call to a third party on every page load (patient IP leak, and a hard failure on
+   a firewalled hospital LAN). */
 
+/* ── Colour tokens ─────────────────────────────────────────────────────────────
+   Every value here is pinned to a WCAG 2.1 AA threshold against the surfaces it
+   is actually used on. The two light surfaces are --card-bg (#FFFFFF) and --bg
+   (#F5F7FA); --bg is the stricter of the two, so text tokens are sized against it.
+
+   Ratios (verified, not estimated):
+     white on --secondary  4.94   |  --secondary on --bg   4.61 (non-text, needs 3)
+     white on --red        4.94   |  --red on --bg         4.60
+     white on --green      4.98   |  --green on --bg       4.64
+     --text on --bg       10.23   |  --text-light on --bg   4.61
+     --primary on --accent 4.60   |  --accent-strong on --bg 3.11 (non-text)
+     --amber-text on white 4.97   |  #5A3E00 on --amber     4.62
+     --border on white     3.11   |  --dot-idle on --bg     3.13
+
+   The semantic colours are the highest-stakes pixels in a clinical UI, so they
+   carry the least slack: if you retint one, recompute it. --accent is split in
+   two because a single teal cannot be light enough for --primary text to sit on
+   it AND dark enough to read as a filled dot against --bg. */
 :root {
   --primary: #1B4F72;
-  --secondary: #2E86AB;
-  --accent: #48C9B0;
-  --red: #D9544D;
+  --primary-hover: #154360;
+  /* Surfaces that carry white text. */
+  --secondary: #29789A;
+  --red: #BE4A44;
+  --green: #2F7E4F;
+  /* --amber stays vivid: it is only ever a background, and always pairs with the
+     dark brown --amber-on below rather than white. */
   --amber: #E0A82E;
-  --green: #3FA869;
+  --amber-on: #5A3E00;
+  /* Amber as *text* on a light surface has to be far darker than the swatch. */
+  --amber-text: #8E6A1D;
+  /* Status text sitting on its OWN pale tint chip (#EAFAF1/#D5F5E3 green,
+     #FCF3CF/#FEF9E7 amber) needs another step down: the tint eats ~0.3 of the
+     ratio, so --green (4.27) and --amber-text (4.46) both miss 4.5 there. */
+  --green-on-tint: #1C7943;
+  --amber-on-tint: #98620C;
+  /* Light surface that carries --primary text (.btn-accent, Assist toggle). */
+  --accent: #5CCFB9;
+  /* Same hue, dark enough to read as a graphic against --bg (.dot.done). */
+  --accent-strong: #389C89;
   --bg: #F5F7FA;
   --card-bg: #FFFFFF;
   --text: #2C3E50;
-  --text-light: #7F8C8D;
+  --text-light: #687273;
+  /* Non-text: input outlines, dividers, and the unfilled progress dot. Must clear
+     3:1 (SC 1.4.11) — the old #E0E0E0 sat at 1.32:1, so an empty required field
+     was effectively borderless. */
+  --border: #929292;
+  --dot-idle: #8C8C8C;
   /* Patient-flow text-size multiplier (A / A+ / A++). Set by A11yProvider on the
      patient routes only; 1 everywhere else. Scaling fonts (not zoom) keeps the
-     layout within the phone's width — text just grows and reflows. */
+     layout within the phone's width — text just grows and reflows. The doctor and
+     HIS dashboards scale by root zoom instead — see A11yProvider. */
   --fs: 1;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: 'Noto Sans', sans-serif;
+  /* Per-character fallback: Latin resolves in Noto Sans, Devanagari and Telugu in
+     their own families. Order matters only in that each script's font must appear. */
+  font-family: var(--font-noto-sans), var(--font-noto-devanagari), var(--font-noto-telugu), sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   /* Base size scales with --fs so headings (em-based) and body text grow together. */
   font-size: calc(16px * var(--fs, 1));
+}
+
+/* Keyboard focus must stay visible everywhere. The old rule killed the ring on
+   .input and left only a border-colour change, which a keyboard-only clinician
+   doing fast data entry cannot track. :focus-visible keeps mouse clicks clean.
+   Do NOT set border-radius here — that changes the *element's* radius, not the
+   ring's. Outlines already follow the element's own corners. */
+:focus-visible {
+  outline: 3px solid var(--secondary);
+  outline-offset: 2px;
+}
+
+/* Respect the OS "reduce motion" setting — the recording button's throb and the
+   waiting-room board's pulse both run infinitely and can trigger vestibular
+   symptoms (SC 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Reserve a top strip for the fixed accessibility bar (A11yProvider: Text size +
@@ -75,7 +141,7 @@ body.has-a11y-bar .screen { padding-top: 2px; }
 }
 
 .btn-primary { background: var(--primary); color: #fff; }
-.btn-primary:hover { background: #154360; }
+.btn-primary:hover { background: var(--primary-hover); }
 .btn-secondary { background: var(--secondary); color: #fff; }
 .btn-outline { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
 .btn-accent { background: var(--accent); color: var(--primary); }
@@ -85,14 +151,24 @@ body.has-a11y-bar .screen { padding-top: 2px; }
   width: 100%;
   min-height: calc(48px * var(--fs, 1));
   padding: 12px 16px;
-  border: 2px solid #E0E0E0;
+  border: 2px solid var(--border);
   border-radius: 12px;
   font-size: calc(16px * var(--fs, 1));
   font-family: inherit;
-  outline: none;
   transition: border-color 0.2s;
 }
-.input:focus { border-color: var(--secondary); }
+/* A field already carries a 2px border. Recolouring that border AND drawing the
+   global outline 2px outside it renders as two concentric rings with a white gap
+   — which is what it looked like. Opt inputs out of the outline and give them one
+   ring instead: the border itself is the indicator (--secondary is 4.94:1 against
+   the card, clearing SC 1.4.11's 3:1 floor) with a soft halo bleeding outward, so
+   there is no second hard edge. The halo is decorative; the border carries it. */
+.input:focus,
+.input:focus-visible {
+  outline: none;
+  border-color: var(--secondary);
+  box-shadow: 0 0 0 3px rgba(41, 120, 154, 0.22);
+}
 
 .progress-dots {
   display: flex;
@@ -103,10 +179,10 @@ body.has-a11y-bar .screen { padding-top: 2px; }
 .dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: #E0E0E0;
+  background: var(--dot-idle);
 }
 .dot.active { background: var(--secondary); }
-.dot.done { background: var(--accent); }
+.dot.done { background: var(--accent-strong); }
 
 .lang-selector {
   display: flex;
@@ -132,10 +208,10 @@ body.has-a11y-bar .screen { padding-top: 2px; }
   padding: 4px 12px;
   border-radius: 20px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: calc(14px * var(--fs, 1));
 }
 .triage-RED { background: var(--red); color: #fff; }
-.triage-AMBER { background: var(--amber); color: #5A3E00; }
+.triage-AMBER { background: var(--amber); color: var(--amber-on); }
 .triage-GREEN { background: var(--green); color: #fff; }
 
 .voice-btn {
@@ -188,9 +264,11 @@ body.has-a11y-bar .screen { padding-top: 2px; }
 .scrolly::-webkit-scrollbar-thumb:hover { background: #a9b5c2; }
 
 .report-section { margin-bottom: 16px; }
-.report-section h3 { font-size: 14px; color: var(--text-light); margin-bottom: 8px; }
+.report-section h3 { font-size: calc(14px * var(--fs, 1)); color: var(--text-light); margin-bottom: 8px; }
 
-.flag-warning { color: var(--amber); }
+/* These are `color:` on a light card, so they use the text-safe amber, not the
+   swatch — #E0A82E on white is 2.14:1 and unreadable. */
+.flag-warning { color: var(--amber-text); }
 .flag-critical { color: var(--red); }
 
 /* ── Assisted / Easy mode — high-contrast for elderly / low-literacy patients.
@@ -204,4 +282,9 @@ html.assist {
 html.assist body { background: #ffffff; }
 html.assist .card { border: 2px solid var(--primary); box-shadow: 0 2px 12px rgba(0,0,0,0.18); }
 html.assist .input { border-color: var(--primary); }
+/* `html.assist .input` (0,2,1) outranks `.input:focus` (0,2,0), so without this
+   the border would stay --primary on focus and the ring would not change colour
+   in the very mode that needs it most. */
+html.assist .input:focus,
+html.assist .input:focus-visible { border-color: var(--secondary); }
 html.assist .btn-outline { border-width: 3px; }

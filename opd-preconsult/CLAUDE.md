@@ -14,7 +14,8 @@ This is a POC **but it is intended for real deployment in Indian hospitals.** Ma
 - **Data privacy (India DPDP Act 2023):** patient data is sensitive PHI. Consent before collection (already in flow); minimize what's stored; **de-identify any data used for testing/benchmarking**; secure storage, access control, audit trail, and deletion support. **Encryption at rest (B1):** uploaded PHI in MinIO is encrypted (SSE-S3) when `MINIO_KMS_SECRET_KEY` is set — required in `docker-compose.prod.yml`, enabled best-effort in `storage.py`; Postgres relies on host disk/volume encryption (see `deploy/OPERATIONS.md`). **Access audit (B7):** viewing a patient's report (`GET /api/report/{id}`) logs a `patient_viewed` row to `audit_log` via `view_audit.py` (deduped ~5 min, non-blocking). **Deletion/retention (B2) still TODO.**
 - **Validation:** AI components (OCR / Bhashini ASR / NMT) must be benchmarked against held-out labeled datasets with agreed acceptance thresholds before clinical reliance; re-run on every model/prompt change (regression). Pin model + prompt versions in any accuracy report for reproducibility.
 - **Auth / access control:** node-backend JWT is hardened — `dev_secret` removed (fails closed in production without a strong `JWT_SECRET`; uses a random ephemeral key in dev). Tokens carry a `role` (`patient`/`doctor`/`admin`) enforced by `requireRole` (`middleware/auth.js`). Mutating admin/doctor-management/analytics/protocol/prescription endpoints are now role-gated, and the HIS dashboard sits behind an admin passcode login (`POST /api/admin/login`, env `ADMIN_PASSCODE`). **python-backend is now JWT-gated too** (pilot A1): `services/python-backend/src/auth.py` verifies the SAME login token (HS256, shared `JWT_SECRET`, stdlib — no pyjwt) via a `require_auth` FastAPI dependency applied to all sensitive routers in `main.py`. Media-`<src>` GETs stay open per-route (`/api/audio/clip/{id}`, `/api/ocr/documents/image/{id}`) plus `/api/transcribe/health`. `DEMO_QR_SECRET` now fails closed in production (prescription.js). **Required env:** `JWT_SECRET` (strong — now needed in dev too, since python can't verify node's ephemeral key), `ADMIN_PASSCODE` (≥6), `DEMO_QR_SECRET` (strong) — in `.env` (gitignored); run `node scripts/gen-secrets.js` to generate all. The HIS admin login now requires the admin's **name** (A9); a global middleware in `index.js` audits every successful admin mutation to `audit_log` (`admin_action`, who/what). **Still open (release blockers):** admin is still a single shared passcode (no per-user *accounts*/SSO — named-admin audit only); no per-hospital tenancy; per-user role-gating of doctor-only python routers is a refinement (currently any valid token).
-- **Clinical-use disclaimer:** a persistent "Investigational — not for clinical use" banner (`components/Disclaimer.jsx`, rendered in `app/layout.jsx`) shows on every surface, localised (en/hi/te) on patient pages. Keep it until each AI component is formally validated.
+- **Patient AI notice:** a one-time notice on the **consent page only** (`app/patient/consent/page.jsx`, strings `ai_notice_title` / `ai_notice_body` in en/hi/te). It states exactly what AI does here — speech-to-text, translation, reading uploaded documents, drafting the doctor's summary — and that **AI does not decide urgency and does not diagnose**. That last part is literally true and must stay true: see the triage note below. Deliberately not a persistent banner. (An unused `disclaimer` string remains in `lib/i18n.js` for a future clinician-facing surface; there is no `Disclaimer.jsx`.)
+- **Triage is deterministic — keep it that way.** `sessions.triage_level` has exactly three writers, all rule-based and all monotonic (escalate-only, never downgrade): `routes/questionnaire.js` and `routes/whatsapp.js` (admin-authored `triage_flag` on a question node) and `routers/triage.py` (hardcoded symptom/vitals rules). **No LLM writes triage.** `routers/llm.py` parses a `TRIAGE_FLAG` out of model output, but only returns it — and `/api/llm/interview` is currently called by nothing. Before wiring that endpoint up, get a human decision: it would make an LLM an input to patient acuity, which changes the regulatory posture (SaMD) and invalidates the patient notice above. It also has a live bug — `llm.py` returns `{symptom, level}` while `app/patient/interview/page.jsx` compares `triage_flag === 'RED'`, so the emergency screen would never fire.
 - **Reliability:** avoid in-memory-only critical state (e.g., WhatsApp conversation state), keep migrations idempotent, keep graceful degradation (LLM already falls back to rule-based).
 
 ---
@@ -98,6 +99,30 @@ docker compose down -v
 ---
 
 ## Code Style Rules (NON-NEGOTIABLE)
+
+### Frontend UI / accessibility
+The UI targets **WCAG 2.1 AA** (reachable via GIGW 3.0 / IS 17802 / RPwD Act 2016 for
+government-hospital deployment). `cd frontend && npm run check:contrast` asserts the
+token palette and **must pass** — several tokens sit within 0.15 of their floor.
+- All colour comes from CSS custom properties in `app/globals.css`. Never inline a new
+  hex for a semantic colour. If you add one, add its pair to `scripts/check-contrast.mjs`.
+  If the check fails, darken the colour — never relax the threshold.
+- Amber is a light swatch: pair it with `--amber-on` (dark ink), **never white** (1.93:1).
+  Amber text on a light surface is `--amber-text`; on a pale amber chip, `--amber-on-tint`.
+  Same split for `--green` / `--green-on-tint`.
+- Inline font sizes in `doctor/page.jsx` and `his/page.jsx` must be written
+  `calc(Npx * var(--fs))`. A bare `fontSize: 13` silently ignores the text-size control.
+  Never scale these pages with CSS `zoom` — the doctor shell is `height: 100vh; overflow: hidden`.
+- Modals: use `useConfirm()` (confirmations) or `<Modal>` / `useDialogA11y` (content
+  dialogs) from `components/ui/`. They provide `role="dialog"`, `aria-modal`, focus trap,
+  Escape, and focus restore. Do not hand-roll a `position: fixed; inset: 0` overlay.
+- Fonts come from `next/font/google` in `app/layout.jsx` (self-hosted at build time).
+  Never reintroduce an `@import` from `fonts.googleapis.com` — it leaks patient IPs and
+  breaks on a firewalled hospital LAN. Devanagari and Telugu need their own families;
+  plain `Noto Sans` has no glyphs for either.
+- The public queue board (`/queue`, `GET /api/queue/board`) is unauthenticated: token
+  numbers only. **Never** add `triage_level` back to it — a token is de-anonymised the
+  moment it is called, so per-token acuity discloses health status to the waiting room.
 
 ### JavaScript (node-backend + frontend)
 - No `console.log` in committed code — use the existing logger pattern in the codebase

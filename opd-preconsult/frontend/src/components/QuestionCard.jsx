@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import VoiceButton from './VoiceButton';
 import ListenButton from './ListenButton';
+import Modal from './ui/Modal';
 import { api } from '../lib/api';
 import { t } from '../lib/i18n';
 
@@ -266,27 +267,28 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
           {/* Voice-language picker — appears on the first mic tap; the chosen
               language applies to every mic for the rest of the session. */}
           {showLangPicker && (
-            <>
-              <div onClick={() => setShowLangPicker(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
-              <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+            <Modal
+              onClose={() => setShowLangPicker(false)}
+              labelledBy="voice-lang-title"
+              scrimStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }}
+              panelStyle={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
                 width: 320, maxWidth: '90vw', background: '#fff', borderRadius: 16, padding: 22, boxShadow: '0 12px 40px rgba(0,0,0,0.22)', textAlign: 'center' }}>
-                <div style={{ fontSize: 30, marginBottom: 6 }}>🎙️</div>
-                <h3 style={{ fontSize: 16, color: 'var(--primary)', marginBottom: 16 }}>
-                  {lang === 'hi' ? 'आप किस भाषा में बोलेंगे?' : lang === 'te' ? 'మీరు ఏ భాషలో మాట్లాడతారు?' : 'Which language will you speak in?'}
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {[['en', 'English'], ['hi', 'हिंदी'], ['te', 'తెలుగు']].map(([code, label]) => (
-                    <button key={code} type="button" onClick={() => chooseVoiceLang(code)}
-                      style={{ height: 48, borderRadius: 12, fontSize: 16, fontWeight: 600, cursor: 'pointer',
-                        background: voiceLang === code ? 'var(--secondary)' : '#fff',
-                        color: voiceLang === code ? '#fff' : 'var(--primary)',
-                        border: `1.5px solid ${voiceLang === code ? 'var(--secondary)' : '#CBD5E0'}` }}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <div aria-hidden="true" style={{ fontSize: 30, marginBottom: 6 }}>🎙️</div>
+              <h3 id="voice-lang-title" style={{ fontSize: 16, color: 'var(--primary)', marginBottom: 16 }}>
+                {lang === 'hi' ? 'आप किस भाषा में बोलेंगे?' : lang === 'te' ? 'మీరు ఏ భాషలో మాట్లాడతారు?' : 'Which language will you speak in?'}
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[['en', 'English'], ['hi', 'हिंदी'], ['te', 'తెలుగు']].map(([code, label]) => (
+                  <button key={code} type="button" onClick={() => chooseVoiceLang(code)}
+                    style={{ height: 48, borderRadius: 12, fontSize: 16, fontWeight: 600, cursor: 'pointer',
+                      background: voiceLang === code ? 'var(--secondary)' : '#fff',
+                      color: voiceLang === code ? '#fff' : 'var(--primary)',
+                      border: `1.5px solid ${voiceLang === code ? 'var(--secondary)' : '#CBD5E0'}` }}>
+                    {label}
+                  </button>
+                ))}
               </div>
-            </>
+            </Modal>
           )}
 
           {/* Contextual document upload */}

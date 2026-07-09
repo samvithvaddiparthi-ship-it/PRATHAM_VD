@@ -1,0 +1,10 @@
+# The Dockerfile does `npm install` (Alpine/Linux) and then `COPY . .`. Without
+# this file, a node_modules built on the developer's host gets copied over that
+# install — and native binaries do not travel: a Windows or macOS box leaves
+# @next/swc-win32-x64-msvc / -darwin-arm64 where the image needs -linux-musl,
+# and `npm run build` fails inside the container. Same for a stale .next.
+node_modules
+.next
+npm-debug.log
+.env
+.env.local

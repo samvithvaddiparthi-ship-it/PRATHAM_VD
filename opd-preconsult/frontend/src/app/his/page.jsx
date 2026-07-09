@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { api, setToken } from '../../lib/api';
 import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
@@ -8,6 +8,8 @@ import RxDocument from '../../components/RxDocument';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
+import { useDialogA11y } from '../../components/ui/useDialogA11y';
+import Modal from '../../components/ui/Modal';
 
 // Registration date+time for a session, e.g. "19 Jun, 2:45 PM".
 function fmtDateTime(ts) {
@@ -93,7 +95,7 @@ function AdminLogin({ onSuccess }) {
         display: 'flex', flexDirection: 'column', gap: 18,
       }}>
         <h2 style={{ textAlign: 'center', margin: 0 }}>HIS Admin</h2>
-        <p style={{ color: 'var(--text-light)', fontSize: 14, textAlign: 'center', margin: 0 }}>
+        <p style={{ color: 'var(--text-light)', fontSize: 'calc(14px * var(--fs))', textAlign: 'center', margin: 0 }}>
           Enter your name and the admin passcode to continue.
         </p>
         <input
@@ -110,7 +112,7 @@ function AdminLogin({ onSuccess }) {
           onChange={e => setPasscode(e.target.value)}
           placeholder="Admin passcode"
         />
-        {error && <div style={{ color: 'var(--red)', fontSize: 14, textAlign: 'center' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--red)', fontSize: 'calc(14px * var(--fs))', textAlign: 'center' }}>{error}</div>}
         <button className="btn btn-primary" type="submit" disabled={loading || !passcode || name.trim().length < 2}>
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
@@ -257,39 +259,39 @@ function HISDashboard() {
       <style>{`@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: 20, color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
-        <span style={{ fontSize: 13, color: 'var(--text-light)' }}>Hospital Information System</span>
+        <h1 style={{ fontSize: 'calc(20px * var(--fs))', color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
+        <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Hospital Information System</span>
         {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
         <button onClick={refreshActive} disabled={refreshing}
           title="Refresh" aria-label="Refresh"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
-          <span style={{ display: 'inline-block', fontSize: 15, animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+          <span style={{ display: 'inline-block', fontSize: 'calc(15px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
           {refreshing ? 'Refreshing' : 'Refresh'}
         </button>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className={`btn ${tab === 'sessions' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('sessions')}>Patients</button>
           <button className={`btn ${tab === 'analytics' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('analytics')}>Analytics</button>
           <button className={`btn ${tab === 'departments' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('departments')}>Departments</button>
           <button className={`btn ${tab === 'doctors' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('doctors')}>Doctors</button>
           <button className={`btn ${tab === 'questions' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('questions')}>Questionnaires</button>
           <button className={`btn ${tab === 'protocols' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('protocols')}>Protocols</button>
           <button className={`btn ${tab === 'formulary' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('formulary')}>Drug Formulary</button>
           <button className={`btn ${tab === 'rxtemplate' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={() => setTab('rxtemplate')}>Rx Template</button>
         </div>
       </div>
@@ -315,7 +317,7 @@ function HISDashboard() {
           The Doctor list is scoped to the chosen Department so they can't
           contradict; changing department drops an out-of-dept doctor. */}
       {(() => {
-        const fieldLabel = { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 6, display: 'block' };
+        const fieldLabel = { fontSize: 'calc(11px * var(--fs))', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 6, display: 'block' };
         const selectStyle = { width: '100%', height: 40 };
         const activeCount = [filters.department, filters.doctor_id, filters.triage, filters.state].filter(Boolean).length;
         const doctorOptions = doctors.filter(d => !filters.department || d.department === filters.department);
@@ -365,9 +367,9 @@ function HISDashboard() {
               {/* ghost overlay — mirrors typed text (transparent) then grey tail */}
               {ghostTail && (
                 <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
-                  display: 'flex', alignItems: 'center', fontSize: 14, whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+                  display: 'flex', alignItems: 'center', fontSize: 'calc(14px * var(--fs))', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
                   <span style={{ color: 'transparent' }}>{search}</span>
-                  <span style={{ color: '#A0AEC0' }}>{ghostTail}</span>
+                  <span style={{ color: 'var(--text-light)' }}>{ghostTail}</span>
                 </div>
               )}
               <input
@@ -379,7 +381,7 @@ function HISDashboard() {
                 }}
                 placeholder="Search patient name or phone…"
                 style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
-                  border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 14, background: 'transparent',
+                  border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', background: 'transparent',
                   outline: 'none', position: 'relative' }}
               />
               {search && (
@@ -398,11 +400,11 @@ function HISDashboard() {
                     <button key={s.id} onClick={() => { setSearch(s.patient_name || s.patient_phone || ''); selectSession(s); }}
                       style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
                         gap: 8, padding: '9px 12px', background: 'none', border: 'none', borderBottom: '1px solid #F2F2F2',
-                        cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                        cursor: 'pointer', textAlign: 'left', fontSize: 'calc(13px * var(--fs))' }}
                       onMouseEnter={e => { e.currentTarget.style.background = '#F5F9FC'; }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
                       <span style={{ fontWeight: 600 }}>{s.patient_name || 'Unregistered'}</span>
-                      <span style={{ color: 'var(--text-light)', fontSize: 12 }}>{formatPhoneDisplay(s.patient_phone) || ''} · {s.department}</span>
+                      <span style={{ color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))' }}>{formatPhoneDisplay(s.patient_phone) || ''} · {s.department}</span>
                     </button>
                   ))}
                 </div>
@@ -416,7 +418,7 @@ function HISDashboard() {
                   display: 'inline-flex', alignItems: 'center', gap: 8, height: 40, padding: '0 16px',
                   background: activeCount ? 'var(--secondary)' : '#fff', color: activeCount ? '#fff' : 'var(--primary)',
                   border: `1px solid ${activeCount ? 'var(--secondary)' : '#CBD5E0'}`, borderRadius: 10,
-                  fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                  fontSize: 'calc(14px * var(--fs))', fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
@@ -425,7 +427,7 @@ function HISDashboard() {
                 {activeCount > 0 && (
                   <span style={{ background: activeCount ? 'rgba(255,255,255,0.25)' : 'var(--secondary)',
                     color: '#fff', borderRadius: 10, minWidth: 20, height: 20, padding: '0 6px',
-                    fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                    fontSize: 'calc(12px * var(--fs))', fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                     {activeCount}
                   </span>
                 )}
@@ -490,7 +492,7 @@ function HISDashboard() {
                         height: 40, marginTop: 2, width: '100%', borderRadius: 10,
                         background: activeCount ? '#FDEDEC' : '#F1F3F5', color: activeCount ? '#C0392B' : '#A0A0A0',
                         border: `1px solid ${activeCount ? '#F1B0A8' : '#E2E2E2'}`,
-                        fontSize: 13, fontWeight: 600, cursor: activeCount ? 'pointer' : 'default', transition: 'background 0.12s',
+                        fontSize: 'calc(13px * var(--fs))', fontWeight: 600, cursor: activeCount ? 'pointer' : 'default', transition: 'background 0.12s',
                       }}>
                       <XIcon /> Clear filters
                     </button>
@@ -499,7 +501,7 @@ function HISDashboard() {
               )}
             </div>
 
-            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+            <span style={{ fontSize: 'calc(14px * var(--fs))', fontWeight: 600, color: 'var(--text)' }}>
               {visibleSessions.length}
               <span style={{ color: 'var(--text-light)', fontWeight: 400 }}> patient{visibleSessions.length !== 1 ? 's' : ''}</span>
             </span>
@@ -512,7 +514,7 @@ function HISDashboard() {
         <div style={{ flex: 1, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
             <thead>
-              <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 13 }}>
+              <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 'calc(13px * var(--fs))' }}>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Patient</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Dept</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>Triage</th>
@@ -527,34 +529,34 @@ function HISDashboard() {
                 <tr key={s.id} onClick={() => selectSession(s)}
                   style={{ cursor: 'pointer', borderBottom: '1px solid #F0F0F0',
                     background: selected?.id === s.id ? '#EBF5FB' : 'transparent' }}>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     <strong>{s.patient_name || 'Unregistered'}</strong>
-                    <br /><span style={{ color: 'var(--text-light)', fontSize: 11 }}>
+                    <br /><span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>
                       {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · #{s.queue_slot || '-'}
                     </span>
                     {s.created_at && (
-                      <><br /><span style={{ color: 'var(--text-light)', fontSize: 11 }}>
+                      <><br /><span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>
                         🗓 {fmtDateTime(s.created_at)}
                       </span></>
                     )}
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>{s.department}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>{s.department}</td>
                   <td style={{ padding: '10px 12px' }}><TriageBadge level={s.triage_level} /></td>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     {(() => { const m = stateMeta(s.display_state); return (
-                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: m.bg, color: m.fg }}>{m.label}</span>
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 'calc(11px * var(--fs))', background: m.bg, color: m.fg }}>{m.label}</span>
                     ); })()}
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     {(() => {
                       const dur = consultDuration(s);
                       if (dur) return <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>⏱ {dur}</span>;
-                      if (s.consulted_at && !s.dispatched_at) return <span style={{ color: 'var(--amber)', fontSize: 11 }}>In progress</span>;
-                      return <span style={{ color: 'var(--text-light)', fontSize: 11 }}>—</span>;
+                      if (s.consulted_at && !s.dispatched_at) return <span style={{ color: 'var(--amber)', fontSize: 'calc(11px * var(--fs))' }}>In progress</span>;
+                      return <span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>—</span>;
                     })()}
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>
-                    {s.doctor_name || <span style={{ color: 'var(--amber)', fontSize: 11 }}>Unassigned</span>}
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
+                    {s.doctor_name || <span style={{ color: 'var(--amber)', fontSize: 'calc(11px * var(--fs))' }}>Unassigned</span>}
                   </td>
                   <td style={{ padding: '10px 12px' }} onClick={e => e.stopPropagation()}>
                     <select
@@ -564,7 +566,7 @@ function HISDashboard() {
                         if (val) handleReassign(s.id, val);
                         else handleUnassign(s.id);
                       }}
-                      style={{ border: '1px solid #ccc', borderRadius: 6, padding: '4px 6px', fontSize: 12, cursor: 'pointer', maxWidth: 160 }}>
+                      style={{ border: '1px solid #ccc', borderRadius: 6, padding: '4px 6px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', maxWidth: 160 }}>
                       <option value="">Unassigned</option>
                       {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
@@ -585,11 +587,11 @@ function HISDashboard() {
           <div style={{ width: 480, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', maxHeight: 'calc(100vh - 120px)', overflow: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
               <TriageBadge level={selected.triage_level} />
-              <h3 style={{ fontSize: 16 }}>{selected.patient_name}</h3>
+              <h3 style={{ fontSize: 'calc(16px * var(--fs))' }}>{selected.patient_name}</h3>
               <button onClick={() => { setSelected(null); setReport(null); }}
-                style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
             </div>
-            <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 12 }}>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
               {selected.patient_age ? `${selected.patient_age}y` : ''} {selected.patient_gender || ''} · {selected.department} · Doctor: {selected.doctor_name || 'Unassigned'}
             </p>
 
@@ -598,7 +600,7 @@ function HISDashboard() {
             <div style={{ display: 'flex', gap: 10, marginBottom: 14, borderBottom: '1px solid #E2E8F0' }}>
               {[['report', 'Report'], ['prescription', `Prescription${rxList.length ? ` (${rxList.length})` : ''}`], ['documents', `Uploaded${docs.length ? ` (${docs.length})` : ''}`]].map(([key, lbl]) => (
                 <button key={key} onClick={() => setDetailTab(key)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px 2px', fontSize: 13, fontWeight: 600,
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px 2px', fontSize: 'calc(13px * var(--fs))', fontWeight: 600,
                     color: detailTab === key ? 'var(--primary)' : 'var(--text-light)',
                     borderBottom: detailTab === key ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -1 }}>
                   {lbl}
@@ -610,7 +612,7 @@ function HISDashboard() {
             {detailTab === 'report' && (
               loading ? <p style={{ color: 'var(--text-light)' }}>Loading report...</p>
               : report ? (
-                <div style={{ lineHeight: 1.7, fontSize: 14 }}>
+                <div style={{ lineHeight: 1.7, fontSize: 'calc(14px * var(--fs))' }}>
                   <ReactMarkdown>{report.report_md}</ReactMarkdown>
                 </div>
               ) : <p style={{ color: 'var(--text-light)' }}>No report generated yet.</p>
@@ -654,8 +656,8 @@ function HISDashboard() {
                   {docs.map(d => (
                     <div key={d.id} style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0' }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
-                        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-light)' }}>{d.created_at ? fmtDateTime(d.created_at) : ''}</span>
+                        <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, textTransform: 'capitalize' }}>{String(d.doc_type || 'document').replace(/_/g, ' ')}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{d.created_at ? fmtDateTime(d.created_at) : ''}</span>
                       </div>
                       <div style={{ padding: 12 }}>
                         {d.image_key ? (
@@ -664,7 +666,7 @@ function HISDashboard() {
                               style={{ width: '100%', objectFit: 'contain', borderRadius: 6, border: '1px solid #EEF2F6', background: '#fff', cursor: 'zoom-in' }} />
                           </a>
                         ) : (
-                          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>
+                          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>
                             Original file not available — this was uploaded before document storage was enabled.
                           </p>
                         )}
@@ -778,8 +780,8 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
     return acc;
   }, { total: 0, completed: 0, active: 0, severe: 0 });
 
-  const th = { padding: '11px 14px', textAlign: 'left', fontSize: 12, fontWeight: 700, letterSpacing: 0.3, whiteSpace: 'nowrap' };
-  const td = { padding: '11px 14px', fontSize: 13, whiteSpace: 'nowrap' };
+  const th = { padding: '11px 14px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', fontWeight: 700, letterSpacing: 0.3, whiteSpace: 'nowrap' };
+  const td = { padding: '11px 14px', fontSize: 'calc(13px * var(--fs))', whiteSpace: 'nowrap' };
   const numChip = (n, color) => (
     <span style={{ fontWeight: 700, color: n ? color : 'var(--text-light)' }}>{n}</span>
   );
@@ -811,9 +813,9 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
           </span>
           {ghostTail && (
             <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
-              display: 'flex', alignItems: 'center', fontSize: 14, whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+              display: 'flex', alignItems: 'center', fontSize: 'calc(14px * var(--fs))', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
               <span style={{ color: 'transparent' }}>{search}</span>
-              <span style={{ color: '#A0AEC0' }}>{ghostTail}</span>
+              <span style={{ color: 'var(--text-light)' }}>{ghostTail}</span>
             </div>
           )}
           <input
@@ -825,7 +827,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
             }}
             placeholder="Search doctor name or department…"
             style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
-              border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 14, background: 'transparent', outline: 'none' }}
+              border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', background: 'transparent', outline: 'none' }}
           />
           {search && (
             <button onClick={() => setSearch('')} title="Clear search"
@@ -838,7 +840,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
           )}
         </div>
         <button className="btn btn-primary" onClick={() => setShowAdd(true)}
-          style={{ marginLeft: 'auto', height: 40, width: 'auto', padding: '0 18px', fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          style={{ marginLeft: 'auto', height: 40, width: 'auto', padding: '0 18px', fontSize: 'calc(14px * var(--fs))', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           + Add Doctor
         </button>
       </div>
@@ -853,8 +855,8 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
         ].map(([label, val, color]) => (
           <div key={label} style={{ background: '#fff', borderRadius: 12, padding: '12px 18px',
             boxShadow: '0 1px 4px rgba(0,0,0,0.06)', minWidth: 120 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color }}>{val}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
+            <div style={{ fontSize: 'calc(22px * var(--fs))', fontWeight: 700, color }}>{val}</div>
+            <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
           </div>
         ))}
       </div>
@@ -886,14 +888,14 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
                   style={{ borderBottom: '1px solid #F0F0F0', cursor: 'pointer', opacity: d.is_active ? 1 : 0.55,
                     background: selected?.id === d.id ? '#EBF5FB' : 'transparent' }}>
                   <td style={{ ...td, fontWeight: 600 }}>{d.name}</td>
-                  <td style={td}><span style={{ fontSize: 12, color: 'var(--text-light)' }}>{d.department || '—'}</span></td>
+                  <td style={td}><span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{d.department || '—'}</span></td>
                   <td style={{ ...td, textAlign: 'center' }}>{numChip(st.total, 'var(--text)')}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{numChip(st.completed, 'var(--green)')}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{numChip(st.active, 'var(--secondary)')}</td>
                   <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{fmtMs(avgMsFor(d))}</td>
-                  <td style={td}><span style={{ fontSize: 12, color: 'var(--text-light)' }}>{st.lastAt ? fmtDateTime(st.lastAt) : '—'}</span></td>
+                  <td style={td}><span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{st.lastAt ? fmtDateTime(st.lastAt) : '—'}</span></td>
                   <td style={{ ...td, textAlign: 'center' }}>
-                    <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11,
+                    <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 'calc(11px * var(--fs))',
                       background: d.is_active ? '#D5F5E3' : '#F8F9FA', color: d.is_active ? '#1E8449' : 'var(--text-light)' }}>
                       {d.is_active ? 'Active' : 'Inactive'}
                     </span>
@@ -910,43 +912,46 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
         const st = stats[selected.id] || { total: 0, completed: 0, active: 0, severe: 0, durMs: [], lastAt: null };
         const cell = (label, val, color, small) => (
           <div style={{ background: '#F8FAFC', borderRadius: 10, padding: '10px 12px' }}>
-            <div style={{ fontSize: small ? 14 : 18, fontWeight: 700, color: color || 'var(--text)' }}>{val}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
+            <div style={{ fontSize: `calc(${small ? 14 : 18}px * var(--fs))`, fontWeight: 700, color: color || 'var(--text)' }}>{val}</div>
+            <div style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
           </div>
         );
         return (
-          <>
-            <div onClick={() => setSelected(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 50 }} />
-            <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 380, background: '#fff', zIndex: 51,
+          <Modal
+            onClose={() => setSelected(null)}
+            labelledBy="patient-drawer-title"
+            scrimStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 50 }}
+            panelStyle={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 380, background: '#fff', zIndex: 51,
               boxShadow: '-6px 0 24px rgba(0,0,0,0.15)', padding: 22, overflowY: 'auto' }}>
+            <div>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
                 <div style={{ flex: 1 }}>
-                  <h3 style={{ fontSize: 18, color: 'var(--primary)' }}>{selected.name}</h3>
-                  <span style={{ fontSize: 12, color: 'var(--text-light)' }}>{selected.department}</span>
+                  <h3 id="patient-drawer-title" style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)' }}>{selected.name}</h3>
+                  <span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{selected.department}</span>
                 </div>
-                <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+                <button type="button" onClick={() => setSelected(null)} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
                 </button>
               </div>
 
               {/* Identity */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
                 {[['Phone', formatPhoneDisplay(selected.phone) || '—'], ['Department', selected.department || '—'], ['Reg. no.', selected.registration_no || '—']].map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'calc(13px * var(--fs))' }}>
                     <span style={{ color: 'var(--text-light)' }}>{k}</span>
                     <span style={{ fontWeight: 600 }}>{v}</span>
                   </div>
                 ))}
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'calc(13px * var(--fs))', alignItems: 'center' }}>
                   <span style={{ color: 'var(--text-light)' }}>Status</span>
-                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: selected.is_active ? '#D5F5E3' : '#F8F9FA', color: selected.is_active ? '#1E8449' : 'var(--text-light)' }}>
+                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 'calc(11px * var(--fs))', background: selected.is_active ? '#D5F5E3' : '#F8F9FA', color: selected.is_active ? '#1E8449' : 'var(--text-light)' }}>
                     {selected.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </div>
               </div>
 
               {/* Stats */}
-              <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Workload (all-time)</p>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Workload (all-time)</p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                 {cell('Total', st.total)}
                 {cell('Completed', st.completed, 'var(--green)')}
@@ -956,23 +961,23 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
               </div>
 
               <button onClick={() => setShowEdit(true)}
-                style={{ marginTop: 18, width: '100%', height: 42, borderRadius: 10, background: '#fff', color: 'var(--primary)', border: '1px solid #CBD5E0', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                style={{ marginTop: 18, width: '100%', height: 42, borderRadius: 10, background: '#fff', color: 'var(--primary)', border: '1px solid #CBD5E0', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, cursor: 'pointer' }}>
                 Edit details
               </button>
 
               {selected.is_active ? (
                 <button onClick={() => handleDeactivate(selected)}
-                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#FDEDEC', color: '#C0392B', border: '1px solid #F1B0A8', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#FDEDEC', color: '#C0392B', border: '1px solid #F1B0A8', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, cursor: 'pointer' }}>
                   Deactivate doctor
                 </button>
               ) : (
                 <button onClick={() => handleReactivate(selected)}
-                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#D5F5E3', color: '#1E8449', border: '1px solid #A9DFBF', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                  style={{ marginTop: 10, width: '100%', height: 42, borderRadius: 10, background: '#D5F5E3', color: 'var(--green-on-tint)', border: '1px solid #A9DFBF', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, cursor: 'pointer' }}>
                   Reactivate doctor
                 </button>
               )}
             </div>
-          </>
+          </Modal>
         );
       })()}
 
@@ -987,7 +992,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
           onClose={() => setShowEdit(false)}
           onSaved={() => { setShowEdit(false); setSelected(null); onChange(); }} />
       )}
-      <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 10 }}>
+      <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 10 }}>
         All-time stats. “Avg. Consult” is the mean time from a doctor locking a patient to clicking Save &amp; Generate QR.
       </p>
     </div>
@@ -999,6 +1004,8 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
   const [form, setForm] = useState({ name: '', department: depts.find(d => d.is_active)?.code || 'CARD', phone: '', pin: '', registration_no: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const titleId = useId();
+  const panelRef = useDialogA11y(onClose);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -1017,23 +1024,24 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
         width: 400, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Add New Doctor</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+          <h3 id={titleId} style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Add New Doctor</h3>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
           </button>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Name *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Name *</label>
             <input className="input" required value={form.name}
               onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Ravi Kumar" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Department *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Department *</label>
             <select className="input" value={form.department}
               onChange={e => setForm({ ...form, department: e.target.value })}>
               {depts.filter(d => d.is_active).map(d => (
@@ -1042,23 +1050,23 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Phone *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Phone *</label>
             <input className="input" type="tel" required value={form.phone}
               onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Registration / license no. (optional)</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registration / license no. (optional)</label>
             <input className="input" value={form.registration_no}
               onChange={e => setForm({ ...form, registration_no: e.target.value })} placeholder="e.g. KMC-12345" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>PIN (4-6 digits) *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>PIN (4-6 digits) *</label>
             <input className="input" type="password" inputMode="numeric" maxLength={6} required value={form.pin}
               onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
               placeholder="••••" style={{ letterSpacing: 4 }} />
           </div>
 
-          {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button type="button" className="btn btn-outline" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
@@ -1075,6 +1083,8 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
 // Edit-doctor modal — opened from the doctor detail drawer. Pre-fills the current
 // details; the PIN field is optional (blank = keep the existing PIN, never shown).
 function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
+  const titleId = useId();
+  const panelRef = useDialogA11y(onClose);
   const [form, setForm] = useState({
     name: doctor.name || '', department: doctor.department || 'CARD', phone: doctor.phone || '', pin: '',
     registration_no: doctor.registration_no || '',
@@ -1104,23 +1114,24 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
         width: 400, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Edit Doctor</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+          <h3 id={titleId} style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Edit Doctor</h3>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', color: 'var(--text-light)' }}>
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
           </button>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Name *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Name *</label>
             <input className="input" required value={form.name}
               onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Dr. Ravi Kumar" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Department *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Department *</label>
             <select className="input" value={form.department}
               onChange={e => setForm({ ...form, department: e.target.value })}>
               {deptOptions.map(d => (
@@ -1129,23 +1140,23 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Phone *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Phone *</label>
             <input className="input" type="tel" required value={form.phone}
               onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Registration / license no.</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registration / license no.</label>
             <input className="input" value={form.registration_no}
               onChange={e => setForm({ ...form, registration_no: e.target.value })} placeholder="e.g. KMC-12345" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Reset PIN (4-6 digits)</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Reset PIN (4-6 digits)</label>
             <input className="input" type="password" inputMode="numeric" maxLength={6} value={form.pin}
               onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
               placeholder="Leave blank to keep current" style={{ letterSpacing: form.pin ? 4 : 0 }} />
           </div>
 
-          {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button type="button" className="btn btn-outline" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
@@ -1297,11 +1308,11 @@ function QuestionsManager({ depts = [] }) {
               <option key={d.code} value={d.code}>{d.name}</option>
             ))}
           </select>
-          <button className="btn btn-primary" style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+          <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={startNew}>+ Add Question</button>
         </div>
 
-        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+        <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>
           {questions.length} questions (sorted by flow order) ·
           <span style={{ color: '#7C5BA6', fontWeight: 600 }}> BASE</span> = shared intake, then department flow
         </p>
@@ -1315,7 +1326,7 @@ function QuestionsManager({ depts = [] }) {
             return (
             <div key={q.id}>
             {dagStart && (
-              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', margin: '10px 2px 4px' }}>
+              <p style={{ fontSize: 'calc(10px * var(--fs))', fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', margin: '10px 2px 4px' }}>
                 — Department questions —
               </p>
             )}
@@ -1327,18 +1338,20 @@ function QuestionsManager({ depts = [] }) {
                 borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
               }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
-                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{q.id}</span>
+                <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
+                <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, flex: 1 }}>{q.id}</span>
                 {q.is_base && (
-                  <span style={{ fontSize: 10, background: '#7C5BA6', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>BASE</span>
+                  <span style={{ fontSize: 'calc(10px * var(--fs))', background: '#7C5BA6', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>BASE</span>
                 )}
-                <span style={{ fontSize: 10, background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
+                <span style={{ fontSize: 'calc(10px * var(--fs))', background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
                 {q.triage_flag && (
-                  <span style={{ fontSize: 10, background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: '#fff', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
+                  // Amber is a light swatch: white on it is 1.93:1. It always pairs
+                  // with the dark --amber-on, never with white. Red keeps white.
+                  <span style={{ fontSize: 'calc(10px * var(--fs))', background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: q.triage_flag === 'RED' ? '#fff' : 'var(--amber-on)', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
                 )}
               </div>
-              <p style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
-              {q.next_default && <p style={{ fontSize: 10, color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
+              <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
+              {q.next_default && <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
             </div>
             </div>
             );
@@ -1353,23 +1366,23 @@ function QuestionsManager({ depts = [] }) {
         ) : (
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h3 style={{ fontSize: 16, color: 'var(--primary)', flex: 1 }}>
+              <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>
                 {questions.find(q => q.id === editing.id) ? 'Edit Question' : 'New Question'}
               </h3>
               <button type="button" onClick={() => setEditing(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
             </div>
 
             {/* ID + Department */}
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Question ID *</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question ID *</label>
                 <input className="input" required value={editing.id} placeholder="q_my_question"
                   onChange={e => setEditing({ ...editing, id: e.target.value })}
                   disabled={!!questions.find(q => q.id === editing.id)} />
               </div>
               <div style={{ width: 120 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Sort Order</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Sort Order</label>
                 <input className="input" type="number" value={editing.sort_order}
                   onChange={e => setEditing({ ...editing, sort_order: parseInt(e.target.value) || 0 })} />
               </div>
@@ -1377,18 +1390,18 @@ function QuestionsManager({ depts = [] }) {
 
             {/* Text fields */}
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Question text (English) *</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question text (English) *</label>
               <input className="input" required value={editing.text_en}
                 onChange={e => setEditing({ ...editing, text_en: e.target.value })} />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Hindi</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Hindi</label>
                 <input className="input" value={editing.text_hi || ''}
                   onChange={e => setEditing({ ...editing, text_hi: e.target.value })} />
               </div>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Telugu</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Telugu</label>
                 <input className="input" value={editing.text_te || ''}
                   onChange={e => setEditing({ ...editing, text_te: e.target.value })} />
               </div>
@@ -1397,14 +1410,14 @@ function QuestionsManager({ depts = [] }) {
             {/* Type */}
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Question Type *</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question Type *</label>
                 <select className="input" value={editing.q_type}
                   onChange={e => setEditing({ ...editing, q_type: e.target.value })}>
                   {Q_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div style={{ width: 100 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Required</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Required</label>
                 <select className="input" value={editing.required ? 'true' : 'false'}
                   onChange={e => setEditing({ ...editing, required: e.target.value === 'true' })}>
                   <option value="true">Yes</option>
@@ -1417,24 +1430,24 @@ function QuestionsManager({ depts = [] }) {
             {(editing.q_type === 'SINGLE_SELECT' || editing.q_type === 'MULTI_SELECT') && (
               <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600 }}>Options</label>
+                  <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Options</label>
                   <button type="button" onClick={addOption}
-                    style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>
+                    style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' }}>
                     + Add
                   </button>
                 </div>
                 {(editing.options_json || []).map((opt, i) => (
                   <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={opt.value}
+                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.value}
                       onChange={e => updateOption(i, 'value', e.target.value)} placeholder="value" />
-                    <input className="input" style={{ flex: 2, minHeight: 32, fontSize: 12 }} value={opt.label_en}
+                    <input className="input" style={{ flex: 2, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_en}
                       onChange={e => updateOption(i, 'label_en', e.target.value)} placeholder="English label" />
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={opt.label_hi || ''}
+                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_hi || ''}
                       onChange={e => updateOption(i, 'label_hi', e.target.value)} placeholder="Hindi" />
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={opt.label_te || ''}
+                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_te || ''}
                       onChange={e => updateOption(i, 'label_te', e.target.value)} placeholder="Telugu" />
                     <button type="button" onClick={() => removeOption(i)}
-                      style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+                      style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
                   </div>
                 ))}
               </div>
@@ -1443,7 +1456,7 @@ function QuestionsManager({ depts = [] }) {
             {/* Triage */}
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Triage Flag (if answer triggers)</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Triage Flag (if answer triggers)</label>
                 <select className="input" value={editing.triage_flag || ''}
                   onChange={e => setEditing({ ...editing, triage_flag: e.target.value })}>
                   <option value="">None</option>
@@ -1452,7 +1465,7 @@ function QuestionsManager({ depts = [] }) {
                 </select>
               </div>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Trigger answer value</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Trigger answer value</label>
                 <input className="input" value={editing.triage_answer || ''}
                   onChange={e => setEditing({ ...editing, triage_answer: e.target.value })} placeholder="e.g. yes" />
               </div>
@@ -1460,7 +1473,7 @@ function QuestionsManager({ depts = [] }) {
 
             {/* Navigation */}
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Default next question</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Default next question</label>
               <select className="input" value={editing.next_default || ''}
                 onChange={e => setEditing({ ...editing, next_default: e.target.value })}>
                 <option value="">None (terminal)</option>
@@ -1471,32 +1484,32 @@ function QuestionsManager({ depts = [] }) {
             {/* Conditional next rules */}
             <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Branching Rules</label>
+                <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Branching Rules</label>
                 <button type="button" onClick={addRule}
-                  style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>
+                  style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' }}>
                   + Add Rule
                 </button>
               </div>
-              <p style={{ fontSize: 10, color: 'var(--text-light)', marginBottom: 6 }}>If answer equals X, go to question Y (overrides default next)</p>
+              <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)', marginBottom: 6 }}>If answer equals X, go to question Y (overrides default next)</p>
               {(editing.next_rules || []).map((rule, i) => (
                 <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, color: 'var(--text-light)' }}>If answer =</span>
-                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={rule.if_answer}
+                  <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>If answer =</span>
+                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={rule.if_answer}
                     onChange={e => updateRule(i, 'if_answer', e.target.value)} placeholder="yes" />
-                  <span style={{ fontSize: 11, color: 'var(--text-light)' }}>go to</span>
-                  <select className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={rule.go_to}
+                  <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>go to</span>
+                  <select className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={rule.go_to}
                     onChange={e => updateRule(i, 'go_to', e.target.value)}>
                     <option value="">--</option>
                     {allIds.filter(id => id !== editing.id).map(id => <option key={id} value={id}>{id}</option>)}
                   </select>
                   <button type="button" onClick={() => removeRule(i)}
-                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
                 </div>
               ))}
             </div>
 
-            {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
-            {success && <p style={{ color: 'var(--green)', fontSize: 13 }}>{success}</p>}
+            {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
+            {success && <p style={{ color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>{success}</p>}
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
@@ -1604,23 +1617,26 @@ function DepartmentsManager({ depts, onChange }) {
 
       {/* Icon picker modal — replaces the browser prompt with a tap-an-emoji grid. */}
       {iconEdit && (
-        <>
-          <div onClick={() => setIconEdit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }} />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+        <Modal
+          onClose={() => setIconEdit(null)}
+          labelledBy="icon-picker-title"
+          scrimStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }}
+          panelStyle={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
             width: 430, maxWidth: '92vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
+          <div>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-              <h3 style={{ fontSize: 18, color: 'var(--primary)', flex: 1 }}>Icon for {iconEdit.name}</h3>
-              <button onClick={() => setIconEdit(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex' }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+              <h3 id="icon-picker-title" style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Icon for {iconEdit.name}</h3>
+              <button type="button" onClick={() => setIconEdit(null)} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex' }}>
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
               </button>
             </div>
-            <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 14 }}>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 14 }}>
               Pick the icon patients see on the department picker, or type your own emoji.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 16 }}>
               {ICON_CHOICES.map(em => (
                 <button key={em} onClick={() => setIconValue(em)} title={em}
-                  style={{ fontSize: 24, padding: '8px 0', borderRadius: 10, cursor: 'pointer',
+                  style={{ fontSize: 'calc(24px * var(--fs))', padding: '8px 0', borderRadius: 10, cursor: 'pointer',
                     border: iconValue === em ? '2px solid var(--primary)' : '1px solid #E0E0E0',
                     background: iconValue === em ? '#EAF2F8' : '#fff' }}>
                   {em}
@@ -1628,10 +1644,10 @@ function DepartmentsManager({ depts, onChange }) {
               ))}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-              <div style={{ fontSize: 30, width: 52, height: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #E0E0E0', borderRadius: 10 }}>
+              <div style={{ fontSize: 'calc(30px * var(--fs))', width: 52, height: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #E0E0E0', borderRadius: 10 }}>
                 {iconValue || '🏥'}
               </div>
-              <input className="input" value={iconValue} maxLength={8} style={{ fontSize: 18 }}
+              <input className="input" value={iconValue} maxLength={8} style={{ fontSize: 'calc(18px * var(--fs))' }}
                 onChange={e => setIconValue(e.target.value)} placeholder="Custom emoji (blank = auto)" />
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -1639,46 +1655,46 @@ function DepartmentsManager({ depts, onChange }) {
               <button className="btn btn-primary" onClick={() => saveIcon()} disabled={iconSaving}>{iconSaving ? 'Saving…' : 'Save'}</button>
             </div>
           </div>
-        </>
+        </Modal>
       )}
 
       {/* Add form */}
       <div style={{ width: 360, flexShrink: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: 'fit-content' }}>
-        <h3 style={{ fontSize: 16, marginBottom: 16, color: 'var(--primary)' }}>Add New Department</h3>
+        <h3 style={{ fontSize: 'calc(16px * var(--fs))', marginBottom: 16, color: 'var(--primary)' }}>Add New Department</h3>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Code * (e.g. ORTHO, ENT, DERM)</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Code * (e.g. ORTHO, ENT, DERM)</label>
             <input className="input" required value={form.code}
               onChange={e => setForm({ ...form, code: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '') })}
               placeholder="ORTHO" maxLength={16} style={{ textTransform: 'uppercase' }} />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Display Name *</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Display Name *</label>
             <input className="input" required value={form.name}
               onChange={e => setForm({ ...form, name: e.target.value })}
               placeholder="Orthopaedics" />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-light)' }}>Icon (emoji, optional)</label>
+            <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Icon (emoji, optional)</label>
             <input className="input" value={form.icon}
               onChange={e => setForm({ ...form, icon: e.target.value })}
-              placeholder="🦴" maxLength={8} style={{ fontSize: 18 }} />
-            <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+              placeholder="🦴" maxLength={8} style={{ fontSize: 'calc(18px * var(--fs))' }} />
+            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 4 }}>
               Shown to patients on the department picker. Leave blank for an automatic icon.
             </p>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(13px * var(--fs))', cursor: 'pointer' }}>
             <input type="checkbox" checked={form.collect_vitals}
               onChange={e => setForm({ ...form, collect_vitals: e.target.checked })} />
             Collect vitals from patients
           </label>
-          {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
-          {success && <p style={{ color: 'var(--green)', fontSize: 13 }}>{success}</p>}
+          {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
+          {success && <p style={{ color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>{success}</p>}
           <button className="btn btn-primary" type="submit" disabled={saving}>
             {saving ? 'Adding...' : 'Add Department'}
           </button>
         </form>
-        <div style={{ marginTop: 20, padding: 12, background: '#F8F9FA', borderRadius: 8, fontSize: 12, color: 'var(--text-light)', lineHeight: 1.6 }}>
+        <div style={{ marginTop: 20, padding: 12, background: '#F8F9FA', borderRadius: 8, fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.6 }}>
           <p><strong>After adding a department:</strong></p>
           <p>1. Set an <strong>icon</strong> so patients recognise it on the picker</p>
           <p>2. Go to <strong>Questionnaires</strong> tab to add questions for it</p>
@@ -1689,10 +1705,10 @@ function DepartmentsManager({ depts, onChange }) {
 
       {/* Department list */}
       <div style={{ flex: 1 }}>
-        <h3 style={{ fontSize: 16, marginBottom: 12, color: 'var(--primary)' }}>Departments ({depts.length})</h3>
+        <h3 style={{ fontSize: 'calc(16px * var(--fs))', marginBottom: 12, color: 'var(--primary)' }}>Departments ({depts.length})</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
           <thead>
-            <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 13 }}>
+            <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 'calc(13px * var(--fs))' }}>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Icon</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Code</th>
               <th style={{ padding: '10px 12px', textAlign: 'left' }}>Name</th>
@@ -1705,24 +1721,24 @@ function DepartmentsManager({ depts, onChange }) {
                 <tr key={d.code} style={{ borderBottom: '1px solid #F0F0F0' }}>
                   <td style={{ padding: '10px 12px' }}>
                     <button onClick={() => handleEditIcon(d)} title="Set the icon patients see for this department"
-                      style={{ background: 'none', border: '1px solid #E0E0E0', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>
+                      style={{ background: 'none', border: '1px solid #E0E0E0', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(20px * var(--fs))', lineHeight: 1 }}>
                       {d.icon || '➕'}
                     </button>
                   </td>
-                  <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 600 }}>{d.code}</td>
-                  <td style={{ padding: '10px 12px', fontSize: 14 }}>{d.name}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(14px * var(--fs))', fontWeight: 600 }}>{d.code}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 'calc(14px * var(--fs))' }}>{d.name}</td>
                   <td style={{ padding: '10px 12px' }}>
                     <button onClick={() => handleToggleVitals(d)}
                       title="Toggle whether patients in this department are asked for vitals"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', borderRadius: 999, padding: '4px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', borderRadius: 999, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', fontWeight: 600,
                         background: d.collect_vitals ? '#D5F5E3' : '#F8F9FA', color: d.collect_vitals ? '#1E8449' : 'var(--text-light)' }}>
-                      <span style={{ fontSize: 14 }}>{d.collect_vitals ? '✅' : '⚪'}</span>
+                      <span style={{ fontSize: 'calc(14px * var(--fs))' }}>{d.collect_vitals ? '✅' : '⚪'}</span>
                       {d.collect_vitals ? 'On' : 'Off'}
                     </button>
                   </td>
                   <td style={{ padding: '10px 12px' }}>
                     <button onClick={() => handleDelete(d.code)}
-                      style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
+                      style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
                       Delete
                     </button>
                   </td>
@@ -1847,11 +1863,11 @@ function ProtocolsManager({ depts = [] }) {
               <option key={d.code} value={d.code}>{d.name}</option>
             ))}
           </select>
-          <button className="btn btn-primary" style={{ fontSize: 13, minHeight: 36, width: 'auto', padding: '0 16px' }}
+          <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
             onClick={startNew}>+ Add Protocol</button>
         </div>
 
-        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>{protocols.length} active protocols</p>
+        <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>{protocols.length} active protocols</p>
 
         {protocols.map(p => (
           <div key={p.id} onClick={() => startEdit(p)}
@@ -1861,21 +1877,21 @@ function ProtocolsManager({ depts = [] }) {
               borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
             }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{p.name}</span>
-              <span style={{ fontSize: 10, background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>v{p.version || '1.0'}</span>
+              <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, flex: 1 }}>{p.name}</span>
+              <span style={{ fontSize: 'calc(10px * var(--fs))', background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>v{p.version || '1.0'}</span>
             </div>
-            <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>ID: {p.id}</p>
+            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 4 }}>ID: {p.id}</p>
             {p.required_vitals?.length > 0 && (
-              <p style={{ fontSize: 11, color: 'var(--secondary)', marginTop: 2 }}>Vitals: {p.required_vitals.join(', ')}</p>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--secondary)', marginTop: 2 }}>Vitals: {p.required_vitals.join(', ')}</p>
             )}
             {p.required_tests?.length > 0 && (
-              <p style={{ fontSize: 11, color: 'var(--secondary)', marginTop: 2 }}>Tests: {p.required_tests.join(', ')}</p>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--secondary)', marginTop: 2 }}>Tests: {p.required_tests.join(', ')}</p>
             )}
           </div>
         ))}
 
         {protocols.length === 0 && (
-          <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32, fontSize: 13 }}>
+          <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32, fontSize: 'calc(13px * var(--fs))' }}>
             No protocols for this department. Click "+ Add Protocol" to create one.
           </p>
         )}
@@ -1886,7 +1902,7 @@ function ProtocolsManager({ depts = [] }) {
         {!editing ? (
           <div style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>
             <p>Select a protocol to edit, or click "+ Add Protocol"</p>
-            <p style={{ fontSize: 12, marginTop: 8 }}>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', marginTop: 8 }}>
               Protocols define clinical guardrails: trigger conditions (based on questionnaire answers),
               required vitals/tests, and pre-visit messages for patients.
             </p>
@@ -1894,37 +1910,37 @@ function ProtocolsManager({ depts = [] }) {
         ) : (
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h3 style={{ fontSize: 16, color: 'var(--primary)', flex: 1 }}>
+              <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>
                 {protocols.find(p => p.id === editing.id) ? 'Edit Protocol' : 'New Protocol'}
               </h3>
               <button type="button" onClick={() => setEditing(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
             </div>
 
             {/* ID + Name */}
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Protocol ID *</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Protocol ID *</label>
                 <input className="input" required value={editing.id} placeholder="proto_chest_pain"
                   onChange={e => setEditing({ ...editing, id: e.target.value })}
                   disabled={!!protocols.find(p => p.id === editing.id)} />
               </div>
               <div style={{ width: 100 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Version</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Version</label>
                 <input className="input" value={editing.version || '1.0'}
                   onChange={e => setEditing({ ...editing, version: e.target.value })} />
               </div>
             </div>
 
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Protocol Name *</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Protocol Name *</label>
               <input className="input" required value={editing.name}
                 onChange={e => setEditing({ ...editing, name: e.target.value })}
                 placeholder="Chest Pain Protocol" />
             </div>
 
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Authored By</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Authored By</label>
               <input className="input" value={editing.authored_by || ''}
                 onChange={e => setEditing({ ...editing, authored_by: e.target.value })}
                 placeholder="Dr. Name" />
@@ -1932,28 +1948,28 @@ function ProtocolsManager({ depts = [] }) {
 
             {/* Trigger Conditions */}
             <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12 }}>
-              <label style={{ fontSize: 12, fontWeight: 600 }}>Trigger Conditions</label>
-              <p style={{ fontSize: 10, color: 'var(--text-light)', marginBottom: 8 }}>
+              <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Trigger Conditions</label>
+              <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>
                 Question ID = expected answer. Protocol activates when any condition matches.
               </p>
               {Object.entries(editing.trigger_conditions || {}).map(([key, val]) => (
                 <div key={key} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={key} disabled />
-                  <span style={{ fontSize: 11 }}>=</span>
-                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} value={val}
+                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={key} disabled />
+                  <span style={{ fontSize: 'calc(11px * var(--fs))' }}>=</span>
+                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={val}
                     onChange={e => setCondition(key, e.target.value)} />
                   <button type="button" onClick={() => removeCondition(key)}
-                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
                 </div>
               ))}
               <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} id="new-cond-key" placeholder="question_id" />
-                <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 12 }} id="new-cond-val" placeholder="answer" />
+                <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} id="new-cond-key" placeholder="question_id" />
+                <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} id="new-cond-val" placeholder="answer" />
                 <button type="button" onClick={() => {
                   const k = document.getElementById('new-cond-key').value.trim();
                   const v = document.getElementById('new-cond-val').value.trim();
                   if (k && v) { setCondition(k, v); document.getElementById('new-cond-key').value = ''; document.getElementById('new-cond-val').value = ''; }
-                }} style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>
+                }} style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' }}>
                   + Add
                 </button>
               </div>
@@ -1961,7 +1977,7 @@ function ProtocolsManager({ depts = [] }) {
 
             {/* Required Vitals */}
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Required Vitals (comma-separated)</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Required Vitals (comma-separated)</label>
               <input className="input" value={(editing.required_vitals || []).join(', ')}
                 onChange={e => updateList('required_vitals', e.target.value)}
                 placeholder="BP, SpO2, Heart Rate" />
@@ -1969,7 +1985,7 @@ function ProtocolsManager({ depts = [] }) {
 
             {/* Required Tests */}
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Required Tests (comma-separated)</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Required Tests (comma-separated)</label>
               <input className="input" value={(editing.required_tests || []).join(', ')}
                 onChange={e => updateList('required_tests', e.target.value)}
                 placeholder="Lipid Profile, ECG, Troponin" />
@@ -1977,26 +1993,26 @@ function ProtocolsManager({ depts = [] }) {
 
             {/* Pre-visit messages */}
             <div>
-              <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Pre-visit Message (English)</label>
+              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Pre-visit Message (English)</label>
               <textarea className="input" rows={2} value={editing.pre_visit_msg_en || ''}
                 onChange={e => setEditing({ ...editing, pre_visit_msg_en: e.target.value })}
                 placeholder="Please bring your recent blood test reports..." />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Hindi</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Hindi</label>
                 <textarea className="input" rows={2} value={editing.pre_visit_msg_hi || ''}
                   onChange={e => setEditing({ ...editing, pre_visit_msg_hi: e.target.value })} />
               </div>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: 'var(--text-light)' }}>Telugu</label>
+                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Telugu</label>
                 <textarea className="input" rows={2} value={editing.pre_visit_msg_te || ''}
                   onChange={e => setEditing({ ...editing, pre_visit_msg_te: e.target.value })} />
               </div>
             </div>
 
-            {error && <p style={{ color: 'var(--red)', fontSize: 13 }}>{error}</p>}
-            {success && <p style={{ color: 'var(--green)', fontSize: 13 }}>{success}</p>}
+            {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
+            {success && <p style={{ color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>{success}</p>}
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
@@ -2034,17 +2050,17 @@ function AnalyticsDashboard() {
   if (!data) return <p style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>Failed to load analytics</p>;
 
   const cardStyle = { background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: '1 1 160px', minWidth: 160 };
-  const thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 12, background: 'var(--primary)', color: '#fff' };
-  const tdStyle = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid #F0F0F0' };
+  const thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', background: 'var(--primary)', color: '#fff' };
+  const tdStyle = { padding: '8px 12px', fontSize: 'calc(13px * var(--fs))', borderBottom: '1px solid #F0F0F0' };
   const fmtMin = (v) => (v == null ? '—' : `${Math.round(v)} min`);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 13, color: 'var(--text-light)' }}>Period:</span>
+        <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Period:</span>
         {[6, 12, 24, 48, 168].map(h => (
           <button key={h} className={`btn ${hours === h ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 12, minHeight: 30, width: 'auto', padding: '0 12px' }}
+            style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 30, width: 'auto', padding: '0 12px' }}
             onClick={() => setHours(h)}>
             {h <= 24 ? `${h}h` : `${h / 24}d`}
           </button>
@@ -2054,28 +2070,28 @@ function AnalyticsDashboard() {
       {/* Throughput — the numbers an OPD head watches all day */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Registered</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--primary)' }}>{data.registered ?? data.total_sessions}</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registered</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--primary)' }}>{data.registered ?? data.total_sessions}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Completed pre-consult</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--green)' }}>{data.completed ?? data.completed_count}</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Completed pre-consult</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>{data.completed ?? data.completed_count}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Consulted</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{data.consulted ?? '—'}</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Consulted</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.consulted ?? '—'}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Waiting now</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: (data.waiting ?? 0) > 0 ? 'var(--amber)' : 'var(--text-light)' }}>{data.waiting ?? '—'}</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Waiting now</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: (data.waiting ?? 0) > 0 ? 'var(--amber)' : 'var(--text-light)' }}>{data.waiting ?? '—'}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Avg wait · arrival→seen</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_wait_minutes)}</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg wait · arrival→seen</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_wait_minutes)}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 12, color: 'var(--text-light)' }}>Avg total time</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: 'var(--secondary)' }}>{data.avg_total_minutes} min</p>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg total time</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.avg_total_minutes} min</p>
         </div>
       </div>
 
@@ -2083,14 +2099,14 @@ function AnalyticsDashboard() {
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {data.by_triage?.map(t => (
           <div key={t.level} style={cardStyle}>
-            <p style={{ fontSize: 12, color: 'var(--text-light)' }}>{t.level || 'GREEN'} Triage</p>
-            <p style={{ fontSize: 28, fontWeight: 700, color: t.level === 'RED' ? 'var(--red)' : t.level === 'AMBER' ? 'var(--amber)' : 'var(--green)' }}>{t.count}</p>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{t.level || 'GREEN'} Triage</p>
+            <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: t.level === 'RED' ? 'var(--red)' : t.level === 'AMBER' ? 'var(--amber)' : 'var(--green)' }}>{t.count}</p>
           </div>
         ))}
       </div>
 
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Department · throughput & live load</h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>By Department · throughput & live load</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
             <th style={thStyle}>Department</th><th style={thStyle}>Registered</th><th style={thStyle}>Completed</th>
@@ -2116,7 +2132,7 @@ function AnalyticsDashboard() {
       </div>
 
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>By Doctor · productivity</h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>By Doctor · productivity</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
             <th style={thStyle}>Doctor</th><th style={thStyle}>Dept</th><th style={thStyle}>Seen</th><th style={thStyle}>Done</th><th style={thStyle}>Avg consult</th><th style={thStyle}>RED</th>
@@ -2135,19 +2151,19 @@ function AnalyticsDashboard() {
           </tbody>
         </table>
         {(!data.by_doctor || data.by_doctor.length === 0) && (
-          <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 16, fontSize: 13 }}>No doctor-assigned sessions</p>
+          <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 16, fontSize: 'calc(13px * var(--fs))' }}>No doctor-assigned sessions</p>
         )}
       </div>
 
       {/* Peak-hour load — registrations by hour of day, the #1 staffing lever */}
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>Registrations by hour · peak load</h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>Registrations by hour · peak load</h3>
         {(() => {
           const counts = Array(24).fill(0);
           (data.by_hour || []).forEach(h => { if (h.hour >= 0 && h.hour < 24) counts[h.hour] = h.registrations; });
           const max = Math.max(1, ...counts);
           const anyData = counts.some(c => c > 0);
-          if (!anyData) return <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 8, fontSize: 13 }}>No registrations in this period</p>;
+          if (!anyData) return <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 8, fontSize: 'calc(13px * var(--fs))' }}>No registrations in this period</p>;
           return (
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130 }}>
               {counts.map((c, h) => (
@@ -2155,7 +2171,7 @@ function AnalyticsDashboard() {
                   style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
                   <div style={{ width: '100%', height: `${(c / max) * 100}%`, minHeight: c > 0 ? 3 : 0,
                     background: c === max ? 'var(--primary)' : 'var(--secondary)', borderRadius: '3px 3px 0 0' }} />
-                  <span style={{ fontSize: 8, color: 'var(--text-light)', marginTop: 3 }}>{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
+                  <span style={{ fontSize: 'calc(8px * var(--fs))', color: 'var(--text-light)', marginTop: 3 }}>{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
                 </div>
               ))}
             </div>
@@ -2166,20 +2182,20 @@ function AnalyticsDashboard() {
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {data.by_state?.map(s => (
           <div key={s.state} style={{ background: '#fff', borderRadius: 8, padding: '8px 16px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-            <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{s.state}</p>
-            <p style={{ fontSize: 20, fontWeight: 600 }}>{s.count}</p>
+            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{s.state}</p>
+            <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{s.count}</p>
           </div>
         ))}
       </div>
 
       {data.followups?.length > 0 && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-          <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 12 }}>Follow-ups</h3>
+          <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>Follow-ups</h3>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {data.followups.map(f => (
               <div key={f.status} style={{ background: '#F8F9FA', borderRadius: 8, padding: '8px 16px', textAlign: 'center' }}>
-                <p style={{ fontSize: 11, color: 'var(--text-light)' }}>{f.status}</p>
-                <p style={{ fontSize: 20, fontWeight: 600 }}>{f.count}</p>
+                <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{f.status}</p>
+                <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{f.count}</p>
               </div>
             ))}
           </div>
@@ -2264,19 +2280,19 @@ function RxTemplateManager() {
     e.target.value = '';   // allow re-selecting the same file
   }
 
-  const label = { fontSize: 12, color: 'var(--text-light)', marginBottom: 3, display: 'block' };
+  const label = { fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 3, display: 'block' };
   const field = (key, ph) => (
     <input className="input" value={cfg[key] || ''} placeholder={ph}
       onChange={e => set(key, e.target.value)} style={{ height: 38 }} />
   );
   const Toggle = ({ k, text }) => (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', padding: '4px 0' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'calc(13px * var(--fs))', cursor: 'pointer', padding: '4px 0' }}>
       <input type="checkbox" checked={!!show[k]} onChange={e => setShow(k, e.target.checked)}
         style={{ width: 16, height: 16, cursor: 'pointer' }} />
       {text}
     </label>
   );
-  const sectionHead = { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', margin: '16px 0 8px' };
+  const sectionHead = { fontSize: 'calc(11px * var(--fs))', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', margin: '16px 0 8px' };
 
   return (
     <div>
@@ -2285,12 +2301,12 @@ function RxTemplateManager() {
         {/* ── Config form ── */}
         <div style={{ flex: '1 1 420px', minWidth: 360, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-            <h3 style={{ fontSize: 16, color: 'var(--primary)', flex: 1 }}>Prescription Template</h3>
-            <button className="btn btn-primary" onClick={save} disabled={saving} style={{ width: 'auto', padding: '0 18px', height: 38, fontSize: 14 }}>
+            <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Prescription Template</h3>
+            <button className="btn btn-primary" onClick={save} disabled={saving} style={{ width: 'auto', padding: '0 18px', height: 38, fontSize: 'calc(14px * var(--fs))' }}>
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
-          <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>
             Configure how your hospital's digital prescription looks. Clinical fields (patient, ℞ medicines with dose/frequency/duration, prescriber, signature) always appear — these settings control branding and optional details.
           </p>
 
@@ -2308,18 +2324,18 @@ function RxTemplateManager() {
                 {cfg.logo_url ? (
                   <img src={cfg.logo_url} alt="logo" style={{ height: 46, width: 46, objectFit: 'contain', borderRadius: 6, border: '1px solid #E2E8F0', background: '#fff' }} />
                 ) : (
-                  <div style={{ height: 46, width: 46, borderRadius: 6, border: '1px dashed #CBD5E0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-light)', fontSize: 18 }}>🏥</div>
+                  <div style={{ height: 46, width: 46, borderRadius: 6, border: '1px dashed #CBD5E0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-light)', fontSize: 'calc(18px * var(--fs))' }}>🏥</div>
                 )}
-                <label className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', height: 38, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+                <label className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', height: 38, fontSize: 'calc(13px * var(--fs))', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
                   {cfg.logo_url ? 'Change logo' : 'Upload logo'}
                   <input type="file" accept="image/png,image/jpeg" onChange={onLogoFile} style={{ display: 'none' }} />
                 </label>
                 {cfg.logo_url && (
                   <button type="button" onClick={() => set('logo_url', '')}
-                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Remove</button>
+                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600 }}>Remove</button>
                 )}
               </div>
-              <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 4 }}>
                 Shown on the prescription when the “Hospital logo” toggle is on. PNG/JPG, auto-resized.
               </p>
             </div>
@@ -2328,11 +2344,11 @@ function RxTemplateManager() {
           <p style={sectionHead}>Theme</p>
           <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
             {['classic', 'modern'].map(th => (
-              <label key={th} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', textTransform: 'capitalize' }}>
+              <label key={th} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'calc(13px * var(--fs))', cursor: 'pointer', textTransform: 'capitalize' }}>
                 <input type="radio" name="rx-theme" checked={(cfg.theme || 'classic') === th} onChange={() => set('theme', th)} /> {th}
               </label>
             ))}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 'auto' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'calc(13px * var(--fs))', marginLeft: 'auto' }}>
               Accent
               <input type="color" value={cfg.accent || '#1c5d8c'} onChange={e => set('accent', e.target.value)}
                 style={{ width: 34, height: 28, border: 'none', background: 'none', cursor: 'pointer' }} />
@@ -2381,11 +2397,11 @@ function RxTemplateManager() {
 
         {/* ── Live preview ── */}
         <div style={{ flex: '1 1 460px', minWidth: 380, position: 'sticky', top: 16 }}>
-          <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Live preview</p>
+          <p style={{ fontSize: 'calc(11px * var(--fs))', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-light)', marginBottom: 8 }}>Live preview</p>
           <div style={{ background: '#fff', borderRadius: 14, padding: 24, boxShadow: '0 4px 20px rgba(0,0,0,.08)' }}>
             <RxDocument rx={RX_SAMPLE} template={cfg} verified={true} />
           </div>
-          <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>Sample data — this is exactly how a patient's verified prescription will render.</p>
+          <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 8 }}>Sample data — this is exactly how a patient's verified prescription will render.</p>
         </div>
       </div>
     </div>
@@ -2460,8 +2476,8 @@ function FormularyManager() {
   }
 
   const card = { background: 'var(--card-bg)', borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' };
-  const th = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '.03em' };
-  const td = { padding: '6px 8px', fontSize: 13, borderTop: '1px solid #F0F0F0' };
+  const th = { textAlign: 'left', padding: '6px 8px', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '.03em' };
+  const td = { padding: '6px 8px', fontSize: 'calc(13px * var(--fs))', borderTop: '1px solid #F0F0F0' };
   const sev = (s) => <span style={{ fontWeight: 700, color: s === 'block' ? 'var(--red)' : '#B9770E' }}>{(s || '').toUpperCase()}</span>;
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-light)' }}>Loading formulary…</div>;
@@ -2472,11 +2488,11 @@ function FormularyManager() {
 
       {/* Review queue — AI findings awaiting curation */}
       <div style={card}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 4 }}>AI Review Queue <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({queue.length} pending)</span></h3>
-        <p style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 10 }}>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 4 }}>AI Review Queue <span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>({queue.length} pending)</span></h3>
+        <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 10 }}>
           Interactions the AI flagged for drugs not yet in the formulary. Approving adds the drug + a curated interaction; nothing here affects checks until approved.
         </p>
-        {queue.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-light)' }}>Nothing pending.</p> : (
+        {queue.length === 0 ? <p style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Nothing pending.</p> : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr><th style={th}>Unknown drug</th><th style={th}>Other drug</th><th style={th}>AI severity</th><th style={th}>Description</th><th style={th}>Conf.</th><th style={th}></th></tr></thead>
             <tbody>
@@ -2497,7 +2513,7 @@ function FormularyManager() {
                           {collapsible && (
                             <button type="button"
                               onClick={() => setQExpanded(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; })}
-                              style={{ marginLeft: 6, background: 'none', border: 'none', color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                              style={{ marginLeft: 6, background: 'none', border: 'none', color: 'var(--primary)', textDecoration: 'underline', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', padding: 0 }}>
                               {open ? 'Show less' : 'Show more'}
                             </button>
                           )}
@@ -2507,8 +2523,8 @@ function FormularyManager() {
                   </td>
                   <td style={td}>{q.ai_confidence != null ? Math.round(q.ai_confidence * 100) + '%' : '—'}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                    <button onClick={() => approve(q)} style={{ background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', marginRight: 6 }}>Approve</button>
-                    <button onClick={() => dismiss(q)} style={{ background: 'transparent', color: 'var(--red)', border: '1px solid var(--red)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Dismiss</button>
+                    <button onClick={() => approve(q)} style={{ background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', marginRight: 6 }}>Approve</button>
+                    <button onClick={() => dismiss(q)} style={{ background: 'transparent', color: 'var(--red)', border: '1px solid var(--red)', borderRadius: 6, padding: '4px 10px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer' }}>Dismiss</button>
                   </td>
                 </tr>
               ))}
@@ -2519,13 +2535,13 @@ function FormularyManager() {
 
       {/* Curated interactions */}
       <div style={card}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 10 }}>Curated Interactions <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({inter.length})</span></h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 10 }}>Curated Interactions <span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>({inter.length})</span></h3>
         <form onSubmit={addInteraction} style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input className="input" placeholder="drug a (generic)" value={intForm.generic_a} onChange={e => setIntForm({ ...intForm, generic_a: e.target.value })} style={{ width: 150, minHeight: 34 }} />
           <input className="input" placeholder="drug b (generic)" value={intForm.generic_b} onChange={e => setIntForm({ ...intForm, generic_b: e.target.value })} style={{ width: 150, minHeight: 34 }} />
           <select className="input" value={intForm.severity} onChange={e => setIntForm({ ...intForm, severity: e.target.value })} style={{ width: 100, minHeight: 34 }}><option value="warn">warn</option><option value="block">block</option></select>
           <input className="input" placeholder="description" value={intForm.description} onChange={e => setIntForm({ ...intForm, description: e.target.value })} style={{ flex: 1, minWidth: 180, minHeight: 34 }} />
-          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 13 }}>Add</button>
+          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 'calc(13px * var(--fs))' }}>Add</button>
         </form>
         <div style={{ maxHeight: 260, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -2535,7 +2551,7 @@ function FormularyManager() {
                 <tr key={r.id}>
                   <td style={td}>{r.generic_a}</td><td style={td}>{r.generic_b}</td><td style={td}>{sev(r.severity)}</td>
                   <td style={{ ...td, maxWidth: 320 }}>{r.description}</td><td style={td}>{r.source}</td>
-                  <td style={td}><button onClick={() => delInteraction(r.id)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 14 }}>✕</button></td>
+                  <td style={td}><button onClick={() => delInteraction(r.id)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(14px * var(--fs))' }}>✕</button></td>
                 </tr>
               ))}
             </tbody>
@@ -2545,12 +2561,12 @@ function FormularyManager() {
 
       {/* Curated drugs */}
       <div style={card}>
-        <h3 style={{ fontSize: 15, color: 'var(--primary)', marginBottom: 10 }}>Formulary Drugs <span style={{ fontSize: 12, color: 'var(--text-light)' }}>({drugs.length})</span></h3>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 10 }}>Formulary Drugs <span style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>({drugs.length})</span></h3>
         <form onSubmit={addDrug} style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input className="input" placeholder="generic name" value={drugForm.generic} onChange={e => setDrugForm({ ...drugForm, generic: e.target.value })} style={{ width: 160, minHeight: 34 }} />
           <input className="input" placeholder="classes (comma sep)" value={drugForm.classes} onChange={e => setDrugForm({ ...drugForm, classes: e.target.value })} style={{ width: 200, minHeight: 34 }} />
           <input className="input" placeholder="brand aliases (comma sep)" value={drugForm.aliases} onChange={e => setDrugForm({ ...drugForm, aliases: e.target.value })} style={{ flex: 1, minWidth: 180, minHeight: 34 }} />
-          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 13 }}>Add</button>
+          <button className="btn btn-primary" type="submit" style={{ width: 'auto', minHeight: 34, padding: '0 16px', fontSize: 'calc(13px * var(--fs))' }}>Add</button>
         </form>
         <div style={{ maxHeight: 280, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -2562,13 +2578,13 @@ function FormularyManager() {
                   <td style={{ ...td, color: 'var(--text-light)' }}>{(d.classes || []).join(', ')}</td>
                   <td style={{ ...td, color: 'var(--text-light)', maxWidth: 280 }}>{(d.aliases || []).join(', ')}</td>
                   <td style={td}>{d.source}</td>
-                  <td style={td}><button onClick={() => delDrug(d.generic)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 14 }}>✕</button></td>
+                  <td style={td}><button onClick={() => delDrug(d.generic)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(14px * var(--fs))' }}>✕</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>Class-vs-class rules ({classInter.length}) are also active and editable via the API.</p>
+        <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 8 }}>Class-vs-class rules ({classInter.length}) are also active and editable via the API.</p>
       </div>
     </div>
   );
