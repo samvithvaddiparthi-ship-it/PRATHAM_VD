@@ -31,6 +31,7 @@ app.use((req, res, next) => {
 // Routes
 app.use('/api/session', require('./routes/session'));
 app.use('/api/queue', require('./routes/queue'));
+app.use('/api/settings', require('./routes/settings'));
 app.use('/api/otp', require('./routes/otp'));
 app.use('/api/q', require('./routes/questionnaire'));
 app.use('/api/vitals', require('./routes/vitals'));

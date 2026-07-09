@@ -257,46 +257,45 @@ function HISDashboard() {
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: 16, minHeight: '100vh' }}>
       {toastView}
       <style>{`@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+      {/* Header — title on the left; Refresh + Settings (gear) grouped top-right. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 'calc(20px * var(--fs))', color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
         <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Hospital Information System</span>
-        {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
-        <button onClick={refreshActive} disabled={refreshing}
-          title="Refresh" aria-label="Refresh"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
-          <span style={{ display: 'inline-block', fontSize: 'calc(15px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
-          {refreshing ? 'Refreshing' : 'Refresh'}
-        </button>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className={`btn ${tab === 'sessions' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('sessions')}>Patients</button>
-          <button className={`btn ${tab === 'analytics' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('analytics')}>Analytics</button>
-          <button className={`btn ${tab === 'departments' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('departments')}>Departments</button>
-          <button className={`btn ${tab === 'doctors' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('doctors')}>Doctors</button>
-          <button className={`btn ${tab === 'questions' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('questions')}>Questionnaires</button>
-          <button className={`btn ${tab === 'protocols' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('protocols')}>Protocols</button>
-          <button className={`btn ${tab === 'formulary' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('formulary')}>Drug Formulary</button>
-          <button className={`btn ${tab === 'rxtemplate' ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={() => setTab('rxtemplate')}>Rx Template</button>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
+          <button onClick={refreshActive} disabled={refreshing}
+            title="Refresh" aria-label="Refresh"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+            <span style={{ display: 'inline-block', fontSize: 'calc(15px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+            {refreshing ? 'Refreshing' : 'Refresh'}
+          </button>
+          {/* Settings — a gear (not a main tab). Highlighted ring when its panel is open. */}
+          <button onClick={() => setTab(tab === 'settings' ? 'sessions' : 'settings')}
+            title="Settings" aria-label="Settings" aria-pressed={tab === 'settings'}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 18, cursor: 'pointer', fontSize: 'calc(17px * var(--fs))', lineHeight: 1,
+              border: tab === 'settings' ? '2px solid var(--primary)' : '1px solid #d5dce4',
+              background: tab === 'settings' ? '#eef3f8' : '#fff' }}>
+            ⚙️
+          </button>
         </div>
       </div>
+      {/* Tab bar — equal-width segments spanning the full row edge to edge. */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[
+          ['sessions', 'Patients'], ['analytics', 'Analytics'], ['departments', 'Departments'],
+          ['doctors', 'Doctors'], ['questions', 'Questionnaires'], ['protocols', 'Protocols'],
+          ['formulary', 'Drug Formulary'], ['rxtemplate', 'Rx Template'],
+        ].map(([id, label]) => (
+          <button key={id}
+            className={`btn ${tab === id ? 'btn-primary' : 'btn-outline'}`}
+            style={{ flex: '1 1 0', minWidth: 0, fontSize: 'calc(13px * var(--fs))', minHeight: 38, padding: '0 8px', whiteSpace: 'nowrap' }}
+            onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </div>
 
-      {tab === 'rxtemplate' ? (
+      {tab === 'settings' ? (
+        <SettingsManager key={refreshKey} />
+      ) : tab === 'rxtemplate' ? (
         <RxTemplateManager key={refreshKey} />
       ) : tab === 'formulary' ? (
         <FormularyManager key={refreshKey} />
@@ -2227,6 +2226,83 @@ const RX_SAMPLE = {
   notes: 'Plenty of fluids and rest. Review in 1 week if symptoms persist.',
   rx_id: 'SAMPLE-0000', issued_at: new Date().toISOString(),
 };
+
+// Hospital-wide feature settings. Currently just the global OCR/document-scanning
+// toggle — flipping it off stops the paid AI/OCR extraction across ALL departments
+// (the patient flow hides the upload step; the python OCR endpoint also refuses).
+// Per-department control is intentionally deferred until requested.
+function SettingsManager() {
+  const [settings, setSettings] = useState(null);   // null = loading
+  const [saving, setSaving] = useState(false);
+  const { toast, toastView } = useToast();
+
+  useEffect(() => {
+    api.getAdminSettings()
+      .then(s => setSettings({ ocr_enabled: s.ocr_enabled !== false }))
+      .catch(() => setSettings({ ocr_enabled: true }));
+  }, []);
+
+  async function setOcr(next) {
+    if (saving) return;
+    const prev = settings;
+    setSettings({ ...settings, ocr_enabled: next });   // optimistic
+    setSaving(true);
+    try {
+      const s = await api.updateSettings({ ocr_enabled: next });
+      setSettings({ ocr_enabled: s.ocr_enabled !== false });
+      toast(next ? 'OCR / document scanning turned ON' : 'OCR / document scanning turned OFF', 'success');
+    } catch (e) {
+      setSettings(prev);   // revert on failure
+      toast('Could not update setting: ' + (e.message || ''), 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!settings) return <p style={{ color: 'var(--text-light)', padding: 24 }}>Loading settings…</p>;
+
+  const on = settings.ocr_enabled;
+
+  return (
+    <div style={{ padding: '8px 4px', maxWidth: 640 }}>
+      {toastView}
+      <div style={{ background: 'var(--card-bg)', border: '1px solid #E2E8F0', borderRadius: 12, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 16, color: 'var(--primary)' }}>Document scanning (OCR)</h3>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-light)', lineHeight: 1.5 }}>
+              When ON, patients can photograph their prescriptions and reports, and the app uses
+              AI/OCR to read them. When OFF, the upload step is hidden for all patients and no
+              AI extraction runs — this avoids the per-scan API cost. Applies to all departments.
+            </p>
+          </div>
+          {/* Toggle switch */}
+          <button
+            role="switch"
+            aria-checked={on}
+            aria-label="Toggle document scanning (OCR)"
+            disabled={saving}
+            onClick={() => setOcr(!on)}
+            style={{
+              flexShrink: 0, position: 'relative', width: 56, height: 32, borderRadius: 16,
+              border: 'none', cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
+              background: on ? 'var(--accent)' : '#C4CDD5', transition: 'background 0.15s',
+            }}>
+            <span style={{
+              position: 'absolute', top: 3, left: on ? 27 : 3, width: 26, height: 26, borderRadius: '50%',
+              background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+        <div style={{ marginTop: 14, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600,
+          color: on ? 'var(--green)' : 'var(--text-light)' }}>
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: on ? 'var(--green)' : '#B0B8C1' }} />
+          {on ? 'Enabled — document scanning is active' : 'Disabled — patients skip document upload'}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RxTemplateManager() {
   const [cfg, setCfg] = useState(null);

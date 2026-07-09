@@ -73,6 +73,12 @@ export const api = {
   submitFeedback: (sessionId, feedback) => apiFetch(`/api/report/${sessionId}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
   saveReportEdit: (sessionId, report_md) => apiFetch(`/api/report/${sessionId}/edit`, { method: 'POST', body: JSON.stringify({ report_md }) }),
 
+  // Global app settings (feature flags). Public read is used by the patient flow
+  // (e.g. whether to show the document/OCR step); the admin read/write is gated.
+  getPublicSettings: () => apiFetch('/api/settings/public'),
+  getAdminSettings: () => apiFetch('/api/settings'),
+  updateSettings: (data) => apiFetch('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
+
   // OCR
   uploadDocument: async (file, sessionId, docLabel) => {
     const formData = new FormData();

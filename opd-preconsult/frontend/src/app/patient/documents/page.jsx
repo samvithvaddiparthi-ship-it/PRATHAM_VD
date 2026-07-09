@@ -23,6 +23,10 @@ export default function Documents() {
   const [skipWarning, setSkipWarning] = useState(false);
   const [mustReview, setMustReview] = useState(false);   // uploaded doc(s) not yet reviewed
   const [error, setError] = useState('');
+  // Hospital-wide OCR flag (HIS admin → Settings). null = still loading; when
+  // false the upload/scan UI is hidden and the patient just continues (a nurse/
+  // doctor can view physical documents directly). Default true if the read fails.
+  const [ocrEnabled, setOcrEnabled] = useState(null);
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
@@ -30,6 +34,9 @@ export default function Documents() {
     if (token) setToken(token);
     const sid = sessionStorage.getItem('session_id');
     setSessionId(sid || '');
+    api.getPublicSettings()
+      .then(s => setOcrEnabled(s.ocr_enabled !== false))
+      .catch(() => setOcrEnabled(true));
   }, []);
 
   async function handleUpload(e) {
@@ -39,7 +46,9 @@ export default function Documents() {
     setError('');
     try {
       const result = await api.uploadDocument(file, sessionId, selectedType);
-      setDocs(prev => [...prev, { ...result, type: selectedType, confirmed: false }]);
+      // With OCR off there's no extraction to review, so the upload is complete
+      // as soon as it's stored — mark it done (no ✓/✗ review step).
+      setDocs(prev => [...prev, { ...result, type: selectedType, confirmed: ocrEnabled === false }]);
     } catch (err) {
       setError(t('upload_failed', lang) + ': ' + (err.message || 'Unknown error'));
     } finally {
@@ -72,6 +81,15 @@ export default function Documents() {
       <div className="card" style={{ gap: 16 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('documents_title', lang)}</h2>
         <p style={{ color: 'var(--text-light)', textAlign: 'center', fontSize: 14 }}>{t('documents_desc', lang)}</p>
+
+        {/* When OCR is off, patients can still upload — the files are stored and
+            shown to the doctor as-is (no AI reading). A short note sets that
+            expectation so they don't wait for an on-screen summary. */}
+        {ocrEnabled === false && (
+          <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', marginTop: -6 }}>
+            {t('documents_passthrough_note', lang)}
+          </p>
+        )}
 
         {/* Document type selector */}
         <div>
@@ -116,15 +134,22 @@ export default function Documents() {
                   <span style={{ fontWeight: 600, fontSize: 13, textTransform: 'capitalize' }}>
                     {doc.type.replace('_', ' ')}
                   </span>
-                  <span style={{
-                    fontSize: 11, fontWeight: 600,
-                    color: (doc.confidence || 0) >= 0.8 ? '#1E8449' : (doc.confidence || 0) >= 0.5 ? '#B9770E' : '#C0392B',
-                  }}>
-                    {(doc.confidence_source || doc.structured?.confidence_source) === 'text_scan' ? t('confidence_text_scan', lang) : t('confidence_ai', lang)}: {Math.round((doc.confidence || 0) * 100)}%
-                  </span>
-                  {doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ {t('confirmed', lang)}</span>}
+                  {ocrEnabled !== false && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 600,
+                      color: (doc.confidence || 0) >= 0.8 ? '#1E8449' : (doc.confidence || 0) >= 0.5 ? '#B9770E' : '#C0392B',
+                    }}>
+                      {(doc.confidence_source || doc.structured?.confidence_source) === 'text_scan' ? t('confidence_text_scan', lang) : t('confidence_ai', lang)}: {Math.round((doc.confidence || 0) * 100)}%
+                    </span>
+                  )}
+                  {ocrEnabled === false
+                    ? <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ {t('uploaded_label', lang)}</span>
+                    : (doc.confirmed && <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>✓ {t('confirmed', lang)}</span>)}
                 </div>
 
+                {/* Extraction details — only when OCR is on. When off there's no
+                    extraction to show/confirm; the raw file just goes to the doctor. */}
+                {ocrEnabled !== false && (<>
                 {/* Warn when AI extraction was unavailable and we fell back to basic text scan */}
                 {doc.structured?.extraction_source === 'regex_fallback' && (
                   <div style={{ background: '#FFF4E5', border: '1px solid #FFB74D', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
@@ -161,8 +186,18 @@ export default function Documents() {
                   </div>
                 )}
 
+                {/* Allergies extracted from the document */}
+                {doc.structured?.allergies?.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--primary)' }}>{t('allergies_label', lang)}</p>
+                    {doc.structured.allergies.map((a, i) => (
+                      <p key={i} style={{ fontSize: 13, marginLeft: 8 }}>• {a}</p>
+                    ))}
+                  </div>
+                )}
+
                 {/* Raw text preview (collapsed) */}
-                {!doc.structured?.medications?.length && !doc.structured?.lab_values?.length && (
+                {!doc.structured?.medications?.length && !doc.structured?.lab_values?.length && !doc.structured?.allergies?.length && (
                   <p style={{ fontSize: 12, color: 'var(--text-light)', whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'hidden' }}>
                     {doc.raw_text?.substring(0, 200)}...
                   </p>
@@ -187,23 +222,26 @@ export default function Documents() {
                     </button>
                   </div>
                 )}
+                </>)}
               </div>
             ))}
           </div>
         )}
 
         <div style={{ flex: 1 }} />
-        {mustReview && (
+        {ocrEnabled !== false && mustReview && (
           <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>
             {t('review_docs_first', lang)}
           </p>
         )}
-        {skipWarning && !mustReview && (
+        {ocrEnabled !== false && skipWarning && !mustReview && (
           <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>
             {t('skip_no_docs', lang)}
           </p>
         )}
         <button className="btn btn-primary" onClick={() => {
+          // OCR off → nothing to upload/review here, just continue.
+          if (ocrEnabled === false) { router.push('/patient/interview'); return; }
           // Every uploaded document must be reviewed (✓ Correct or ✗ Remove) before
           // continuing — the patient confirms whether each extraction is accurate.
           if (docs.some(d => !d.confirmed)) { setMustReview(true); return; }

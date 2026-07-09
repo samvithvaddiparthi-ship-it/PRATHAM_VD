@@ -1744,8 +1744,12 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
             meds.push({ id: rxUid(), drug_name: formal, brand, dose: primaryDose(m.dose), frequency: m.frequency || '', source: 'document', duration: '', instructions: '' });
           });
         }
-        // Patient-reported from questionnaire answer
-        const patientMeds = reportJson?.answers?.q_medications;
+        // Patient-reported from questionnaire answer. Base questions are namespaced
+        // per department (q_<dept>_base_medications), so match the id suffix rather
+        // than a fixed 'q_medications' (which never matches → empty pre-fill).
+        const _ans = reportJson?.answers || {};
+        const _medKey = Object.keys(_ans).find(k => k.endsWith('_base_medications'));
+        const patientMeds = _medKey ? _ans[_medKey] : _ans.q_medications;
         if (patientMeds && patientMeds.toLowerCase() !== 'none' && patientMeds.toLowerCase() !== 'nil') {
           // Try to parse comma-separated
           patientMeds.split(',').forEach(m => {

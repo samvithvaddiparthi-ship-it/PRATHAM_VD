@@ -26,7 +26,7 @@ This is the most common source of bugs when teammates sync. Follow this exactly 
 
 ### When YOU add a migration (adding a new feature that changes the DB):
 
-1. Create a new file: `db/migrations/0NN_description.sql` (next number in sequence — currently at 026)
+1. Create a new file: `db/migrations/0NN_description.sql` (next number in sequence — currently at 027)
 2. Every statement MUST be idempotent:
    - Tables: `CREATE TABLE IF NOT EXISTS`
    - Columns: wrap in `DO $$ BEGIN ALTER TABLE ... ADD COLUMN ...; EXCEPTION WHEN duplicate_column THEN NULL; END $$`
@@ -215,7 +215,7 @@ services/
 ├── llm_client.py           # Gemini → Claude → rule-based fallback (reads env keys)
 ├── drug_interactions.py    # Static interaction matrix (~50 pairs)
 └── prompts/                # system_report.txt, system_interview.txt, system_scribe.txt
-db/migrations/                  # Sequential SQL files 001–026; run in order on startup (auto-applied by migrate.js)
+db/migrations/                  # Sequential SQL files 001–027; run in order on startup (auto-applied by migrate.js)
 frontend/src/app/
 ├── patient/                    # Multi-step intake flow (register, consent, documents, interview, vitals)
 ├── doctor/page.jsx             # Doctor dashboard — Queue / Consulting / Consulted; Report / Prescribe / Scribe tabs
