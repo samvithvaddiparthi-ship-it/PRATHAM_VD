@@ -123,6 +123,13 @@ token palette and **must pass** — several tokens sit within 0.15 of their floo
 - The public queue board (`/queue`, `GET /api/queue/board`) is unauthenticated: token
   numbers only. **Never** add `triage_level` back to it — a token is de-anonymised the
   moment it is called, so per-token acuity discloses health status to the waiting room.
+- **PWA: manifest only, no service worker.** `app/manifest.js` is inert metadata and is
+  safe. Do **not** add a service worker (or `next-pwa`) without an explicit human
+  decision: it would cache PHI to Cache Storage on shared devices (DPDP), let a doctor
+  see a stale cached report or triage level, and keep clinicians on old JS after a
+  deploy. If it ever happens: app shell + static assets only, never `/api/*`, with a
+  cache key tied to the build id. `output: 'standalone'` does not bundle `public/` —
+  both Dockerfiles copy it explicitly, or the icons 404.
 
 ### JavaScript (node-backend + frontend)
 - No `console.log` in committed code — use the existing logger pattern in the codebase

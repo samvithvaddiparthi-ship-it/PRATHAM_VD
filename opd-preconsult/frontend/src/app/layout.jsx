@@ -39,6 +39,27 @@ const notoSansTelugu = Noto_Sans_Telugu({
 export const metadata = {
   title: 'OPD Pre-Consultation',
   description: 'AI-powered pre-consultation for hospital OPDs',
+  // Next emits <link rel="manifest"> from app/manifest.js on its own. iOS does
+  // not read the manifest's icon list, so apple-touch-icon has to be declared
+  // here or a home-screen install gets a screenshot of the page instead.
+  icons: {
+    icon: [{ url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' }],
+    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: 'Pratham OPD',
+    // 'default' keeps the iOS status bar legible over the navy header. 'black-
+    // translucent' would let content slide under the notch.
+    statusBarStyle: 'default',
+  },
+};
+
+// Next 14 wants themeColor/viewport here, not in `metadata` — it warns otherwise.
+// viewportFit + maximum-scale are left at their defaults on purpose: pinch-zoom
+// must stay available (WCAG 1.4.4), and this app is used by elderly patients.
+export const viewport = {
+  themeColor: '#1B4F72',
 };
 
 export default function RootLayout({ children }) {

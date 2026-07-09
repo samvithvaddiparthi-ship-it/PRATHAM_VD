@@ -271,6 +271,50 @@ docker compose exec postgres psql -U opd_user -d opd_preconsult -c "\d <table_na
 > `COPY . .` would paste over the Linux ones installed inside the image, and
 > `next build` fails in the container. Don't remove it.
 
+## PWA (installable web app)
+
+The frontend ships a web app manifest (`frontend/src/app/manifest.js`, served at
+`/manifest.webmanifest`) plus icons in `frontend/public/icons/`. That makes the app
+installable to a phone/tablet home screen or a kiosk, launching without browser
+chrome (`display: standalone`), with the right icon and status-bar colour.
+
+Most useful for the **doctor dashboard on a phone** and the **waiting-room board**
+(`/queue` on a wall display). Patients scan a QR for a single visit, so they will
+rarely install — but nothing breaks if they do: `start_url: "/"` drops the QR's
+`?h=<hospital_id>` and `parseEntry()` falls back to `NEXT_PUBLIC_HOSPITAL_ID`.
+
+Icons are committed. Regenerate only if the mark or brand colour changes:
+
+```bash
+cd frontend && npm run gen:icons
+```
+
+> ### ⚠️ There is deliberately NO service worker. Do not add one casually.
+>
+> A manifest is inert metadata — it cannot intercept requests or cache anything.
+> A **service worker** can, and in this app that is a clinical-safety and DPDP
+> problem, not a performance win:
+>
+> - **PHI on disk.** `/doctor`, `/his` and the patient pages return names, phone
+>   numbers and diagnoses. A caching SW writes those into Cache Storage on the
+>   device, surviving logout, on a possibly shared hospital phone.
+> - **Stale clinical data.** Offline-first would show a doctor a cached report or
+>   triage level that is no longer current. Decision-support UI must never
+>   silently serve stale clinical state.
+> - **Stale bundles.** This project's main operational gotcha is already "rebuild,
+>   don't restart". A SW caching JS means clinicians keep running old code after a
+>   deploy until it updates — the bug you cannot debug remotely.
+>
+> Note that without a service worker Chrome will **not** show an "Install app"
+> prompt (it requires a SW with a fetch handler). iOS *Add to Home Screen* works
+> regardless. If a real install prompt is required later, scope the SW to the app
+> shell and static assets only, **never `/api/*`**, and add a versioned cache bust
+> tied to the build id.
+
+Note: `next.config.js` sets `output: 'standalone'`, which does **not** bundle
+`public/`. Both `frontend/Dockerfile` and the root `Dockerfile` copy it explicitly.
+Remove those lines and every icon 404s.
+
 ## Accessibility & Design Tokens
 
 The UI targets **WCAG 2.1 Level AA**. That is not a nice-to-have here: for a

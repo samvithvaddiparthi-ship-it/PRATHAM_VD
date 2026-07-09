@@ -49,6 +49,8 @@ COPY services/node-backend/src/ ./src/
 WORKDIR /app/frontend
 COPY --from=frontend-builder /build/frontend/.next/standalone ./
 COPY --from=frontend-builder /build/frontend/.next/static ./.next/static
+# `output: standalone` does NOT bundle public/ — copy it or the PWA icons 404.
+COPY --from=frontend-builder /build/frontend/public ./public
 
 # ---- DB migrations ----
 COPY db/ /app/db/
