@@ -5,11 +5,17 @@ const { APP_TIMEZONE } = require('../utils/time');
 const router = Router();
 
 // PUBLIC waiting-room board for a department — like a standard government-OPD
-// "Now Serving" display. No auth: it exposes token numbers ONLY (no patient
-// names/phones/PHI), so it is safe to show on a screen in the waiting area.
+// "Now Serving" display. No auth, so it must expose token numbers ONLY.
 //
 //   now_serving = visits a doctor has opened (being consulted), not yet dispatched
 //   waiting     = completed pre-consults not yet picked up (urgent-first, then arrival)
+//
+// triage_level MUST NOT be selected here. It is health data about an identifiable
+// person: a token becomes a face the moment it is called, so publishing acuity on
+// a screen in a crowded waiting area discloses a patient's clinical status to
+// everyone present — sensitive personal data under the DPDP Act 2023, with no
+// consent basis. Triage stays in the ORDER BY (call priority is the point) but
+// never leaves the server.
 //
 // Triage ordering mirrors the doctor dashboard's call order; if mentors choose a
 // strict first-come-first-served policy later, only the ORDER BY changes.
@@ -19,7 +25,7 @@ router.get('/board', async (req, res) => {
     if (!department) return res.status(400).json({ error: 'department required' });
 
     const nowServing = await pool.query(
-      `SELECT token_label, triage_level
+      `SELECT token_label
          FROM sessions
         WHERE department = $1
           AND assigned_doctor_id IS NOT NULL
@@ -32,7 +38,7 @@ router.get('/board', async (req, res) => {
     );
 
     const waiting = await pool.query(
-      `SELECT token_label, triage_level
+      `SELECT token_label
          FROM sessions
         WHERE department = $1
           AND state = 'COMPLETE'

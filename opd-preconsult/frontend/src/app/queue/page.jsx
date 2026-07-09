@@ -5,11 +5,15 @@ import { api } from '../../lib/api';
 
 // PUBLIC waiting-room "Now Serving" board, for a screen in the waiting area.
 // Usage: /queue?dept=CARD  (optional &name=Cardiology &refresh=5)
-// Shows token numbers only — no patient names/PHI. Polls the public board endpoint.
+//
+// Token numbers only. Never render triage/acuity here: the board is unauthenticated
+// and a token is de-anonymised the instant it is called, so any per-token severity
+// cue would disclose a patient's clinical status to the whole waiting room. The
+// /board endpoint deliberately no longer returns triage_level (see routes/queue.js);
+// urgent cases are still called first, which is what the footer note explains.
 
 const DEPT_NAMES = { CARD: 'Cardiology', GEN: 'General Medicine', ORTHO: 'Orthopedics' };
 const DEPT_ACCENT = { CARD: '#E4572E', GEN: '#2E86AB', ORTHO: '#17A398' };
-const TRIAGE = { RED: '#E4572E', AMBER: '#E0A82E', GREEN: '#3FA869' };
 
 function Board() {
   const sp = useSearchParams();
@@ -94,7 +98,6 @@ function Board() {
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
             {serving.map((s, i) => {
-              const c = TRIAGE[s.triage_level] || accent;
               return (
                 <div key={i} style={{
                   minWidth: 240, borderRadius: 20, overflow: 'hidden',
@@ -102,7 +105,7 @@ function Board() {
                   border: '1px solid rgba(255,255,255,0.10)',
                   animation: 'nsPulse 2.2s ease-out infinite',
                 }}>
-                  <div style={{ height: 8, background: c }} />
+                  <div style={{ height: 8, background: accent }} />
                   <div style={{ padding: 'clamp(14px, 2vh, 26px) clamp(24px, 3vw, 40px)', textAlign: 'center' }}>
                     <div style={{ fontSize: 'clamp(44px, 7vw, 104px)', fontWeight: 900, lineHeight: 1, letterSpacing: 1 }}>{s.token_label}</div>
                     <div style={{ marginTop: 8, fontSize: 'clamp(12px, 1.3vw, 17px)', letterSpacing: 2, color: '#A9C6D8', textTransform: 'uppercase' }}>Being seen now</div>
@@ -126,20 +129,16 @@ function Board() {
           <p style={{ fontSize: 'clamp(16px, 2vw, 24px)', color: '#6E93A9' }}>No one is waiting right now.</p>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 14 }}>
-            {waiting.slice(0, 24).map((w, i) => {
-              const c = TRIAGE[w.triage_level] || '#5b7e92';
-              return (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center',
-                  fontSize: 'clamp(20px, 2.6vw, 36px)', fontWeight: 800,
-                  padding: 'clamp(10px, 1.6vh, 18px) 12px', borderRadius: 14,
-                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
-                  borderLeft: `6px solid ${c}`,
-                }}>
-                  {w.token_label}
-                </div>
-              );
-            })}
+            {waiting.slice(0, 24).map((w, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center',
+                fontSize: 'clamp(20px, 2.6vw, 36px)', fontWeight: 800,
+                padding: 'clamp(10px, 1.6vh, 18px) 12px', borderRadius: 14,
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+              }}>
+                {w.token_label}
+              </div>
+            ))}
             {waiting.length > 24 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'clamp(18px, 2vw, 28px)', color: '#8FB4CB' }}>
                 +{waiting.length - 24} more
