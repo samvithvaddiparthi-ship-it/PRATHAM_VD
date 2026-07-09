@@ -13,6 +13,22 @@ import VitalsForm, { hasVitals } from '../../components/VitalsForm';
 const TRIAGE_COLORS = { RED: '#D9544D', AMBER: '#E0A82E', GREEN: '#3FA869' };
 const TRIAGE_SEVERITY = { RED: 0, AMBER: 1, GREEN: 2 };
 
+// True on phone-width viewports. The doctor dashboard is a desktop two-pane
+// layout (queue list + report side by side); on phones we can't fit both, so we
+// switch to a master-detail flow — the list OR the open patient's report, one at
+// a time — driven by this flag. SSR-safe (defaults to false until mounted).
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function fmtVisitDate(ts) {
   try {
     return new Date(ts).toLocaleString(undefined, {
@@ -129,9 +145,9 @@ function PinLogin({ onLogin }) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: 16 }}>
       <form onSubmit={handleSubmit} style={{
-        background: '#fff', borderRadius: 16, padding: 32, width: 360,
+        background: '#fff', borderRadius: 16, padding: 32, width: '100%', maxWidth: 360,
         boxShadow: '0 4px 24px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', gap: 16
       }}>
         <div style={{ textAlign: 'center' }}>
@@ -203,6 +219,7 @@ function DoctorDashboard({ doctor }) {
   const [switchBlocked, setSwitchBlocked] = useState(false);    // tried to open another patient before finishing → red flash + message
   const [departments, setDepartments] = useState([]);           // all departments (for cross-dept reassign)
   const [reassignOpen, setReassignOpen] = useState(false);      // reassign popover toggle
+  const isMobile = useIsMobile();                               // phone → master-detail (list OR report), not side-by-side
 
   useEffect(() => {
     loadQueue();
@@ -659,12 +676,44 @@ function DoctorDashboard({ doctor }) {
   const timeStr = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
 
   return (
-    <div className="doctor-layout" style={{ display: 'flex', gap: 16, height: '100vh', overflow: 'hidden', boxSizing: 'border-box' }}>
+    <div className="doctor-layout" style={{ display: 'flex', gap: 16, boxSizing: 'border-box',
+      // Desktop: two fixed-height panes side by side. Phone: stack, let the page
+      // scroll normally so nothing is clipped off the right edge.
+      flexDirection: isMobile ? 'column' : 'row',
+      height: isMobile ? 'auto' : '100vh',
+      minHeight: isMobile ? '100dvh' : undefined,
+      overflow: isMobile ? 'visible' : 'hidden' }}>
       {dialog}
       {toastView}
+      {/* Blocked-switch notice — you must finish the current patient first.
+          Rendered at the top level (not inside the report pane) so it also shows
+          on phones, where the report pane is display:none while the list is up. */}
+      {switchBlocked && (
+        <div onClick={() => setSwitchBlocked(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 420, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: 'center' }}>
+            <div style={{ fontSize: 34, marginBottom: 8 }}>✋</div>
+            <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish current patient first</h3>
+            <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: '0 0 18px' }}>
+              You're currently consulting a patient. Complete their prescription and click
+              <strong> Save &amp; Generate QR</strong> before opening another patient.
+            </p>
+            <button className="btn btn-primary" style={{ minWidth: 120 }} onClick={() => setSwitchBlocked(false)}>OK</button>
+          </div>
+        </div>
+      )}
       {/* Left Panel — fixed-height column: the header/tabs/search stay put while
-          only the patient list below scrolls in its own scrollbar. */}
-      <div style={{ width: 340, flexShrink: 0, position: 'sticky', top: 16, height: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column' }}>
+          only the patient list below scrolls in its own scrollbar. On phone it
+          becomes full-width and is hidden once a patient is opened (detail view). */}
+      <div style={{
+        width: isMobile ? '100%' : 340,
+        flexShrink: 0,
+        position: isMobile ? 'static' : 'sticky',
+        top: isMobile ? undefined : 16,
+        height: isMobile ? 'auto' : 'calc(100vh - 32px)',
+        display: (isMobile && selected) ? 'none' : 'flex',
+        flexDirection: 'column' }}>
         <style>{`@keyframes skpulse { 0%,100% { opacity:1 } 50% { opacity:.45 } } @keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
@@ -900,22 +949,22 @@ function DoctorDashboard({ doctor }) {
 
       {/* Right Panel — own height + internal scroll so the report scrolls
           inside the card and never nudges the whole page at the edges. */}
-      <div className="scrolly" style={{ flex: 1, minWidth: 0, height: '100%', background: switchBlocked ? '#FDF1EF' : 'var(--card-bg)', borderRadius: 16, padding: 24, border: switchBlocked ? '1.5px solid #E6A79F' : '1.5px solid transparent', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', transition: 'background 0.15s, border-color 0.15s' }}>
-        {/* Blocked-switch notice — you must finish the current patient first. */}
-        {switchBlocked && (
-          <div onClick={() => setSwitchBlocked(false)}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-            <div onClick={e => e.stopPropagation()}
-              style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 420, width: '90%', boxShadow: '0 8px 30px rgba(0,0,0,0.25)', textAlign: 'center' }}>
-              <div style={{ fontSize: 34, marginBottom: 8 }}>✋</div>
-              <h3 style={{ color: '#C0392B', margin: '0 0 8px', fontSize: 18 }}>Finish current patient first</h3>
-              <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: '0 0 18px' }}>
-                You're currently consulting a patient. Complete their prescription and click
-                <strong> Save &amp; Generate QR</strong> before opening another patient.
-              </p>
-              <button className="btn btn-primary" style={{ minWidth: 120 }} onClick={() => setSwitchBlocked(false)}>OK</button>
-            </div>
-          </div>
+      <div className="scrolly" style={{ flex: 1, minWidth: 0,
+        // Desktop: fixed full-height pane that scrolls internally. Phone: hidden
+        // until a patient is picked, then full-width with natural page scroll.
+        display: (isMobile && !selected) ? 'none' : 'block',
+        height: isMobile ? 'auto' : '100%',
+        overflowY: isMobile ? 'visible' : undefined,
+        padding: isMobile ? 16 : 24,
+        background: switchBlocked ? '#FDF1EF' : 'var(--card-bg)', borderRadius: 16, border: switchBlocked ? '1.5px solid #E6A79F' : '1.5px solid transparent', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', transition: 'background 0.15s, border-color 0.15s' }}>
+        {/* Phone-only: return to the queue list (the list is hidden while a
+            patient is open). Deselecting only changes the view — any active
+            consultation lock is kept, so the patient can be reopened. */}
+        {isMobile && selected && (
+          <button onClick={() => { setSelected(null); setReport(null); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, background: 'none', border: '1px solid #d5dce4', borderRadius: 8, padding: '7px 12px', fontSize: 13, fontWeight: 600, color: 'var(--secondary)', cursor: 'pointer' }}>
+            ← Back to list
+          </button>
         )}
         {!selected && (
           <div style={{ textAlign: 'center', marginTop: 90, color: 'var(--text-light)' }}>
@@ -938,7 +987,7 @@ function DoctorDashboard({ doctor }) {
                   patient name always sits on its OWN line below the triage (kept
                   consistent for every entry), prefixed with a small "PATIENT"
                   label so it can't be mistaken for the triage or the meta line. */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                 <TriageBadge level={selected.triage_level} />
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', position: 'relative' }}>
                 {/* Queue: reassign — to another department's general queue, or to
