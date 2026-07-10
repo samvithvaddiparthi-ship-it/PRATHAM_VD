@@ -509,18 +509,20 @@ function HISDashboard() {
       })()}
 
       <div style={{ display: 'flex', gap: 16 }}>
-        {/* Patient Table */}
-        <div style={{ flex: 1, overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        {/* Patient Table — its own vertical scroll so only the rows move; the
+            page header, tabs and search stay put. The column header sticks to the
+            top of this scroll area. */}
+        <div style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 190px)', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
             <thead>
               <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 'calc(13px * var(--fs))' }}>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Patient</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Dept</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Triage</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>State</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Consult Time</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Doctor</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left' }}>Assign / Reassign</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Patient</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Dept</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Triage</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>State</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Consult Time</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Doctor</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Assign / Reassign</th>
               </tr>
             </thead>
             <tbody>
@@ -540,7 +542,7 @@ function HISDashboard() {
                     )}
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>{s.department}</td>
-                  <td style={{ padding: '10px 12px' }}><TriageBadge level={s.triage_level} /></td>
+                  <td style={{ padding: '10px 12px' }}><TriageBadge level={s.triage_level} compact /></td>
                   <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     {(() => { const m = stateMeta(s.display_state); return (
                       <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 'calc(11px * var(--fs))', background: m.bg, color: m.fg }}>{m.label}</span>
@@ -779,7 +781,7 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
     return acc;
   }, { total: 0, completed: 0, active: 0, severe: 0 });
 
-  const th = { padding: '11px 14px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', fontWeight: 700, letterSpacing: 0.3, whiteSpace: 'nowrap' };
+  const th = { padding: '11px 14px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', fontWeight: 700, letterSpacing: 0.3, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 };
   const td = { padding: '11px 14px', fontSize: 'calc(13px * var(--fs))', whiteSpace: 'nowrap' };
   const numChip = (n, color) => (
     <span style={{ fontWeight: 700, color: n ? color : 'var(--text-light)' }}>{n}</span>
@@ -860,8 +862,8 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
         ))}
       </div>
 
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 230px)', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
           <thead>
             <tr style={{ background: 'var(--primary)', color: '#fff' }}>
               <th style={th}>Doctor</th>
@@ -1705,14 +1707,15 @@ function DepartmentsManager({ depts, onChange }) {
       {/* Department list */}
       <div style={{ flex: 1 }}>
         <h3 style={{ fontSize: 'calc(16px * var(--fs))', marginBottom: 12, color: 'var(--primary)' }}>Departments ({depts.length})</h3>
-        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
           <thead>
             <tr style={{ background: 'var(--primary)', color: '#fff', fontSize: 'calc(13px * var(--fs))' }}>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Icon</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Code</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Name</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Collect Vitals</th>
-              <th style={{ padding: '10px 12px', textAlign: 'left' }}>Actions</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Icon</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Code</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Name</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Collect Vitals</th>
+              <th style={{ padding: '10px 12px', textAlign: 'left', position: 'sticky', top: 0, background: 'var(--primary)', zIndex: 1 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1745,6 +1748,7 @@ function DepartmentsManager({ depts, onChange }) {
             ))}
           </tbody>
         </table>
+        </div>
         {depts.length === 0 && (
           <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32 }}>No departments yet</p>
         )}
@@ -1868,6 +1872,7 @@ function ProtocolsManager({ depts = [] }) {
 
         <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>{protocols.length} active protocols</p>
 
+        <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 260px)', paddingRight: 4 }}>
         {protocols.map(p => (
           <div key={p.id} onClick={() => startEdit(p)}
             style={{
@@ -1888,6 +1893,7 @@ function ProtocolsManager({ depts = [] }) {
             )}
           </div>
         ))}
+        </div>
 
         {protocols.length === 0 && (
           <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 32, fontSize: 'calc(13px * var(--fs))' }}>
@@ -2269,11 +2275,12 @@ function SettingsManager() {
       <div style={{ background: 'var(--card-bg)', border: '1px solid #E2E8F0', borderRadius: 12, padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 240 }}>
-            <h3 style={{ margin: '0 0 6px', fontSize: 16, color: 'var(--primary)' }}>Document scanning (OCR)</h3>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-light)', lineHeight: 1.5 }}>
-              When ON, patients can photograph their prescriptions and reports, and the app uses
-              AI/OCR to read them. When OFF, the upload step is hidden for all patients and no
-              AI extraction runs — this avoids the per-scan API cost. Applies to all departments.
+            <h3 style={{ margin: '0 0 6px', fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)' }}>Document scanning (OCR)</h3>
+            <p style={{ margin: 0, fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.5 }}>
+              When ON, uploaded prescriptions and reports are read by AI/OCR and the extracted
+              medicines, lab values and allergies are added to the doctor's report. When OFF,
+              patients can still upload — the files are shown to the doctor as-is, but no AI
+              extraction runs, avoiding the per-scan API cost. Applies to all departments.
             </p>
           </div>
           {/* Toggle switch */}
@@ -2294,10 +2301,10 @@ function SettingsManager() {
             }} />
           </button>
         </div>
-        <div style={{ marginTop: 14, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600,
+        <div style={{ marginTop: 14, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'calc(13px * var(--fs))', fontWeight: 600,
           color: on ? 'var(--green)' : 'var(--text-light)' }}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: on ? 'var(--green)' : '#B0B8C1' }} />
-          {on ? 'Enabled — document scanning is active' : 'Disabled — patients skip document upload'}
+          {on ? 'Enabled — uploads are read by AI/OCR' : 'Disabled — uploads shown to doctor as-is, no AI extraction'}
         </div>
       </div>
     </div>

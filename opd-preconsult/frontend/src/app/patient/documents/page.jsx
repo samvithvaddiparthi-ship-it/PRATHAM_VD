@@ -80,15 +80,21 @@ export default function Documents() {
       <ProgressBar stepId="documents" lang={lang} />
       <div className="card" style={{ gap: 16 }}>
         <h2 style={{ textAlign: 'center', color: 'var(--primary)' }}>{t('documents_title', lang)}</h2>
-        <p style={{ color: 'var(--text-light)', textAlign: 'center', fontSize: 14 }}>{t('documents_desc', lang)}</p>
+        <p style={{ color: 'var(--text-light)', textAlign: 'center', fontSize: 'calc(14px * var(--fs, 1))', lineHeight: 1.5 }}>{t('documents_desc', lang)}</p>
 
         {/* When OCR is off, patients can still upload — the files are stored and
-            shown to the doctor as-is (no AI reading). A short note sets that
+            shown to the doctor as-is (no AI reading). An info chip sets that
             expectation so they don't wait for an on-screen summary. */}
         {ocrEnabled === false && (
-          <p style={{ fontSize: 12, color: 'var(--text-light)', textAlign: 'center', marginTop: -6 }}>
-            {t('documents_passthrough_note', lang)}
-          </p>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: '#EFF4F8', border: '1px solid #DCE6EE', borderRadius: 10,
+            padding: '10px 14px', color: 'var(--text-light)',
+            fontSize: 'calc(13px * var(--fs, 1))', lineHeight: 1.5,
+          }}>
+            <span aria-hidden style={{ fontSize: 'calc(16px * var(--fs, 1))', flexShrink: 0 }}>📎</span>
+            <span>{t('documents_passthrough_note', lang)}</span>
+          </div>
         )}
 
         {/* Document type selector */}
