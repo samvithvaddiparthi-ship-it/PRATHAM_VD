@@ -1119,7 +1119,7 @@ function DoctorDashboard({ doctor }) {
                               {label}
                               {clip.duration_ms ? <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> · {(clip.duration_ms / 1000).toFixed(1)}s</span> : null}
                             </p>
-                            <audio controls preload="none" src={api.answerAudioUrl(clip.id)} style={{ width: '100%', height: 36 }} />
+                            <audio controls preload="none" src={clip.url} style={{ width: '100%', height: 36 }} />
                           </div>
                         );
                       })}
@@ -1273,9 +1273,9 @@ function DoctorDashboard({ doctor }) {
                       <span style={{ marginLeft: 'auto', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{d.created_at ? fmtVisitDate(d.created_at) : ''}</span>
                     </div>
                     <div style={{ padding: 12 }}>
-                      {d.image_key ? (
-                        <a href={`/api/ocr/documents/image/${d.id}`} target="_blank" rel="noreferrer">
-                          <img src={`/api/ocr/documents/image/${d.id}`} alt="uploaded document"
+                      {d.image_url ? (
+                        <a href={d.image_url} target="_blank" rel="noreferrer">
+                          <img src={d.image_url} alt="uploaded document"
                             style={{ width: '100%', objectFit: 'contain', borderRadius: 6, border: '1px solid #EEF2F6', background: '#fff', cursor: 'zoom-in' }} />
                         </a>
                       ) : (

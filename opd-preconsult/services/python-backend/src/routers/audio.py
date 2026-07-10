@@ -7,7 +7,7 @@ the patient said. Endpoints:
 
   POST /api/audio/answer          — store a clip (multipart) for a session+question
   GET  /api/audio/session/{id}    — list a session's clips (for the doctor report)
-  GET  /api/audio/clip/{clip_id}  — stream a clip's audio bytes
+  GET  /api/audio/clip/{clip_id}  — stream a clip's audio bytes (signed URL)
 
 When Bhashini is wired in later, it transcribes these same stored clips instead
 of the browser speech engine — no change to capture or playback.
@@ -19,14 +19,16 @@ from fastapi.responses import StreamingResponse
 
 from ..db import query, execute
 from .. import storage
+from .. import media_urls
 from ..auth import require_auth
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
 
-# NOTE on auth: /answer and /session/{id} require a valid JWT. /clip/{id} is left
-# open because it's consumed as an <audio src> (see api.answerAudioUrl), which
-# can't send an Authorization header; it only serves bytes for an opaque clip id.
+# NOTE on auth: /answer and /session/{id} require a valid JWT. /clip/{id} takes no
+# JWT because it's consumed as an <audio src>, which can't send an Authorization
+# header — it instead requires a short-lived HMAC signature minted by
+# /session/{id} (see media_urls.py, §5b).
 @router.post("/answer", dependencies=[Depends(require_auth)])
 async def upload_answer_audio(
     file: UploadFile = File(...),
@@ -72,13 +74,18 @@ async def list_session_audio(session_id: str):
             "duration_ms": r["duration_ms"],
             "transcript": r["transcript"],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            # Signed, short-lived playback URL — the caller is authenticated here,
+            # so this list is where the capability is minted.
+            "url": media_urls.audio_clip_url(str(r["id"])),
         }
         for r in rows
     ]
 
 
 @router.get("/clip/{clip_id}")
-async def get_clip(clip_id: str):
+async def get_clip(clip_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
+    """Stream a clip's bytes. Requires a live HMAC signature from /session/{id}."""
+    media_urls.verify(media_urls.KIND_CLIP, clip_id, exp, sig)
     rows = query("SELECT object_key, mime FROM answer_audio WHERE id = %s", (clip_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Clip not found")

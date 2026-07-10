@@ -5,8 +5,10 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
 
-// Admin-only guard for protocol authoring (create/update/delete). Reads
-// (list / get / evaluate) stay open so the patient flow can evaluate protocols.
+// Admin-only guard for protocol authoring (create/update/delete). The protocol
+// LIST and GET stay open — they are department config (trigger rules, pre-visit
+// messages), not patient data. `evaluate` reads a session's answers, so it needs
+// a token (§5a).
 const adminOnly = [authMiddleware, requireRole('admin')];
 
 // List protocols (optionally filter by department)
@@ -108,7 +110,7 @@ router.delete('/:id', ...adminOnly, async (req, res) => {
 });
 
 // Evaluate which protocols apply to a session
-router.get('/evaluate/:session_id', async (req, res) => {
+router.get('/evaluate/:session_id', authMiddleware, async (req, res) => {
   try {
     const sessionId = req.params.session_id;
 

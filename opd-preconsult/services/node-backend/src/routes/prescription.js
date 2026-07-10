@@ -144,7 +144,7 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
 });
 
 // Get prescriptions for a session
-router.get('/session/:session_id', async (req, res) => {
+router.get('/session/:session_id', authMiddleware, async (req, res) => {
   try {
     const rxs = await pool.query(
       'SELECT p.*, d.name as doctor_name FROM prescriptions p LEFT JOIN doctors d ON p.doctor_id = d.id WHERE p.session_id = $1 ORDER BY p.created_at DESC',
@@ -185,8 +185,9 @@ router.post('/verify-qr', async (req, res) => {
   }
 });
 
-// Patient allergies — list for a phone
-router.get('/allergies/:phone', async (req, res) => {
+// Patient allergies — list for a phone. Phone-addressable clinical history:
+// clinicians only (§5a).
+router.get('/allergies/:phone', authMiddleware, requireRole('doctor', 'admin'), async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM patient_allergies WHERE patient_phone = $1 ORDER BY created_at',
@@ -198,8 +199,8 @@ router.get('/allergies/:phone', async (req, res) => {
   }
 });
 
-// Add allergy
-router.post('/allergies', async (req, res) => {
+// Add allergy — writes clinical history against an arbitrary phone (§5a).
+router.post('/allergies', authMiddleware, requireRole('doctor', 'admin'), async (req, res) => {
   try {
     const { patient_phone, allergen, reaction_type, severity, source } = req.body;
     if (!patient_phone || !allergen) {

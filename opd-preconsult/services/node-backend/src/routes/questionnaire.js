@@ -230,8 +230,8 @@ router.post('/rewind', authMiddleware, async (req, res) => {
   }
 });
 
-// Get all answers for a session
-router.get('/answers/:session_id', async (req, res) => {
+// Get all answers for a session (free-text symptom PHI)
+router.get('/answers/:session_id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM session_answers WHERE session_id = $1 ORDER BY created_at',

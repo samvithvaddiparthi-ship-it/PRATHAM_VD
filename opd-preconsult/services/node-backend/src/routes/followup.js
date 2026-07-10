@@ -1,11 +1,19 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
+const { authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
 
+// Every route here is clinician-facing (§5a). Nothing in the patient flow calls
+// them: listing joins patient_name + phone, scheduling sends a message to an
+// arbitrary number, and /respond writes a clinical response. If patient-initiated
+// follow-up replies are wired up later (e.g. from the WhatsApp webhook), they
+// should go through the webhook handler, not this route.
+const clinicianOnly = [authMiddleware, requireRole('doctor', 'admin')];
+
 // List follow-ups (optionally filter by status)
-router.get('/', async (req, res) => {
+router.get('/', ...clinicianOnly, async (req, res) => {
   try {
     const { status, phone } = req.query;
     let sql = 'SELECT f.*, s.patient_name, s.department FROM scheduled_followups f JOIN sessions s ON f.session_id = s.id';
@@ -27,7 +35,7 @@ router.get('/', async (req, res) => {
 });
 
 // Schedule a follow-up manually
-router.post('/', async (req, res) => {
+router.post('/', ...clinicianOnly, async (req, res) => {
   try {
     const { session_id, protocol_id, patient_phone, message, send_at, channel } = req.body;
     if (!session_id || !patient_phone || !message || !send_at) {
@@ -45,7 +53,7 @@ router.post('/', async (req, res) => {
 });
 
 // Record patient response to a follow-up
-router.post('/:id/respond', async (req, res) => {
+router.post('/:id/respond', ...clinicianOnly, async (req, res) => {
   try {
     const { response } = req.body;
     const responseLower = (response || '').toLowerCase();

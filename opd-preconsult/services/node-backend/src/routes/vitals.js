@@ -33,7 +33,7 @@ router.post('/:session_id', authMiddleware, async (req, res) => {
 });
 
 // Get vitals for session
-router.get('/:session_id', async (req, res) => {
+router.get('/:session_id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM session_vitals WHERE session_id = $1 ORDER BY recorded_at DESC LIMIT 1',

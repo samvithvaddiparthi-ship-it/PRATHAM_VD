@@ -91,6 +91,8 @@ export const api = {
     return res.json();
   },
   confirmDocument: (docId, confirmed = true) => apiFetch(`/api/ocr/confirm/${docId}`, { method: 'POST', body: JSON.stringify({ confirmed }) }),
+  // Each document carries a short-lived signed `image_url` for the <img src>.
+  // Never build `/api/ocr/documents/image/<id>` by hand — it 403s without a sig.
   getDocuments: (sessionId) => apiFetch(`/api/ocr/documents/${sessionId}`),
 
   // Per-answer voice recordings (patient capture → doctor playback)
@@ -107,8 +109,10 @@ export const api = {
     if (!res.ok) throw new Error('audio upload failed');
     return res.json();
   },
+  // Each clip in the response carries a short-lived signed `url` for playback —
+  // an <audio src> can't send the Authorization header, so the authenticated
+  // list call is what mints the capability. Never build the clip URL by hand.
   getAnswerAudio: (sessionId) => apiFetch(`/api/audio/session/${sessionId}`),
-  answerAudioUrl: (clipId) => `${BASE}/api/audio/clip/${clipId}`,
 
   // Bhashini transcription — returns the transcript in the SPOKEN language
   // (no translation). Also stores the clip (WAV) for doctor playback.

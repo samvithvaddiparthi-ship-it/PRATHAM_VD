@@ -45,9 +45,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # JWT_SECRET). /health stays open. The audio, ocr and transcribe routers gate
 # per-route internally, because each has one endpoint consumed as a media <src>
 # or a public health check that can't carry an Authorization header:
-#   audio      → /clip/{id} (<audio src>) stays open
-#   ocr        → /documents/image/{id} (<img src>) stays open
+#   audio      → /clip/{id} (<audio src>): no JWT, but requires a short-lived
+#                HMAC signature minted by the authenticated /session/{id} list
+#   ocr        → /documents/image/{id} (<img src>): same, minted by /documents/{id}
 #   transcribe → /health stays open
+# See media_urls.py — the media ids are no longer standalone bearer capabilities.
 _auth = [Depends(require_auth)]
 app.include_router(llm.router, dependencies=_auth)
 app.include_router(triage.router, dependencies=_auth)

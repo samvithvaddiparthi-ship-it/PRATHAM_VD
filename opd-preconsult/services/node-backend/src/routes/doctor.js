@@ -1,9 +1,15 @@
 const { Router } = require('express');
 const crypto = require('crypto');
 const pool = require('../models/db');
-const { signToken, verifyToken, authMiddleware, requireRole } = require('../middleware/auth');
+const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
 
 const router = Router();
+
+// Every PHI route below goes through authMiddleware + requireRole rather than an
+// inline token check, so a missing gate is visible at the route definition
+// (§5a — `all-sessions` and `reassign` previously had no check at all).
+const doctorOnly = [authMiddleware, requireRole('doctor')];
+const clinicianOnly = [authMiddleware, requireRole('doctor', 'admin')];
 
 function hashPin(pin) {
   return crypto.createHash('sha256').update(pin).digest('hex');
@@ -154,8 +160,11 @@ router.post('/:id/reactivate', authMiddleware, requireRole('admin'), async (req,
   }
 });
 
-// List doctors (for admin)
-router.get('/', async (req, res) => {
+// List doctors. The patient registration page reads this to offer a preferred
+// doctor, so it takes any valid token — but a patient must not learn a doctor's
+// personal phone or registration number, so those are stripped for patient
+// tokens. Clinicians (HIS doctor management) get the full row.
+router.get('/', authMiddleware, async (req, res) => {
   try {
     const { department } = req.query;
     let q = 'SELECT id, name, department, phone, registration_no, is_active, created_at FROM doctors WHERE 1=1';
@@ -163,6 +172,11 @@ router.get('/', async (req, res) => {
     if (department) { params.push(department); q += ` AND department = $${params.length}`; }
     q += ' ORDER BY name';
     const result = await pool.query(q, params);
+
+    const role = req.session_data && req.session_data.role;
+    if (role !== 'doctor' && role !== 'admin') {
+      return res.json(result.rows.map(({ phone, registration_no, ...safe }) => safe));
+    }
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -170,15 +184,9 @@ router.get('/', async (req, res) => {
 });
 
 // Get doctor's queue — assigned to them + unassigned in their department
-router.get('/queue', async (req, res) => {
+router.get('/queue', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
-
-    const { doctor_id, department } = decoded;
+    const { doctor_id, department } = req.session_data;
 
     // Patient directory: ALL completed visits in this department (full history,
     // not just the last 24h), so each patient's previous visits can be grouped
@@ -230,13 +238,9 @@ router.get('/queue', async (req, res) => {
 });
 
 // Assign session to doctor (self-assign or by admin)
-router.post('/assign/:session_id', async (req, res) => {
+router.post('/assign/:session_id', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     // consulted_at is stamped ONCE (first open) and never overwritten, so the
     // Consulted list keeps a fixed order even when a patient is re-opened.
@@ -263,12 +267,9 @@ router.post('/assign/:session_id', async (req, res) => {
 // OPEN (lock) a patient's visit for consultation. Atomic: succeeds only if the
 // visit is free or already mine and not yet dispatched. If another doctor holds
 // it, returns 409 with their name so the UI can say "being consulted already".
-router.post('/open/:session_id', async (req, res) => {
+router.post('/open/:session_id', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     // One active consultation per doctor: block opening a new patient while another
     // is still open (consulted, not yet dispatched). A patient merely reassigned to
@@ -330,12 +331,9 @@ router.post('/open/:session_id', async (req, res) => {
 // DISPATCH — the consultation is complete (Save & Generate QR clicked). Stamps
 // dispatched_at, which removes the visit from the active queue and moves it into
 // the doctor's Consulted list, releasing the lock.
-router.post('/dispatch/:session_id', async (req, res) => {
+router.post('/dispatch/:session_id', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     const result = await pool.query(
       `UPDATE sessions
@@ -360,13 +358,9 @@ router.post('/dispatch/:session_id', async (req, res) => {
 });
 
 // Unassign session — send back to pool
-router.post('/unassign/:session_id', async (req, res) => {
+router.post('/unassign/:session_id', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     // Abandon a lock — release the patient back to "waiting" (clear the doctor
     // link AND the consulted stamp so it's open for anyone again).
@@ -393,13 +387,9 @@ router.post('/unassign/:session_id', async (req, res) => {
 // leaves the doctor's Consulted list entirely — and stamps released_at, which
 // makes the queue treat it as "filled now" again (re-surfaces at the top with a
 // NEW badge, like a fresh patient fill) and counts it as "waiting".
-router.post('/release/:session_id', async (req, res) => {
+router.post('/release/:session_id', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     const result = await pool.query(
       `UPDATE sessions
@@ -430,7 +420,7 @@ router.post('/release/:session_id', async (req, res) => {
 //   {}  / null            → unassign (back to the current department's general pool).
 // In every assign/move case we clear the handoff stamps (consulted_at, dispatched_at)
 // so the receiving doctor sees a fresh entry. Triage is preserved.
-router.post('/reassign/:session_id', async (req, res) => {
+router.post('/reassign/:session_id', ...clinicianOnly, async (req, res) => {
   try {
     const { target_doctor_id, department } = req.body;
 
@@ -508,13 +498,9 @@ router.post('/reassign/:session_id', async (req, res) => {
 });
 
 // Doctor's consulted patients — completed sessions assigned to them
-router.get('/consulted', async (req, res) => {
+router.get('/consulted', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     // Consulted = visits I finished (Save & Generate QR → dispatched_at set).
     // Merely opening/locking a patient does NOT put them here.
@@ -545,8 +531,9 @@ router.get('/consulted', async (req, res) => {
   }
 });
 
-// All sessions with doctor info — for HIS/admin dashboard
-router.get('/all-sessions', async (req, res) => {
+// All sessions with doctor info — for HIS/admin dashboard. Dumps the whole
+// patient roster, so it is clinician-only (§5a: this had no auth at all).
+router.get('/all-sessions', ...clinicianOnly, async (req, res) => {
   try {
     const { department, doctor_id, state, triage } = req.query;
     // display_state — the SINGLE source of truth for the HIS "State" column AND
@@ -587,18 +574,7 @@ router.get('/all-sessions', async (req, res) => {
 // (not erased), so it drops out of the active Queue and the patient's
 // previous-logins, but all its data is retained and it STAYS in the doctor's
 // Consulted history if it was consulted. Guarded behind doctor auth.
-router.delete('/session/:session_id', async (req, res) => {
-  const auth = req.headers.authorization;
-  if (!auth) return res.status(401).json({ error: 'No token' });
-
-  let decoded;
-  try {
-    decoded = verifyToken(auth.replace('Bearer ', ''));
-  } catch {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-  if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
-
+router.delete('/session/:session_id', ...doctorOnly, async (req, res) => {
   const { session_id } = req.params;
   try {
     const result = await pool.query(
@@ -614,13 +590,9 @@ router.delete('/session/:session_id', async (req, res) => {
 });
 
 // Change PIN
-router.post('/change-pin', async (req, res) => {
+router.post('/change-pin', ...doctorOnly, async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'No token' });
-
-    const decoded = verifyToken(auth.replace('Bearer ', ''));
-    if (decoded.role !== 'doctor') return res.status(403).json({ error: 'Not a doctor token' });
+    const decoded = req.session_data;
 
     const { old_pin, new_pin } = req.body;
     if (!old_pin || !new_pin) return res.status(400).json({ error: 'old_pin and new_pin required' });

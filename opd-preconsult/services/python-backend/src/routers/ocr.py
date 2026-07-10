@@ -12,6 +12,7 @@ import pytesseract
 from ..db import execute, query
 from .. import storage
 from ..auth import require_auth
+from .. import media_urls
 from ..llm_client import complete_with_image, has_llm, has_vision
 from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
 
@@ -468,16 +469,32 @@ async def confirm_document(doc_id: str, body: dict = {}):
 
 @router.get("/documents/{session_id}", dependencies=[Depends(require_auth)])
 async def get_documents(session_id: str):
-    """Get all documents for a session."""
-    return query(
+    """Get all documents for a session.
+
+    Each document that has a stored image also carries `image_url` — a
+    short-lived signed URL for the (otherwise open) image route. The caller is
+    authenticated here, so this list is where the capability is minted.
+    """
+    rows = query(
         "SELECT * FROM session_documents WHERE session_id = %s ORDER BY created_at",
         (session_id,),
     )
+    out = []
+    for r in rows:
+        doc = dict(r)
+        doc["image_url"] = media_urls.document_image_url(str(doc["id"])) if doc.get("image_key") else None
+        out.append(doc)
+    return out
 
 
 @router.get("/documents/image/{doc_id}")
-async def get_document_image(doc_id: str):
-    """Stream the stored image for an uploaded document (for the HIS viewer)."""
+async def get_document_image(doc_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
+    """Stream the stored image for an uploaded document.
+
+    No JWT — an `<img src>` cannot send one. Instead the URL must carry a live
+    HMAC signature minted by `GET /api/ocr/documents/{session_id}` (§5b).
+    """
+    media_urls.verify(media_urls.KIND_DOC, doc_id, exp, sig)
     rows = query("SELECT image_key FROM session_documents WHERE id = %s", (doc_id,))
     key = rows[0]["image_key"] if rows else None
     if not key:
