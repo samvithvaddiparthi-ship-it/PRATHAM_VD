@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image, ImageFilter, ImageOps
 import pytesseract
 
 from ..db import execute, query
@@ -42,6 +42,9 @@ OCR_NORMALIZE_BRANDS = os.getenv("OCR_NORMALIZE_BRANDS", "true").strip().lower()
 # Upload guards — reject oversized files (memory) and decompression-bomb images.
 OCR_MAX_UPLOAD_MB = int(os.getenv("OCR_MAX_UPLOAD_MB", "15"))
 OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "12000"))  # max px per side
+# How many PDF pages to read. Multi-page lab reports / discharge summaries were
+# previously truncated to page 1; we now stack up to this many pages into one image.
+OCR_PDF_MAX_PAGES = int(os.getenv("OCR_PDF_MAX_PAGES", "5"))
 
 
 def _ocr_enabled() -> bool:
@@ -188,15 +191,57 @@ on how the text was typed."""
 # ── Image preprocessing ───────────────────────────────────────────────────────
 
 def preprocess_image(image: Image.Image) -> Image.Image:
-    """Enhance image contrast and resolution for Tesseract on phone-captured docs."""
+    """Enhance image contrast and resolution for Tesseract on phone-captured docs.
+    Uses adaptive autocontrast (per-image) rather than a fixed 2x boost, which
+    over-darkens already-bright phone photos and washes out faint print."""
     img = image.convert('L')
-    img = ImageEnhance.Contrast(img).enhance(2.0)
+    img = ImageOps.autocontrast(img, cutoff=1)
     img = img.filter(ImageFilter.SHARPEN)
     w, h = img.size
     if w < 1000:
         scale = 1000 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
     return img
+
+
+def _encode_png(image: Image.Image) -> bytes:
+    """Serialise a PIL image to PNG bytes (for storage + the vision call)."""
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _pdf_to_image(contents: bytes):
+    """Render up to OCR_PDF_MAX_PAGES pages of a PDF and stack them vertically into
+    ONE image, so multi-page prescriptions / lab reports aren't truncated to page 1.
+    Returns (PIL.Image RGB, total_page_count). Raises ImportError if PyMuPDF missing."""
+    import fitz
+    pdf = fitz.open(stream=contents, filetype="pdf")
+    total = len(pdf)
+    n = min(total, OCR_PDF_MAX_PAGES)
+    pages = []
+    for i in range(n):
+        pix = pdf[i].get_pixmap(matrix=fitz.Matrix(2, 2))
+        pages.append(Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB"))
+    if not pages:
+        raise ValueError("PDF has no pages")
+    if len(pages) == 1:
+        combined = pages[0]
+    else:
+        gap = 24
+        width = max(p.width for p in pages)
+        height = sum(p.height for p in pages) + gap * (len(pages) - 1)
+        combined = Image.new("RGB", (width, height), "white")
+        y = 0
+        for p in pages:
+            combined.paste(p, (0, y))
+            y += p.height + gap
+    # Keep within the decompression-bomb dimension guard.
+    longest = max(combined.width, combined.height)
+    if longest > OCR_MAX_DIM:
+        s = OCR_MAX_DIM / longest
+        combined = combined.resize((max(1, int(combined.width * s)), max(1, int(combined.height * s))), Image.LANCZOS)
+    return combined, total
 
 
 # ── Regex fallback helpers (no LLM) ──────────────────────────────────────────
@@ -309,16 +354,17 @@ async def process_document(
     if len(contents) > OCR_MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large (max {OCR_MAX_UPLOAD_MB} MB)")
 
-    # PDF → first page image
+    # PDF → stacked page image (all pages up to OCR_PDF_MAX_PAGES, not just page 1).
     filename = (file.filename or "").lower()
     is_pdf = filename.endswith(".pdf") or (file.content_type or "").lower() == "application/pdf"
     if is_pdf:
         try:
-            import fitz
-            pdf = fitz.open(stream=contents, filetype="pdf")
-            pix = pdf[0].get_pixmap(matrix=fitz.Matrix(2, 2))
-            img_bytes = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_bytes))
+            image, _pages = _pdf_to_image(contents)
+            img_bytes = _encode_png(image)
+            # Point `contents` at the RENDERED image so the vision model receives an
+            # actual image (previously it got raw PDF bytes labelled image/png and
+            # silently failed to a regex-only extraction).
+            contents = img_bytes
             mime_type = "image/png"
         except ImportError:
             return {
@@ -328,8 +374,17 @@ async def process_document(
             }
     else:
         image = Image.open(io.BytesIO(contents))
-        fmt = (image.format or "JPEG").upper()
-        mime_type = {"JPEG": "image/jpeg", "JPG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(fmt, "image/jpeg")
+        # Phone-photo robustness (free): fix EXIF orientation so a sideways/upside-down
+        # capture is uprighted for BOTH Tesseract and the vision model. Re-encode so
+        # the corrected pixels flow downstream (vision call + stored image).
+        oriented = ImageOps.exif_transpose(image)
+        if oriented is not None and oriented is not image:
+            image = oriented
+            contents = _encode_png(image)
+            mime_type = "image/png"
+        else:
+            fmt = (image.format or "JPEG").upper()
+            mime_type = {"JPEG": "image/jpeg", "JPG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(fmt, "image/jpeg")
 
     # Guard: reject absurd dimensions (decompression bombs) before processing.
     if image.width > OCR_MAX_DIM or image.height > OCR_MAX_DIM:

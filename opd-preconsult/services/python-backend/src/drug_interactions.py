@@ -13,7 +13,18 @@ written on a prescription (Ecosprin, Telma, Augmentin…) are checked correctly.
 POC content — NOT exhaustive and NOT clinically validated. The rules below must
 be reviewed by a clinician before any real-world reliance.
 """
+import os
+import re
+import difflib
+
 from .drug_data import normalize_with, GENERIC_DRUGS, BRAND_TO_GENERIC
+
+# Fuzzy tolerance for matching a written allergy term to a known class/drug.
+# Slightly looser than the drug-name matcher because allergy free-text is messier
+# ("pennicilin", "penicillin allergy", "sulpha"). Guarded by token length so short
+# words don't collide. This is a SAFETY path — a missed allergy is far worse than
+# an extra caution flag the doctor can dismiss.
+_ALLERGY_FUZZY_CUTOFF = float(os.getenv("ALLERGY_FUZZY_CUTOFF", "0.82"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Class-vs-class rules.
@@ -247,6 +258,34 @@ def check_duplicates(drugs, rules=None):
     return warnings
 
 
+def _allergy_classes(allergy_lower: str, rules) -> set:
+    """All drug classes an allergy term contraindicates. Robust to filler words
+    ("penicillin allergy"), synonyms ("sulpha"), and spelling errors ("pennicilin"):
+    matches the whole string and each word against the allergy map both exactly and
+    fuzzily. Returns a set of class names (empty if the term maps to nothing — e.g.
+    a food/environmental allergy like "peanut", which must NOT flag any drug)."""
+    amap = rules["allergy_map"]
+    classes = set()
+    tokens = re.findall(r"[a-z]+", allergy_lower)
+
+    # 1) Exact — whole string, then each token.
+    if allergy_lower in amap:
+        classes.add(amap[allergy_lower])
+    for t in tokens:
+        if t in amap:
+            classes.add(amap[t])
+    if classes:
+        return classes
+
+    # 2) Fuzzy — whole string and each sufficiently-long token against the map keys.
+    keys = list(amap.keys())
+    for cand in [allergy_lower] + [t for t in tokens if len(t) >= 5]:
+        hit = difflib.get_close_matches(cand, keys, n=1, cutoff=_ALLERGY_FUZZY_CUTOFF)
+        if hit:
+            classes.add(amap[hit[0]])
+    return classes
+
+
 def check_allergies(drug_name, allergies, rules=None):
     """Check a drug against patient allergies. Returns a list of contraindications.
     Output shape unchanged: {drug, allergy, severity, description}."""
@@ -260,8 +299,8 @@ def check_allergies(drug_name, allergies, rules=None):
         if not allergy_lower:
             continue
 
-        # Direct match against the generic (also matches if the allergy itself is
-        # a brand name, since both sides are normalized).
+        # Direct match against the generic (also matches if the allergy itself is a
+        # brand/misspelled drug name — both sides go through the fuzzy normalizer).
         if allergy_lower == generic or _norm(allergy_lower, rules) == generic:
             warnings.append({
                 "drug": drug_name,
@@ -271,9 +310,9 @@ def check_allergies(drug_name, allergies, rules=None):
             })
             continue
 
-        # Class-based match.
-        cls = rules["allergy_map"].get(allergy_lower)
-        if cls and cls in classes:
+        # Class-based match — robust to spelling/filler (e.g. a "pennicilin" allergy
+        # still contraindicates amoxicillin, which is in the penicillin class).
+        if _allergy_classes(allergy_lower, rules) & classes:
             warnings.append({
                 "drug": drug_name,
                 "allergy": allergy,
