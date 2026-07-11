@@ -5,6 +5,7 @@ const { sendServerError } = require('../utils/http');
 const { baseNodesForDept } = require('../seed/baseTemplate');
 const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
 const { isLocked, recordFailure, clearFailures } = require('../utils/loginLimiter');
+const { eraseSession } = require('../utils/erase');
 
 const router = Router();
 
@@ -62,6 +63,24 @@ router.post('/login', async (req, res) => {
       );
     } catch { /* audit_log optional */ }
     res.json({ token });
+  } catch (err) {
+    sendServerError(res, err);
+  }
+});
+
+// ── Right to erasure (DPDP §12) ──
+// §6b — HARD-delete every PHI row for a session across all tables + the backing
+// MinIO objects, leaving only a PHI-free tombstone in audit_log. Admin only, and
+// irreversible — distinct from the doctor soft-remove (removed_at) which retains
+// data. The global admin_action middleware also records who invoked it.
+router.delete('/erase/:session_id', ...adminOnly, async (req, res) => {
+  try {
+    const result = await eraseSession(req.params.session_id, {
+      actor: (req.session_data && req.session_data.admin_name) || 'admin',
+      reason: 'manual_erasure',
+    });
+    if (!result.found) return res.status(404).json({ error: 'Session not found' });
+    res.json({ erased: true, ...result });
   } catch (err) {
     sendServerError(res, err);
   }

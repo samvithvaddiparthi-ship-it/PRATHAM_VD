@@ -195,6 +195,11 @@ async function start() {
   // Start follow-up worker
   const { startFollowupWorker } = require('./workers/followup-worker');
   startFollowupWorker();
+
+  // §6b — retention worker (hard-erases sessions older than RETENTION_DAYS).
+  // No-op unless RETENTION_DAYS > 0.
+  const { startRetentionWorker } = require('./workers/retention-worker');
+  startRetentionWorker();
 }
 
 start();
