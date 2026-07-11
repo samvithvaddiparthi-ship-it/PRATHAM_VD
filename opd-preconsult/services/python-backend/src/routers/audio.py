@@ -12,10 +12,9 @@ the patient said. Endpoints:
 When Bhashini is wired in later, it transcribes these same stored clips instead
 of the browser speech engine — no change to capture or playback.
 """
-import io
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi.responses import Response
 
 from ..db import query, execute
 from .. import storage
@@ -90,9 +89,40 @@ async def list_session_audio(session_id: str, claims: dict = Depends(require_aut
     ]
 
 
+def _parse_range(range_header: str, size: int):
+    """Parse an HTTP `Range: bytes=start-end` header into (start, end) inclusive,
+    clamped to the object size. Returns None if unparseable or unsatisfiable."""
+    try:
+        units, _, rng = range_header.partition("=")
+        if units.strip().lower() != "bytes":
+            return None
+        start_s, _, end_s = rng.partition("-")
+        if start_s == "":
+            # suffix range: bytes=-N -> last N bytes
+            n = int(end_s)
+            if n <= 0:
+                return None
+            start, end = max(0, size - n), size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+        start = max(0, start)
+        end = min(end, size - 1)
+        if start > end:
+            return None
+        return start, end
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/clip/{clip_id}", dependencies=[Depends(_rl_media)])
-async def get_clip(clip_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
-    """Stream a clip's bytes. Requires a live HMAC signature from /session/{id}."""
+async def get_clip(clip_id: str, request: Request, exp: Optional[int] = None, sig: Optional[str] = None):
+    """Stream a clip's bytes. Requires a live HMAC signature from /session/{id}.
+
+    Supports HTTP range requests (206 + Accept-Ranges) so the browser's native
+    <audio> control can show duration and seek/scrub — without a Range response the
+    player can't build a working timeline.
+    """
     media_urls.verify(media_urls.KIND_CLIP, clip_id, exp, sig)
     rows = query("SELECT object_key, mime, session_id FROM answer_audio WHERE id = %s", (clip_id,))
     if not rows:
@@ -104,4 +134,25 @@ async def get_clip(clip_id: str, exp: Optional[int] = None, sig: Optional[str] =
     data = storage.get_bytes(rows[0]["object_key"])
     if data is None:
         raise HTTPException(status_code=404, detail="Audio bytes missing")
-    return StreamingResponse(io.BytesIO(data), media_type=rows[0]["mime"] or "audio/webm")
+
+    mime = rows[0]["mime"] or "audio/webm"
+    size = len(data)
+    range_header = request.headers.get("range")
+    if range_header:
+        rng = _parse_range(range_header, size)
+        if rng is None:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        start, end = rng
+        chunk = data[start:end + 1]
+        return Response(
+            content=chunk, status_code=206, media_type=mime,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(chunk)),
+            },
+        )
+    # No range requested — return the whole object but advertise range support so
+    # the player knows it can seek.
+    return Response(content=data, media_type=mime,
+                    headers={"Accept-Ranges": "bytes", "Content-Length": str(size)})

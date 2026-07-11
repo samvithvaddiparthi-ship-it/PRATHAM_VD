@@ -15,6 +15,16 @@ POC content — NOT a complete formulary and NOT clinically validated. The class
 tags and brand map should be reviewed by a clinician before any real use.
 """
 import re
+import difflib
+
+# Fuzzy-match tuning (see _fuzzy_match). Conservative on purpose — this is a
+# clinical-safety path, so we only accept a very close single best match and never
+# fuzz short tokens (which collide easily). 0.86 catches OCR typos like
+# "amoxillin"->"amoxicillin" / "metaprolol"->"metoprolol" while rejecting genuinely
+# different drugs. Tunable via env without a code change.
+import os as _os
+_FUZZY_CUTOFF = float(_os.getenv("DRUG_FUZZY_CUTOFF", "0.86"))
+_FUZZY_MIN_LEN = int(_os.getenv("DRUG_FUZZY_MIN_LEN", "6"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Generic formulary: generic name -> list of pharmacological classes.
@@ -344,6 +354,25 @@ def _clean(name: str) -> str:
     return s
 
 
+def _fuzzy_match(token: str, generics, brands):
+    """Last-resort near-match for OCR/spelling errors. Returns the mapped generic
+    for the single closest formulary entry within _FUZZY_CUTOFF, or None. Guarded
+    by a minimum length so short tokens (which fuzzy-collide easily) never match.
+
+    This is what lets a misread "amoxillin" still be checked as amoxicillin for
+    interactions/allergies instead of silently passing through as an unknown drug.
+    """
+    if len(token) < _FUZZY_MIN_LEN:
+        return None
+    # Candidates: every generic name + every brand alias.
+    candidates = list(generics) + list(brands)
+    hits = difflib.get_close_matches(token, candidates, n=1, cutoff=_FUZZY_CUTOFF)
+    if not hits:
+        return None
+    hit = hits[0]
+    return brands[hit] if hit in brands else hit
+
+
 def normalize_with(name: str, generics, brands) -> str:
     """Data-driven normalisation: match a written drug name against the provided
     `generics` (iterable/set of generic names) and `brands` (brand->generic map).
@@ -364,6 +393,12 @@ def normalize_with(name: str, generics, brands) -> str:
         return first
     if first in brands:
         return brands[first]
+
+    # Fuzzy fallback for OCR/spelling near-misses (e.g. "amoxillin" -> amoxicillin).
+    # Only after every exact path fails, so correct names are never re-mapped.
+    fuzzy = _fuzzy_match(cleaned, generics, brands) or _fuzzy_match(first, generics, brands)
+    if fuzzy:
+        return fuzzy
 
     return cleaned
 

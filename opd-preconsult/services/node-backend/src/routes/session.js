@@ -6,6 +6,21 @@ const { APP_TIMEZONE } = require('../utils/time');
 
 const router = Router();
 
+// How long an unfinished visit keeps blocking a re-entry for the same person.
+// A visit abandoned mid-flow (patient closes the tab at interview/vitals) is never
+// dispatched or removed, so without a cutoff it would block that name+phone from
+// EVER registering again. We only treat a prior open visit as "still in progress"
+// if it was touched within this window (default 12h — an OPD is same-day). Env-
+// tunable; 0 disables the window (old behaviour: any open visit blocks forever).
+const ACTIVE_VISIT_WINDOW_HOURS = (() => {
+  const n = parseInt(process.env.ACTIVE_VISIT_WINDOW_HOURS, 10);
+  return Number.isFinite(n) ? n : 12;
+})();
+// SQL fragment appended to the "already active" guards. Empty when disabled.
+const ACTIVE_WINDOW_SQL = ACTIVE_VISIT_WINDOW_HOURS > 0
+  ? `AND updated_at > NOW() - make_interval(hours => ${ACTIVE_VISIT_WINDOW_HOURS})`
+  : '';
+
 // Decode QR and create session
 router.post('/scan', async (req, res) => {
   try {
@@ -94,6 +109,7 @@ router.post('/register', authMiddleware, async (req, res) => {
           AND id <> $3
           AND removed_at IS NULL
           AND dispatched_at IS NULL
+          ${ACTIVE_WINDOW_SQL}
         LIMIT 1`,
       [normalizedPhone, nameKey, session_id]
     );
@@ -205,6 +221,7 @@ router.post('/active-check', authMiddleware, async (req, res) => {
           AND id <> $3
           AND removed_at IS NULL
           AND dispatched_at IS NULL
+          ${ACTIVE_WINDOW_SQL}
         LIMIT 1`,
       [phone, name, session_id]
     );
