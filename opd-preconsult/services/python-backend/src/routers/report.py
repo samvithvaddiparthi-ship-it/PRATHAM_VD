@@ -110,6 +110,30 @@ async def _generate_report_impl(req: ReportRequest):
             for a in allergies:
                 all_doc_allergies.append({"allergen": a, "source_doc_type": doc.get("doc_type")})
 
+        # High-value clinical context the OCR already extracts but that was being
+        # dropped before reaching the report LLM. These feed the interpretive
+        # sections directly — diagnosis/clinical_notes/investigations into Past
+        # Medical History (the prompt already asks for discharge-summary findings
+        # there), doctor_name for provenance of the prior encounter. Included only
+        # when present so absent fields don't clutter the prompt. (PHI note: this
+        # goes to the cloud LLM alongside the patient name already in the prompt;
+        # the §3 pseudonymisation concern is deferred to the Vertex migration.)
+        diagnosis = structured.get("diagnosis")
+        if diagnosis and str(diagnosis).strip():
+            doc_entry["diagnosis"] = str(diagnosis).strip()
+
+        clinical_notes = structured.get("clinical_notes")
+        if clinical_notes and str(clinical_notes).strip():
+            doc_entry["clinical_notes"] = str(clinical_notes).strip()
+
+        investigations = [str(i).strip() for i in (structured.get("investigations_ordered") or []) if str(i).strip()]
+        if investigations:
+            doc_entry["investigations_ordered"] = investigations
+
+        doctor_name = structured.get("doctor_name")
+        if doctor_name and str(doctor_name).strip():
+            doc_entry["doctor_name"] = str(doctor_name).strip()
+
         documents_data.append(doc_entry)
 
     # Build session JSON for the LLM

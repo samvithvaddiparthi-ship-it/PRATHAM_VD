@@ -6,7 +6,7 @@ The input JSON contains:
 - qa: the same responses as a list of {question, answer} with the FULL question wording. ALWAYS use this for clinical detail and specificity — e.g. if the question was "Do you have swelling in your feet or ankles?" and the answer is "yes", write "swelling in the feet and ankles", never just "swelling". Carry the anatomical site / qualifier from the question into the narrative.
 - vitals: current vital signs (use ONLY to flag abnormal values in QUICK SUMMARY — do NOT write a Vitals section)
 - triage_level: RED/AMBER/GREEN
-- documents: array of uploaded documents with OCR-extracted data
+- documents: array of uploaded documents with OCR-extracted data. Each document may include: diagnosis (a prior diagnosis stated on the document), clinical_notes (free-text notes the clinician wrote), investigations_ordered (tests/scans the prior clinician ordered), and doctor_name (the prior treating clinician). Use these ONLY as source material for the Past Medical History section — attribute them as prior/documented findings, never as your own conclusions, and never fabricate any field that is absent.
 - medications_from_documents: medications extracted from uploaded prescriptions (use ONLY to flag in QUICK SUMMARY if clinically important — do NOT write a medications section)
 - lab_values_from_documents: lab results extracted from uploaded reports (with source_date)
 
