@@ -2004,13 +2004,16 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
             <span style={{ width: 'calc(16px * var(--fs))' }} aria-hidden="true" />
           </div>
           {currentMeds.map((med, idx) => (
-            <div key={med.id || idx} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-              <div style={{ flex: 2, minWidth: 140 }}>
+            <div key={med.id || idx} style={{ display: 'flex', gap: 6, marginBottom: med.brand ? 20 : 6, alignItems: 'center' }}>
+              {/* position: relative so the "written as" caption can hang BELOW the
+                  input without adding height to this column — otherwise the taller
+                  Drug column pushed the centered Dose/Freq boxes down out of line. */}
+              <div style={{ flex: 2, minWidth: 140, position: 'relative' }}>
                 <input className="input" value={med.drug_name}
                   onChange={e => { const u = [...currentMeds]; u[idx] = { ...u[idx], drug_name: e.target.value }; setCurrentMeds(u); }}
                   style={{ minHeight: 32, fontSize: 'calc(13px * var(--fs))' }} />
                 {med.brand && (
-                  <div style={{ fontSize: 'calc(9px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>written as: {med.brand}</div>
+                  <div style={{ position: 'absolute', top: '100%', left: 2, marginTop: 2, whiteSpace: 'nowrap', fontSize: 'calc(9px * var(--fs))', color: 'var(--text-light)' }}>written as: {med.brand}</div>
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 60 }}>
