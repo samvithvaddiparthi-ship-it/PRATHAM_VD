@@ -204,6 +204,73 @@ def preprocess_image(image: Image.Image) -> Image.Image:
     return img
 
 
+def _rectify_document(image: Image.Image) -> Image.Image:
+    """Detect a document's four corners in a phone photo and warp it to a flat,
+    front-on rectangle — correcting perspective skew AND small rotation in one step.
+
+    Uses OpenCV, imported lazily so a build WITHOUT the wheel still runs (the
+    EXIF-orientation + autocontrast path stays the baseline). Deliberately
+    conservative: only warps when a convincing quadrilateral document boundary is
+    found (large, convex, not the whole frame, sane aspect). Anything less certain
+    returns the image unchanged — a wrong auto-crop is worse than none. Never raises."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return image
+    try:
+        rgb = image.convert("RGB")
+        full = np.asarray(rgb)[:, :, ::-1]           # RGB -> BGR
+        H, W = full.shape[:2]
+        if W < 300 or H < 300:
+            return image                              # too small to bother / risky
+
+        # Detect on a downscaled copy for speed; scale corners back to full res.
+        scale = 1500.0 / max(W, H) if max(W, H) > 1500 else 1.0
+        small = cv2.resize(full, (int(W * scale), int(H * scale))) if scale != 1.0 else full
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(gray, 50, 150)
+        edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        img_area = small.shape[0] * small.shape[1]
+        quad = None
+        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
+            area = cv2.contourArea(c)
+            if area < 0.25 * img_area:                # smaller than this isn't the page
+                break
+            approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
+            if len(approx) == 4 and cv2.isContourConvex(approx) and area <= 0.98 * img_area:
+                quad = approx.reshape(4, 2).astype("float32")
+                break
+        if quad is None:
+            return image                              # already flat / no clear boundary
+
+        pts = quad / scale                            # back to full-res coordinates
+        s, d = pts.sum(axis=1), np.diff(pts, axis=1).ravel()
+        tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+        tr, bl = pts[np.argmin(d)], pts[np.argmax(d)]
+
+        def _dist(a, b):
+            return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+        out_w = int(max(_dist(tl, tr), _dist(bl, br)))
+        out_h = int(max(_dist(tl, bl), _dist(tr, br)))
+        if out_w < 200 or out_h < 200:
+            return image
+        aspect = out_w / out_h
+        if aspect > 6 or aspect < 1 / 6:              # near-degenerate → likely a false hit
+            return image
+
+        src = np.array([tl, tr, br, bl], dtype="float32")
+        dst = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype="float32")
+        warped = cv2.warpPerspective(full, cv2.getPerspectiveTransform(src, dst), (out_w, out_h))
+        return Image.fromarray(warped[:, :, ::-1])    # BGR -> RGB
+    except Exception:
+        logger.warning("document rectification failed (non-fatal); using original image", exc_info=True)
+        return image
+
+
 def _encode_png(image: Image.Image) -> bytes:
     """Serialise a PIL image to PNG bytes (for storage + the vision call)."""
     buf = io.BytesIO()
@@ -374,12 +441,22 @@ async def process_document(
             }
     else:
         image = Image.open(io.BytesIO(contents))
-        # Phone-photo robustness (free): fix EXIF orientation so a sideways/upside-down
-        # capture is uprighted for BOTH Tesseract and the vision model. Re-encode so
-        # the corrected pixels flow downstream (vision call + stored image).
+        # Phone-photo robustness. Two upright steps, both feeding BOTH Tesseract and
+        # the vision model; re-encode only if the pixels actually changed.
+        #   1. EXIF orientation (free, PIL) — undo a sideways/upside-down capture.
+        #   2. Document rectification (optional OpenCV) — deskew + perspective-crop
+        #      an angled photo to a flat, front-on page. No-op without the wheel or
+        #      when no confident document boundary is found.
+        changed = False
         oriented = ImageOps.exif_transpose(image)
         if oriented is not None and oriented is not image:
             image = oriented
+            changed = True
+        rectified = _rectify_document(image)
+        if rectified is not image:
+            image = rectified
+            changed = True
+        if changed:
             contents = _encode_png(image)
             mime_type = "image/png"
         else:
