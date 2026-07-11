@@ -17,10 +17,14 @@ This is a living document — update the markers as things land.
 |-------|----|----|----|--------|-------|
 | **A — Software & Security** | 10 | 1 | 2 | 2 | **P0 complete**, most of P1 done |
 | **B — Data Privacy** | 3 | 0 | 0 | 4 | B1 encryption + B6 logs + B7 view-audit done; B2/B3 code-able, B4/B5 legal |
-| **C — Clinical Governance** | 0 | 0 | 0 | 7 (incl. ⚠️1) | mostly process/IRB; C1 banner conflict |
+| **C — Clinical Governance** | 0 | 1 | 0 | 6 (incl. ⚠️1) | C3 alert mechanism fixed; rest process/IRB; C1 banner conflict |
 | **D — Operations / Package** | 2 | 3 | 0 | 3 | runbook + paper-fallback SOP + staff training done |
 
-**Overall: 15 done · 4 in progress · 2 parked · rest not started.** Security posture (Track A) is in good shape; encryption at rest, PHI-in-logs and access audit (Track B) now done; remaining blockers are the legal privacy docs, clinical governance (mostly process), and deployment ops.
+**Overall: 15 done · 5 in progress · 2 parked · rest not started.** Security posture (Track A) is in good shape; encryption at rest, PHI-in-logs and access audit (Track B) now done; remaining blockers are the legal privacy docs, clinical governance (mostly process), and deployment ops.
+
+### 🔧 Fixes verified during the patient-flow run-through (2026-07-07)
+- **Triage no longer silently downgrades** — the holistic evaluator (`triage.py`) is now **monotonic**: it may escalate but never lowers a level already raised by an interview safety tripwire (e.g. chest pain → RED). Fixes a *"patient told SEVERE, then handed a GREEN token"* mismatch **and** ensures the RED nursing-station alert actually fires (that publish only ran when the evaluator's own level was RED). Downgrade is now human-only. *(see C3)*
+- **Clinical-protocol matching restored** — `GET /api/protocol/evaluate` was returning **500** (queried a non-existent column `answer_value`; corrected to `answer_raw`), so protocol triggers never ran. Now returns 200 and evaluates the department's protocols.
 
 ---
 
@@ -63,7 +67,7 @@ This is a living document — update the markers as things land.
 ## Track C — Clinical Governance  — ⚠️ **mostly process / IRB**
 - ⚠️ **C1 · "Investigational — not for clinical use" banner.** **CONFLICT** — the banner was **removed by decision**, but this item says keep it until each AI component is validated. Reconcile the regulatory posture (re-add a lighter notice, or accept the risk explicitly) before real patients.
 - ⬜ **C2 · Doctor-in-the-loop rule** documented — AI outputs are decision-support only, never auto-applied.
-- ⬜ **C3 · RED-triage escalation path** defined: who gets the SSE nursing alert, and what they do.
+- 🟡 **C3 · RED-triage escalation path.** **Mechanism fixed (2026-07-07):** triage is now monotonic and the RED SSE nursing alert fires reliably even when only a per-question tripwire raised the flag (`triage.py`). **Process still to define:** who at the nursing station receives the alert and exactly what they do on it.
 - ⬜ **C4 · AI validation (SaMD)** — benchmark triage / report / Bhashini ASR against labeled data + thresholds; pin model+prompt versions. *(OCR harness exists in `eval/ocr`.)*
 - ⬜ **C5 · AI observability** (Analytics Tier 3): log OCR/triage confidence + % routed to human review. *(code-able)*
 - ⬜ **C6 · Ethics committee / IRB approval.** *(process, long lead)*
