@@ -77,3 +77,20 @@ async def require_auth(authorization: str = Header(default="")) -> dict:
         raise HTTPException(status_code=401, detail="No token provided")
     token = authorization[7:] if authorization[:7].lower() == "bearer " else authorization
     return _verify(token)
+
+
+def enforce_ownership(claims: dict, session_id: str) -> None:
+    """§5c horizontal-IDOR guard for python routes that take a session id.
+
+    Clinicians (doctor/admin) may access any session in their remit. A patient
+    token is bound to exactly one session_id at issuance (node signs it into the
+    scan token) and may only touch that session's data. Anything else — a patient
+    reading another session, or a token with no session_id — is 403. Mirrors
+    node's requireSessionOwnership middleware.
+    """
+    role = (claims or {}).get("role")
+    if role in ("doctor", "admin"):
+        return
+    if role == "patient" and claims.get("session_id") and claims.get("session_id") == session_id:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden: not your session")

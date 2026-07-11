@@ -13,13 +13,16 @@ POST /api/transcribe   multipart: file, lang (REQUIRED), patient_name?,
                        session_id?, question_id?, duration_ms? -> { text, ... }
 GET  /api/transcribe/health -> { bhashini, llm }
 """
+import logging
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 
 from ..db import execute
 from .. import storage
-from ..auth import require_auth
+from ..auth import require_auth, enforce_ownership
 from ..bhashini import asr, medcorrect, _llm
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/transcribe", tags=["transcribe"])
 
@@ -42,12 +45,12 @@ async def translate(text: str = Form(...), source_lang: str = Form(...)):
     try:
         english = asr.translate(text, source_lang, "en")
         return {"english": english, "translated": True}
-    except Exception as e:
-        print(f"[transcribe] translation failed: {type(e).__name__}: {e}", flush=True)
+    except Exception:
+        logger.warning("transcribe translation failed", exc_info=True)
         raise HTTPException(status_code=502, detail="Translation unavailable")
 
 
-@router.post("", dependencies=[Depends(require_auth)])
+@router.post("")
 async def transcribe(
     file: UploadFile = File(...),
     lang: str = Form(...),                 # REQUIRED — never default to a language
@@ -55,7 +58,10 @@ async def transcribe(
     session_id: Optional[str] = Form(default=None),
     question_id: Optional[str] = Form(default=None),
     duration_ms: Optional[int] = Form(default=None),
+    claims: dict = Depends(require_auth),
 ):
+    if session_id:
+        enforce_ownership(claims, session_id)  # §5c — store only to own session
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Empty audio")
@@ -72,8 +78,8 @@ async def transcribe(
         try:
             raw, _service_id, _ms1 = asr.transcribe(contents, lang)
             bhashini_ok = True
-        except Exception as e:
-            print(f"[transcribe] Bhashini ASR failed: {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            logger.warning("transcribe Bhashini ASR failed", exc_info=True)
 
     # ── Stage 2: medical correction in the chosen language ──
     text = raw
@@ -85,8 +91,8 @@ async def transcribe(
             text = c.get("corrected") or raw
             llm_used = bool(c.get("llm_used"))
             changes = c.get("changes") or []
-        except Exception as e:
-            print(f"[transcribe] Stage-2 correction failed: {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            logger.warning("transcribe Stage-2 correction failed", exc_info=True)
 
     # ── Store the clip as WAV for doctor playback ──
     if session_id and contents:
@@ -104,8 +110,8 @@ async def transcribe(
                        VALUES (%s, %s, %s, %s, %s, %s)""",
                     (session_id, question_id, key, mime, duration_ms, text),
                 )
-        except Exception as e:
-            print(f"[transcribe] clip store failed (non-fatal): {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            logger.warning("transcribe clip store failed (non-fatal)", exc_info=True)
 
     return {
         "text": text,                  # corrected transcript in the chosen language

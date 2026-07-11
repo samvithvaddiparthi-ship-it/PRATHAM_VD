@@ -2,7 +2,7 @@ import os
 import re
 import json
 import uuid
-import traceback
+import logging
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
@@ -11,26 +11,35 @@ from typing import Optional
 import anthropic
 
 from ..db import query, execute
-from ..auth import require_auth
+from ..auth import require_auth, enforce_ownership
+from ..ratelimit import rate_limit
 from ..view_audit import record_view
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/report", tags=["report"])
+
+# §8c — report generation runs a cloud LLM; cap per client to limit cost-abuse.
+_rl_report = rate_limit("report_generate", default_max=20, default_window=60)
 
 PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 
 class ReportRequest(BaseModel):
     session_id: str
 
-@router.post("/generate")
-async def generate_report(req: ReportRequest):
+@router.post("/generate", dependencies=[Depends(_rl_report)])
+async def generate_report(req: ReportRequest, claims: dict = Depends(require_auth)):
+    # §5c — a patient may only (re)generate their OWN report; clinicians any.
+    enforce_ownership(claims, req.session_id)
     try:
         return await _generate_report_impl(req)
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"[report.generate] ERROR for session {req.session_id}: {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+    except Exception:
+        # §4a — log full detail server-side; return a generic message so DB/driver
+        # internals never reach the client.
+        logger.exception("report.generate failed for session %s", req.session_id)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _generate_report_impl(req: ReportRequest):
@@ -149,8 +158,8 @@ async def _generate_report_impl(req: ReportRequest):
             # otherwise fall through to the full deterministic report.
             if llm_md and _split_llm_sections(llm_md):
                 report_md = _assemble_report(llm_md, session_json)
-        except Exception as e:
-            print(f"[report] LLM call failed: {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            logger.warning("report LLM call failed; falling back to deterministic report", exc_info=True)
             report_md = None
     if not report_md:
         report_md = _fallback_report(session_json)
@@ -181,6 +190,7 @@ async def _generate_report_impl(req: ReportRequest):
 
 @router.get("/{session_id}")
 async def get_report(session_id: str, claims: dict = Depends(require_auth)):
+    enforce_ownership(claims, session_id)  # §5c
     reports = query(
         "SELECT * FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
         (session_id,),
@@ -203,7 +213,8 @@ async def get_report(session_id: str, claims: dict = Depends(require_auth)):
 
 
 @router.post("/{session_id}/feedback")
-async def submit_feedback(session_id: str, feedback: dict):
+async def submit_feedback(session_id: str, feedback: dict, claims: dict = Depends(require_auth)):
+    enforce_ownership(claims, session_id)  # §5c
     val = feedback.get("feedback")
     if val not in ("accurate", "inaccurate"):
         raise HTTPException(status_code=400, detail="Feedback must be 'accurate' or 'inaccurate'")
@@ -215,11 +226,12 @@ async def submit_feedback(session_id: str, feedback: dict):
 
 
 @router.post("/{session_id}/edit")
-async def edit_report(session_id: str, body: dict):
+async def edit_report(session_id: str, body: dict, claims: dict = Depends(require_auth)):
     """Store the doctor's full edited report markdown for the latest report. The AI
     original (report_md) is preserved untouched; the edited body lives in
     doctor_correction and is shown as the current report. Flags it inaccurate.
     An empty body clears the edit (reverts to the AI original)."""
+    enforce_ownership(claims, session_id)  # §5c
     edited = (body.get("report_md") or "").strip()
     rows = query(
         "SELECT id FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",

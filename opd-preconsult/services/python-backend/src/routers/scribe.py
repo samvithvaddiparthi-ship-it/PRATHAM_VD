@@ -1,28 +1,38 @@
 import io
 import json
-import traceback
+import logging
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from typing import Optional
 
 from ..db import execute, query
+from ..auth import require_auth, enforce_ownership
+from ..ratelimit import rate_limit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scribe", tags=["scribe"])
+
+# §8c — Whisper transcription and SOAP extraction hit paid cloud APIs; cap them.
+_rl_scribe = rate_limit("scribe", default_max=30, default_window=60)
 
 PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 
 
-@router.post("/transcribe")
+@router.post("/transcribe", dependencies=[Depends(_rl_scribe)])
 async def transcribe_audio(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
     lang: str = Form(default="en"),
+    claims: dict = Depends(require_auth),
 ):
     """
     Transcribe the consultation audio with Bhashini (Stage 1 ASR) + medical
     correction (Stage 2). Falls back to OpenAI Whisper if Bhashini is unavailable.
     Audio is held in memory only.
     """
+    if session_id:
+        enforce_ownership(claims, session_id)  # §5c
     contents = await file.read()
     transcript_text = ""
 
@@ -35,10 +45,10 @@ async def transcribe_audio(
             if transcript_text.strip():
                 try:
                     transcript_text = medcorrect.correct(transcript_text, lang).get("corrected") or transcript_text
-                except Exception as e:
-                    print(f"[scribe] Stage-2 correction failed: {type(e).__name__}: {e}", flush=True)
-        except Exception as e:
-            print(f"[scribe] Bhashini ASR failed: {type(e).__name__}: {e}", flush=True)
+                except Exception:
+                    logger.warning("scribe Stage-2 correction failed", exc_info=True)
+        except Exception:
+            logger.warning("scribe Bhashini ASR failed", exc_info=True)
 
     # ── Fallback: OpenAI Whisper ──
     if not transcript_text.strip():
@@ -53,10 +63,11 @@ async def transcribe_audio(
             transcript_text = transcription.text
         except ImportError:
             transcript_text = "[Transcription unavailable — Bhashini keys missing and Whisper not configured]"
-        except Exception as e:
-            print(f"[scribe] Whisper fallback error: {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            # §4a — log detail server-side; never return Whisper/provider error text.
+            logger.exception("scribe Whisper fallback failed")
             if not transcript_text:
-                raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+                raise HTTPException(status_code=500, detail="Transcription failed")
     contents = None
 
     return {
@@ -65,13 +76,15 @@ async def transcribe_audio(
     }
 
 
-@router.post("/extract-soap")
-async def extract_soap(body: dict):
+@router.post("/extract-soap", dependencies=[Depends(_rl_scribe)])
+async def extract_soap(body: dict, claims: dict = Depends(require_auth)):
     """
     Extract SOAP notes from a consultation transcript using LLM.
     """
     transcript = body.get("transcript", "")
     session_id = body.get("session_id")
+    if session_id:
+        enforce_ownership(claims, session_id)  # §5c
 
     if not transcript:
         raise HTTPException(status_code=400, detail="transcript required")
@@ -97,9 +110,8 @@ async def extract_soap(body: dict):
                     soap_json = json.loads(result[json_start:json_end])
             except json.JSONDecodeError:
                 soap_json = {"raw_response": result}
-        except Exception as e:
-            print(f"[scribe] LLM extraction error: {type(e).__name__}: {e}", flush=True)
-            traceback.print_exc()
+        except Exception:
+            logger.warning("scribe LLM extraction failed; using fallback SOAP", exc_info=True)
 
     if not soap_json:
         soap_json = _fallback_soap(transcript)
@@ -112,8 +124,8 @@ async def extract_soap(body: dict):
                    WHERE session_id = %s""",
                 (transcript, json.dumps(soap_json), session_id),
             )
-        except Exception as e:
-            print(f"[scribe] DB store error: {e}", flush=True)
+        except Exception:
+            logger.exception("scribe DB store failed for session %s", session_id)
 
     return {
         "soap": soap_json,
@@ -122,9 +134,10 @@ async def extract_soap(body: dict):
 
 
 @router.post("/soap/{session_id}")
-async def save_soap(session_id: str, body: dict):
+async def save_soap(session_id: str, body: dict, claims: dict = Depends(require_auth)):
     """Persist the doctor's edited SOAP note (free text). Stored in the existing
     scribe_soap column as {"text": ...} so it round-trips through get_soap."""
+    enforce_ownership(claims, session_id)  # §5c
     soap_text = (body.get("soap_text") or "").strip()
     try:
         execute(
@@ -132,15 +145,16 @@ async def save_soap(session_id: str, body: dict):
                WHERE session_id = %s""",
             (json.dumps({"text": soap_text}), session_id),
         )
-    except Exception as e:
-        print(f"[scribe] save_soap error: {e}", flush=True)
+    except Exception:
+        logger.exception("scribe save_soap failed for session %s", session_id)
         raise HTTPException(status_code=500, detail="Could not save SOAP note")
     return {"saved": True}
 
 
 @router.get("/soap/{session_id}")
-async def get_soap(session_id: str):
+async def get_soap(session_id: str, claims: dict = Depends(require_auth)):
     """Retrieve stored SOAP notes for a session."""
+    enforce_ownership(claims, session_id)  # §5c
     rows = query(
         "SELECT scribe_transcript, scribe_soap, scribe_created_at FROM session_reports WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
         (session_id,),

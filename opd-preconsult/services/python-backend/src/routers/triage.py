@@ -1,9 +1,12 @@
 import os
 import json
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from ..db import query, execute
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
 
@@ -133,7 +136,7 @@ async def evaluate(req: TriageRequest):
                     "department": dept,
                 })
                 r.publish("triage_alerts", alert)
-            except Exception as e:
-                print(f"[triage] Redis publish failed: {e}", flush=True)
+            except Exception:
+                logger.warning("triage Redis publish failed", exc_info=True)
 
     return TriageResponse(level=level, triggered_rules=triggered)

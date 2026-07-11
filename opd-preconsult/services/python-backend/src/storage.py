@@ -5,8 +5,11 @@ All other code should use this module — never import minio directly.
 """
 import os
 import io
+import logging
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 _client = None
 _bucket = None
@@ -36,9 +39,9 @@ def _get_client():
     # Auto-create bucket if it doesn't exist
     if not client.bucket_exists(bucket):
         client.make_bucket(bucket)
-        print(f"[storage] Created bucket: {bucket}", flush=True)
+        logger.info("storage created bucket: %s", bucket)
     else:
-        print(f"[storage] Bucket ready: {bucket}", flush=True)
+        logger.info("storage bucket ready: %s", bucket)
 
     _maybe_enable_encryption(client, bucket)
 
@@ -66,9 +69,9 @@ def _maybe_enable_encryption(client, bucket: str) -> None:
     try:
         from minio.sseconfig import Rule, SSEConfig
         client.set_bucket_encryption(bucket, SSEConfig(Rule.new_sse_s3_rule()))
-        print(f"[storage] Encryption at rest (SSE-S3) ensured on bucket: {bucket}", flush=True)
-    except Exception as e:
-        print(f"[storage] Could not set bucket encryption (non-fatal): {type(e).__name__}: {e}", flush=True)
+        logger.info("storage encryption at rest (SSE-S3) ensured on bucket: %s", bucket)
+    except Exception:
+        logger.warning("storage could not set bucket encryption (non-fatal)", exc_info=True)
 
 
 def upload_document(file_bytes: bytes, filename: str, session_id: str, content_type: str = "image/jpeg") -> str:
@@ -95,12 +98,12 @@ def upload_document(file_bytes: bytes, filename: str, session_id: str, content_t
             content_type=content_type,
         )
 
-        print(f"[storage] Uploaded: {object_key} ({len(file_bytes)} bytes)", flush=True)
+        logger.info("storage uploaded: %s (%d bytes)", object_key, len(file_bytes))
         return object_key
 
-    except Exception as e:
+    except Exception:
         # Storage failure should NOT break OCR — log and continue
-        print(f"[storage] Upload failed (non-fatal): {e}", flush=True)
+        logger.warning("storage upload failed (non-fatal)", exc_info=True)
         return None
 
 
@@ -117,8 +120,8 @@ def get_url(object_key: str, expires_hours: int = 24) -> str:
         client, bucket = _get_client()
         url = client.presigned_get_object(bucket, object_key, expires=timedelta(hours=expires_hours))
         return url
-    except Exception as e:
-        print(f"[storage] URL generation failed: {e}", flush=True)
+    except Exception:
+        logger.warning("storage URL generation failed", exc_info=True)
         return None
 
 
@@ -138,8 +141,8 @@ def get_bytes(object_key: str):
         finally:
             resp.close()
             resp.release_conn()
-    except Exception as e:
-        print(f"[storage] get_bytes failed: {e}", flush=True)
+    except Exception:
+        logger.warning("storage get_bytes failed", exc_info=True)
         return None
 
 

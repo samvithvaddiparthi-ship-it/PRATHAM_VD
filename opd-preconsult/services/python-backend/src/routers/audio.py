@@ -20,23 +20,29 @@ from fastapi.responses import StreamingResponse
 from ..db import query, execute
 from .. import storage
 from .. import media_urls
-from ..auth import require_auth
+from ..auth import require_auth, enforce_ownership
+from ..ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
+
+# §8c — the clip route is a public (signed) scrape target; cap per client IP.
+_rl_media = rate_limit("media", default_max=240, default_window=60)
 
 
 # NOTE on auth: /answer and /session/{id} require a valid JWT. /clip/{id} takes no
 # JWT because it's consumed as an <audio src>, which can't send an Authorization
 # header — it instead requires a short-lived HMAC signature minted by
 # /session/{id} (see media_urls.py, §5b).
-@router.post("/answer", dependencies=[Depends(require_auth)])
+@router.post("/answer")
 async def upload_answer_audio(
     file: UploadFile = File(...),
     session_id: str = Form(...),
     question_id: Optional[str] = Form(default=None),
     duration_ms: Optional[int] = Form(default=None),
     transcript: Optional[str] = Form(default=None),
+    claims: dict = Depends(require_auth),
 ):
+    enforce_ownership(claims, session_id)  # §5c — patient uploads only to own session
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Empty audio")
@@ -57,8 +63,9 @@ async def upload_answer_audio(
     return {"id": str(rows[0]["id"]) if rows else None}
 
 
-@router.get("/session/{session_id}", dependencies=[Depends(require_auth)])
-async def list_session_audio(session_id: str):
+@router.get("/session/{session_id}")
+async def list_session_audio(session_id: str, claims: dict = Depends(require_auth)):
+    enforce_ownership(claims, session_id)  # §5c — no cross-session clip enumeration
     rows = query(
         """SELECT id, question_id, mime, duration_ms, transcript, created_at
              FROM answer_audio
@@ -82,7 +89,7 @@ async def list_session_audio(session_id: str):
     ]
 
 
-@router.get("/clip/{clip_id}")
+@router.get("/clip/{clip_id}", dependencies=[Depends(_rl_media)])
 async def get_clip(clip_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
     """Stream a clip's bytes. Requires a live HMAC signature from /session/{id}."""
     media_urls.verify(media_urls.KIND_CLIP, clip_id, exp, sig)

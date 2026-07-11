@@ -1,11 +1,12 @@
 const { Router } = require('express');
 const pool = require('../models/db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requireSessionOwnership } = require('../middleware/auth');
 
 const router = Router();
 
-// Submit vitals
-router.post('/:session_id', authMiddleware, async (req, res) => {
+// Submit vitals — a patient submits their own; clinicians may enter for any
+// session (§5c ownership; role bypass for doctor/admin).
+router.post('/:session_id', authMiddleware, requireSessionOwnership('session_id'), async (req, res) => {
   try {
     const { session_id } = req.params;
     const { bp_systolic, bp_diastolic, bp_side, weight_kg, spo2_pct, heart_rate, temperature_c, source } = req.body;
@@ -32,8 +33,8 @@ router.post('/:session_id', authMiddleware, async (req, res) => {
   }
 });
 
-// Get vitals for session
-router.get('/:session_id', authMiddleware, async (req, res) => {
+// Get vitals for session — own session (patient) or any (clinician).
+router.get('/:session_id', authMiddleware, requireSessionOwnership('session_id'), async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM session_vitals WHERE session_id = $1 ORDER BY recorded_at DESC LIMIT 1',

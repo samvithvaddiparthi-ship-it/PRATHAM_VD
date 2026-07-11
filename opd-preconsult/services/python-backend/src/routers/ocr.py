@@ -11,12 +11,18 @@ import pytesseract
 
 from ..db import execute, query
 from .. import storage
-from ..auth import require_auth
+from ..auth import require_auth, enforce_ownership
+from ..ratelimit import rate_limit
 from .. import media_urls
 from ..llm_client import complete_with_image, has_llm, has_vision
 from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
 
 logger = logging.getLogger(__name__)
+
+# §8c — abuse/cost limiters. OCR can hit paid cloud vision; the image route is a
+# scrape target. Both fail open if Redis is down (see ratelimit.py).
+_rl_ocr = rate_limit("ocr_process", default_max=20, default_window=60)
+_rl_media = rate_limit("media", default_max=240, default_window=60)
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
 
@@ -285,14 +291,17 @@ def extract_with_vision(image_bytes: bytes, mime_type: str, ocr_text: str, ocr_c
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@router.post("/process", dependencies=[Depends(require_auth)])
+@router.post("/process", dependencies=[Depends(_rl_ocr)])
 async def process_document(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(default=None),
     lang: Optional[str] = Form(default="eng"),
     doc_label: Optional[str] = Form(default=None),
+    claims: dict = Depends(require_auth),
 ):
     """Process an uploaded document image or PDF with AI vision + Tesseract fallback."""
+    if session_id:
+        enforce_ownership(claims, session_id)  # §5c — upload only to own session
     contents = await file.read()
 
     # Guard: reject oversized uploads before loading them into memory.
@@ -338,8 +347,8 @@ async def process_document(
                 store_mime = "image/png" if is_pdf else mime_type
                 ext = "png" if is_pdf else (mime_type.split("/")[-1] or "jpg").replace("jpeg", "jpg")
                 image_key = storage.upload_document(store_bytes, f"doc.{ext}", session_id, content_type=store_mime)
-            except Exception as e:
-                print(f"[ocr] document image store failed (non-fatal): {type(e).__name__}: {e}", flush=True)
+            except Exception:
+                logger.warning("ocr document image store failed (non-fatal)", exc_info=True)
         structured = {
             "doc_type": doc_label or "document", "medications": [], "lab_values": [], "allergies": [],
             "extraction_source": "ocr_disabled", "confidence_source": "none",
@@ -437,8 +446,8 @@ async def process_document(
             store_mime = "image/png" if is_pdf else mime_type
             ext = "png" if is_pdf else (mime_type.split("/")[-1] or "jpg").replace("jpeg", "jpg")
             image_key = storage.upload_document(store_bytes, f"doc.{ext}", session_id, content_type=store_mime)
-        except Exception as e:
-            print(f"[ocr] document image store failed (non-fatal): {type(e).__name__}: {e}", flush=True)
+        except Exception:
+            logger.warning("ocr document image store failed (non-fatal)", exc_info=True)
 
     doc_id = None
     if session_id:
@@ -459,22 +468,29 @@ async def process_document(
     }
 
 
-@router.post("/confirm/{doc_id}", dependencies=[Depends(require_auth)])
-async def confirm_document(doc_id: str, body: dict = {}):
+@router.post("/confirm/{doc_id}")
+async def confirm_document(doc_id: str, body: dict = {}, claims: dict = Depends(require_auth)):
     """Patient confirms or rejects OCR output."""
+    # §5c — resolve the doc's owning session and enforce ownership by it, so a
+    # patient token can't confirm/reject another session's document by its id.
+    owner = query("SELECT session_id FROM session_documents WHERE id = %s", (doc_id,))
+    if not owner:
+        raise HTTPException(status_code=404, detail="Document not found")
+    enforce_ownership(claims, str(owner[0]["session_id"]))
     confirmed = body.get('confirmed', True)
     execute("UPDATE session_documents SET patient_confirmed = %s WHERE id = %s", (confirmed, doc_id))
     return {'confirmed': confirmed}
 
 
-@router.get("/documents/{session_id}", dependencies=[Depends(require_auth)])
-async def get_documents(session_id: str):
+@router.get("/documents/{session_id}")
+async def get_documents(session_id: str, claims: dict = Depends(require_auth)):
     """Get all documents for a session.
 
     Each document that has a stored image also carries `image_url` — a
     short-lived signed URL for the (otherwise open) image route. The caller is
     authenticated here, so this list is where the capability is minted.
     """
+    enforce_ownership(claims, session_id)  # §5c — no cross-session doc enumeration
     rows = query(
         "SELECT * FROM session_documents WHERE session_id = %s ORDER BY created_at",
         (session_id,),
@@ -487,7 +503,7 @@ async def get_documents(session_id: str):
     return out
 
 
-@router.get("/documents/image/{doc_id}")
+@router.get("/documents/image/{doc_id}", dependencies=[Depends(_rl_media)])
 async def get_document_image(doc_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
     """Stream the stored image for an uploaded document.
 

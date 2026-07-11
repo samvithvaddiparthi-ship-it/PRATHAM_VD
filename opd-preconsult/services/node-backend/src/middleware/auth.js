@@ -67,4 +67,22 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { signToken, verifyToken, authMiddleware, requireRole };
+// Ownership gate (§5c — horizontal IDOR). Use AFTER authMiddleware on routes that
+// take a session id in the URL and are reachable by patients. Clinicians
+// (doctor/admin) may read any session in their remit; a patient token is bound to
+// exactly one session_id at issuance and may only touch that session's data. Any
+// other combination (patient reading someone else's id, or a token with no
+// session_id) is 403. Default param name is 'id'.
+function requireSessionOwnership(paramName = 'id') {
+  return (req, res, next) => {
+    const sd = req.session_data || {};
+    if (sd.role === 'doctor' || sd.role === 'admin') return next();
+    const requested = req.params[paramName];
+    if (sd.role === 'patient' && sd.session_id && requested && sd.session_id === requested) {
+      return next();
+    }
+    return res.status(403).json({ error: 'Forbidden: not your session' });
+  };
+}
+
+module.exports = { signToken, verifyToken, authMiddleware, requireRole, requireSessionOwnership };

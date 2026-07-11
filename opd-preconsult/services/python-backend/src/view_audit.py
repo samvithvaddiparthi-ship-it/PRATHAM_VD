@@ -16,10 +16,13 @@ slow down the app"):
     never delay or break serving the report. No new table, index, or dependency.
 """
 import json
+import logging
 import os
 import time
 
 from .db import execute
+
+logger = logging.getLogger(__name__)
 
 # How long to suppress duplicate view rows for the same (actor, session), seconds.
 _DEDUP_WINDOW_S = int(os.getenv("VIEW_AUDIT_DEDUP_SECONDS", "300"))
@@ -70,5 +73,5 @@ def record_view(session_id: str, claims: dict) -> None:
                VALUES (%s, 'patient_viewed', %s, %s::jsonb)""",
             (session_id, str(actor), json.dumps({"via": "report", "role": role})),
         )
-    except Exception as e:  # never let auditing break the actual request
-        print(f"[view_audit] non-fatal: {type(e).__name__}: {e}", flush=True)
+    except Exception:  # never let auditing break the actual request
+        logger.warning("view_audit non-fatal error", exc_info=True)

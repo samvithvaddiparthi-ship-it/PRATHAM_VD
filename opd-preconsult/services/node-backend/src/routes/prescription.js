@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const crypto = require('crypto');
 const pool = require('../models/db');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole, requireSessionOwnership } = require('../middleware/auth');
 const { sendServerError } = require('../utils/http');
 const { mergeRxTemplate } = require('../rxTemplate');
 
@@ -143,8 +143,9 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
   }
 });
 
-// Get prescriptions for a session
-router.get('/session/:session_id', authMiddleware, async (req, res) => {
+// Get prescriptions for a session — the patient's own digital prescription page
+// reads this, so a patient may view their OWN; clinicians may view any (§5c).
+router.get('/session/:session_id', authMiddleware, requireSessionOwnership('session_id'), async (req, res) => {
   try {
     const rxs = await pool.query(
       'SELECT p.*, d.name as doctor_name FROM prescriptions p LEFT JOIN doctors d ON p.doctor_id = d.id WHERE p.session_id = $1 ORDER BY p.created_at DESC',

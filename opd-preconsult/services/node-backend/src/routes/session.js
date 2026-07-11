@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const pool = require('../models/db');
-const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
+const { signToken, authMiddleware, requireRole, requireSessionOwnership } = require('../middleware/auth');
 const { normalizeIndianPhone } = require('../utils/phone');
 const { APP_TIMEZONE } = require('../utils/time');
 
@@ -261,8 +261,9 @@ router.post('/state', authMiddleware, async (req, res) => {
 });
 
 // Get session by ID — the patient's own flow (done/interview pages) and the
-// clinician views both read this, so it takes any valid token.
-router.get('/:id', authMiddleware, async (req, res) => {
+// clinician views both read this. A patient may only read their OWN session
+// (§5c); doctors/admins may read any.
+router.get('/:id', authMiddleware, requireSessionOwnership('id'), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT s.*, COALESCE(d.collect_vitals, true) AS collect_vitals

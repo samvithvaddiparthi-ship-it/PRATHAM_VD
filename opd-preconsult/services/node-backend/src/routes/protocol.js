@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
-const { authMiddleware, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole, requireSessionOwnership } = require('../middleware/auth');
 
 const router = Router();
 
@@ -109,8 +109,9 @@ router.delete('/:id', ...adminOnly, async (req, res) => {
   }
 });
 
-// Evaluate which protocols apply to a session
-router.get('/evaluate/:session_id', authMiddleware, async (req, res) => {
+// Evaluate which protocols apply to a session — own session (patient) or any
+// (clinician) (§5c).
+router.get('/evaluate/:session_id', authMiddleware, requireSessionOwnership('session_id'), async (req, res) => {
   try {
     const sessionId = req.params.session_id;
 
