@@ -393,6 +393,8 @@ node scripts/generate-qr.js               # prints the plain URL for demo_hospit
 Quick link: `http://localhost:3000/?h=demo_hospital_01`
 (Legacy base64 `?qr=<payload>` and department-scoped QRs still work for backward compatibility.)
 
+The **queue token** is assigned server-side at registration — daily-sequential per department (`CARD-007`, resets at IST midnight, idempotent on refresh), never encoded in the QR. For the hospital-facing roll-out (what to print, board screens, assisted-desk model, token behaviour), see **`deploy/OPERATIONS.md` → "Patient check-in — the QR poster & tokens"**.
+
 ## Environment & Secrets
 
 All config lives in `.env` (gitignored; template in `.env.example`). Run `node scripts/gen-secrets.js` to generate every secret below at once.

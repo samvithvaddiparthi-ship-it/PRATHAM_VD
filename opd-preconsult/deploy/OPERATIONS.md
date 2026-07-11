@@ -19,6 +19,29 @@ docker compose -f docker-compose.prod.yml restart gateway   # drop stale upstrea
 ```
 Migrations auto-apply on node-backend startup. **A `db/migrations/*` change means rebuild node-backend (not just restart).**
 
+## Patient check-in — the QR poster & tokens (roll-out)
+
+**One static QR for the whole hospital.** It is *not* per-department and *not* per-patient — it is printed once and put up in the OPD. The QR is just the plain check-in URL `https://<your-domain>/?h=<hospital_id>`; it carries **no** patient data, department, or token. Everything else is decided in the app.
+
+**What the hospital does to go live (one-time):**
+1. Deploy the app (see *Production deploy* above) so `https://<your-domain>` is reachable over HTTPS.
+2. In **HIS admin** (`/his`), configure the hospital's **departments** (name + icon), **doctors**, **questionnaires**, and (optionally) each department's **report focus**. Do this *before* printing the poster.
+3. Print the poster: run `node scripts/generate-qr.js https://<your-domain>` for the URL, or open `scripts/qr-poster.html` in a browser for a printable poster. **Put up the one poster** at the registration desk / waiting area. It never needs reprinting — nothing about it changes per day, per department, or per patient.
+4. Put the **public "Now Serving" board** on a wall display: open `https://<your-domain>/queue?dept=CARD` (one screen per department, or rotate). It shows token numbers only — no names, no acuity.
+5. Staff the **assisted desk** (see below).
+
+**How the queue token works (important operating fact):**
+- The token is **assigned by the server at registration**, not by the QR.
+- It is **daily-sequential per department** — e.g. `CARD-007`, `GEN-013` — via an atomic counter, and **auto-resets each day at local (IST) midnight**. Each department has its own independent series.
+- It is **idempotent**: a patient tapping Back or refreshing does **not** burn a new number.
+- So the same poster produces correct, fresh, per-day tokens forever — staff do nothing to "reset" it.
+
+**Assisted intake (the intended operating model).** The pilot population is elderly / low-literacy / high-volume, so plan for **social workers or kiosk tablets at the desk** helping patients scan and complete the form — this is what Assist mode, read-aloud (TTS), large touch targets, and Hindi/Telugu localization are for. Patients' own phones also work, but do not assume every patient self-serves.
+
+**Patient journey after scanning** (for reference): scan QR → pick language → phone → OTP → details → pick department (+ optional preferred doctor) → token issued → questionnaire during the wait.
+
+**Multi-hospital.** `?h=<hospital_id>` is what lets one deployment serve several hospitals — each site's poster carries its own id. A single-hospital pilot can ignore it; the app defaults the id from `NEXT_PUBLIC_HOSPITAL_ID` set at build time. (Legacy base64 `?qr=` and department-scoped QRs still resolve, for backward compatibility, but are not what you print.)
+
 ## Backups (A7)
 ```bash
 # Manual: dumps Postgres + archives MinIO to ./backups/<timestamp>/
