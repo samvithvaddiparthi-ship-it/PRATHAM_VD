@@ -5,8 +5,14 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
+// Trust the reverse proxy (Caddy/nginx) so req.protocol and forwarded headers
+// reflect the real client — needed for Twilio signature URL reconstruction (§8a).
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
+// Twilio posts webhooks as application/x-www-form-urlencoded — parse those too so
+// the WhatsApp webhook body (and its signature validation) work (§8a).
+app.use(express.urlencoded({ extended: false }));
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -142,20 +148,31 @@ async function start() {
 
   await seedQuestionnaires();
 
-  // Pilot safety: warn loudly if any active doctor still uses the seeded demo
-  // PIN (1234) in production. Reset via POST /api/doctor/change-pin or HIS doctor
-  // management before going live. (Forcing a reset needs a schema flag — deferred.)
+  // §8b — Pilot safety: no active doctor may use the seeded demo PIN (1234) in
+  // production. Fail closed like JWT_SECRET: in production we FORCE-EXPIRE those
+  // accounts (set is_active = false) so the weak PIN can't be used, and an admin
+  // must re-activate them with a fresh PIN via HIS. In dev we only warn. The
+  // detection keys off the legacy SHA-256 hash, which the lazy bcrypt migration
+  // deliberately leaves intact for exactly this check.
   try {
     const DEFAULT_PIN_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
     const pool = require('./models/db');
-    const { rows } = await pool.query(
-      'SELECT COUNT(*)::int AS n FROM doctors WHERE is_active = true AND pin_hash = $1',
-      [DEFAULT_PIN_HASH]
-    );
-    if (rows[0].n > 0) {
-      const msg = `[security] ${rows[0].n} active doctor(s) still use the default demo PIN (1234). Reset before real use.`;
-      if (process.env.NODE_ENV === 'production') console.error('⚠️  ' + msg);
-      else console.warn(msg);
+    if (process.env.NODE_ENV === 'production') {
+      const { rowCount } = await pool.query(
+        'UPDATE doctors SET is_active = false WHERE is_active = true AND pin_hash = $1',
+        [DEFAULT_PIN_HASH]
+      );
+      if (rowCount > 0) {
+        console.error(`⚠️  [security] Force-expired ${rowCount} active doctor(s) still on the default demo PIN (1234). An admin must reset their PIN and re-activate them before they can log in.`);
+      }
+    } else {
+      const { rows } = await pool.query(
+        'SELECT COUNT(*)::int AS n FROM doctors WHERE is_active = true AND pin_hash = $1',
+        [DEFAULT_PIN_HASH]
+      );
+      if (rows[0].n > 0) {
+        console.warn(`[security] ${rows[0].n} active doctor(s) still use the default demo PIN (1234). Reset before real use.`);
+      }
     }
   } catch { /* non-fatal — doctors table may not exist yet on a brand-new DB */ }
 

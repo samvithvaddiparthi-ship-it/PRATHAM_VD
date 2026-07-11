@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const twilio = require('twilio');
 const pool = require('../models/db');
 
 const router = Router();
@@ -7,8 +8,44 @@ const router = Router();
 // Maps phone number -> { session_id, state, department, current_question_id }
 const waConversations = new Map();
 
+let warnedDryRun = false;
+
+// §8a — verify the inbound request really came from Twilio before trusting
+// req.body.From / req.body.Body. Twilio signs the exact webhook URL + POSTed
+// params with the account auth token; validateRequest recomputes the HMAC.
+// Returns 'skip' (creds unset — dry-run/dev), 'valid', or 'invalid'.
+function checkTwilioSignature(req) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  if (!authToken || !sid || sid === 'your_sid_here' || authToken === 'your_token_here') {
+    return 'skip';
+  }
+  const signature = req.headers['x-twilio-signature'] || '';
+  // Reconstruct the URL Twilio signed. Prefer an explicit override (avoids any
+  // proxy header ambiguity); else build from forwarded proto/host + path.
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  const url = process.env.TWILIO_WEBHOOK_URL || `${proto}://${host}${req.originalUrl}`;
+  try {
+    return twilio.validateRequest(authToken, signature, url, req.body || {}) ? 'valid' : 'invalid';
+  } catch {
+    return 'invalid';
+  }
+}
+
 // Twilio WhatsApp webhook — receives incoming messages
 router.post('/webhook', async (req, res) => {
+  const sig = checkTwilioSignature(req);
+  if (sig === 'skip') {
+    if (!warnedDryRun) {
+      console.warn('[whatsapp] TWILIO_AUTH_TOKEN unset — skipping webhook signature validation (dry-run). Set Twilio creds before production.');
+      warnedDryRun = true;
+    }
+  } else if (sig === 'invalid') {
+    // Forged / unsigned request — refuse to process it.
+    return res.status(403).type('text/xml').send('<Response></Response>');
+  }
+
   const from = (req.body.From || '').replace('whatsapp:', '');
   const body = (req.body.Body || '').trim();
 

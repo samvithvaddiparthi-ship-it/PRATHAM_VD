@@ -120,15 +120,17 @@ async def evaluate(req: TriageRequest):
         r = _get_redis()
         if r:
             try:
-                # Get patient info for the alert
-                session_rows = query("SELECT patient_name, department FROM sessions WHERE id = %s", (req.session_id,))
-                patient_info = session_rows[0] if session_rows else {}
+                # §8e — the alert broadcast is PHI-free: session_id + department +
+                # triage only. The nursing dashboard resolves the patient name via
+                # an authenticated call keyed on session_id (never over the SSE feed,
+                # which any connected client could otherwise read).
+                session_rows = query("SELECT department FROM sessions WHERE id = %s", (req.session_id,))
+                dept = session_rows[0].get("department", "") if session_rows else ""
                 alert = json.dumps({
                     "session_id": req.session_id,
                     "level": level,
                     "triggered_rules": triggered,
-                    "patient_name": patient_info.get("patient_name", "Unknown"),
-                    "department": patient_info.get("department", ""),
+                    "department": dept,
                 })
                 r.publish("triage_alerts", alert)
             except Exception as e:

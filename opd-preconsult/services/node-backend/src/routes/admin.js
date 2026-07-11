@@ -4,8 +4,18 @@ const pool = require('../models/db');
 const { sendServerError } = require('../utils/http');
 const { baseNodesForDept } = require('../seed/baseTemplate');
 const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
+const { isLocked, recordFailure, clearFailures } = require('../utils/loginLimiter');
 
 const router = Router();
+
+// Best-effort client IP for the shared-passcode login limiter (§8b). Behind the
+// proxy the first X-Forwarded-For hop is the real client; falls back to the
+// socket peer. Admin login is a single shared credential, so we throttle per
+// source IP rather than per account.
+function clientIp(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    || req.socket.remoteAddress || 'unknown';
+}
 
 // Admin-only guard for all mutating config routes below. GET (config reads) stay
 // open — they expose department/question config, not patient PHI.
@@ -21,6 +31,12 @@ router.post('/login', async (req, res) => {
     if (!expected || expected.length < 6) {
       return res.status(503).json({ error: 'Admin login is not configured. Set a strong ADMIN_PASSCODE.' });
     }
+    // §8b — lockout on repeated failures from the same source.
+    const ip = clientIp(req);
+    const lock = await isLocked('admin', ip);
+    if (lock.locked) {
+      return res.status(429).json({ error: `Too many failed attempts. Try again in ${Math.ceil(lock.retryAfter / 60)} min.` });
+    }
     const passcode = String((req.body || {}).passcode || '');
     if (!passcode) return res.status(400).json({ error: 'Passcode required' });
     // Named-admin audit (A9): each admin identifies themselves so their actions are
@@ -32,7 +48,11 @@ router.post('/login', async (req, res) => {
     const a = Buffer.from(passcode);
     const b = Buffer.from(expected);
     const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-    if (!ok) return res.status(401).json({ error: 'Invalid passcode' });
+    if (!ok) {
+      await recordFailure('admin', ip);
+      return res.status(401).json({ error: 'Invalid passcode' });
+    }
+    await clearFailures('admin', ip);
 
     const token = signToken({ role: 'admin', admin_name: adminName });
     try {
