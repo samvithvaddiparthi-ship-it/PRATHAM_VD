@@ -137,6 +137,9 @@ services:
     env_file: .env
     environment:
       PORT: 4002
+      # §7a — lets the python backend apply its production fail-closed config
+      # guard (default DB/MinIO creds) and lock CORS to the configured origin.
+      NODE_ENV: production
     depends_on:
       postgres:
         condition: service_healthy

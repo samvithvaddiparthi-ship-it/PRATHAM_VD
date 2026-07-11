@@ -33,6 +33,16 @@ function hashCode(phone, code) {
   return crypto.createHmac('sha256', OTP_SECRET).update(`${phone}:${code}`).digest('hex');
 }
 
+// §8f — mask a name to initials for the pre-selection chooser. One SMS to a
+// shared family number must not disclose the full names/ages/genders of everyone
+// who ever registered under it. e.g. "Priya Sharma" -> "P. S.". The full identity
+// is only revealed once the patient explicitly selects one (POST /reveal).
+function maskName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '—';
+  return parts.map((w) => w[0].toUpperCase() + '.').join(' ');
+}
+
 // Distinct prior PEOPLE who completed a visit on this phone, most-recent first.
 // People are distinguished by name (case/space-insensitive) since one number may
 // serve a whole family. The frontend turns this into the "who is this?" chooser.
@@ -168,10 +178,46 @@ router.post('/verify', authMiddleware, async (req, res) => {
       [phone, session_id]
     );
 
-    const people = await priorPeople(phone);
+    // §8f — return ONLY masked initials + non-identifying visit metadata for the
+    // chooser. Age/gender/full name are withheld until the patient selects one
+    // (POST /reveal). `index` is the stable position in the (deterministically
+    // ordered) list the reveal call re-derives.
+    const people = (await priorPeople(phone)).map((p, i) => ({
+      index: i,
+      name: maskName(p.name),
+      last_visit: p.last_visit,
+      visit_count: p.visit_count,
+    }));
     res.json({ verified: true, people });
   } catch (err) {
     console.error('otp verify error:', err);
+    sendServerError(res, err);
+  }
+});
+
+// POST /api/otp/reveal  { index }  — reveal the FULL identity of the prior person
+// the patient selected from the masked chooser (§8f). Gated on the session being
+// phone-verified; only ever returns ONE person (the chosen index), never the
+// whole family. Re-derives the same deterministically-ordered list as /verify.
+router.post('/reveal', authMiddleware, async (req, res) => {
+  try {
+    const { session_id } = req.session_data;
+    const index = parseInt((req.body || {}).index, 10);
+    if (!Number.isInteger(index) || index < 0) {
+      return res.status(400).json({ error: 'Invalid selection' });
+    }
+    const sess = await pool.query(
+      'SELECT patient_phone, phone_verified FROM sessions WHERE id = $1', [session_id]);
+    if (!sess.rows.length) return res.status(440).json({ error: 'Session expired', session_expired: true });
+    if (!sess.rows[0].phone_verified || !sess.rows[0].patient_phone) {
+      return res.status(403).json({ error: 'Phone not verified' });
+    }
+    const people = await priorPeople(sess.rows[0].patient_phone);
+    const p = people[index];
+    if (!p) return res.status(404).json({ error: 'Selection not found' });
+    res.json({ name: p.name, age: p.age, gender: p.gender });
+  } catch (err) {
+    console.error('otp reveal error:', err);
     sendServerError(res, err);
   }
 });

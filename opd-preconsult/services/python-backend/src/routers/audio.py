@@ -22,6 +22,7 @@ from .. import storage
 from .. import media_urls
 from ..auth import require_auth, enforce_ownership
 from ..ratelimit import rate_limit
+from ..view_audit import record_event
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
@@ -93,9 +94,13 @@ async def list_session_audio(session_id: str, claims: dict = Depends(require_aut
 async def get_clip(clip_id: str, exp: Optional[int] = None, sig: Optional[str] = None):
     """Stream a clip's bytes. Requires a live HMAC signature from /session/{id}."""
     media_urls.verify(media_urls.KIND_CLIP, clip_id, exp, sig)
-    rows = query("SELECT object_key, mime FROM answer_audio WHERE id = %s", (clip_id,))
+    rows = query("SELECT object_key, mime, session_id FROM answer_audio WHERE id = %s", (clip_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Clip not found")
+    # §6a — audit the PHI audio playback (ids only; deduped per clip within window).
+    record_event("audio_clip_accessed", "signed-media",
+                 session_id=str(rows[0]["session_id"]),
+                 extra={"clip_id": clip_id}, dedup_key=clip_id)
     data = storage.get_bytes(rows[0]["object_key"])
     if data is None:
         raise HTTPException(status_code=404, detail="Audio bytes missing")

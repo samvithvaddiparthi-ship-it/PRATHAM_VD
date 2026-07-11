@@ -13,6 +13,7 @@ from ..db import execute, query
 from .. import storage
 from ..auth import require_auth, enforce_ownership
 from ..ratelimit import rate_limit
+from ..view_audit import record_event
 from .. import media_urls
 from ..llm_client import complete_with_image, has_llm, has_vision
 from ..drug_data import normalize_drug_name, GENERIC_DRUGS, SORTED_GENERICS
@@ -511,7 +512,12 @@ async def get_document_image(doc_id: str, exp: Optional[int] = None, sig: Option
     HMAC signature minted by `GET /api/ocr/documents/{session_id}` (§5b).
     """
     media_urls.verify(media_urls.KIND_DOC, doc_id, exp, sig)
-    rows = query("SELECT image_key FROM session_documents WHERE id = %s", (doc_id,))
+    rows = query("SELECT image_key, session_id FROM session_documents WHERE id = %s", (doc_id,))
+    # §6a — audit the PHI image view (ids only; deduped per doc within the window).
+    if rows:
+        record_event("document_image_viewed", "signed-media",
+                     session_id=str(rows[0]["session_id"]),
+                     extra={"doc_id": doc_id}, dedup_key=doc_id)
     key = rows[0]["image_key"] if rows else None
     if not key:
         raise HTTPException(status_code=404, detail="No image for this document")

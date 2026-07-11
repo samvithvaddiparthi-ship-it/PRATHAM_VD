@@ -12,12 +12,39 @@ from . import drug_repo
 
 logger = logging.getLogger(__name__)
 
+_IS_PROD = (os.environ.get("NODE_ENV") or "").lower() == "production"
+
 app = FastAPI(title="OPD Pre-Consult Python Backend")
 
-# The app is same-origin (browser → gateway → here), so CORS isn't needed for it;
-# `*` is kept as a dev default but should be locked to the real origin in prod via
-# CORS_ALLOW_ORIGINS=https://opd.hospital.in (comma-separated).
-_cors_origins = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",") if o.strip()]
+
+def _validate_startup_config() -> None:
+    """§7a — fail closed in production on default datastore credentials (mirrors
+    the node JWT_SECRET / POSTGRES_PASSWORD guards). No-op in dev."""
+    if not _IS_PROD:
+        return
+    weak = {"", "changeme", "changeme_in_production", "password", "postgres"}
+    problems = []
+    if not os.environ.get("DATABASE_URL") and os.environ.get("POSTGRES_PASSWORD", "changeme_in_production") in weak:
+        problems.append("POSTGRES_PASSWORD is default/weak")
+    if os.environ.get("MINIO_ACCESS_KEY", "minioadmin") in {"", "minioadmin"}:
+        problems.append("MINIO_ACCESS_KEY is the default (minioadmin)")
+    if os.environ.get("MINIO_SECRET_KEY", "changeme_in_production") in weak:
+        problems.append("MINIO_SECRET_KEY is default/weak")
+    if problems:
+        raise RuntimeError(
+            "[config] Refusing to start in production: " + "; ".join(problems)
+            + ". Set strong values (see scripts/gen-secrets.js)."
+        )
+
+
+_validate_startup_config()
+
+# The app is same-origin (browser → gateway → here), so CORS isn't needed for it.
+# §7a — dev is permissive (`*`); in production we DO NOT default to `*` — only the
+# explicitly configured origins are allowed (CORS_ALLOW_ORIGINS=https://opd.hospital.in,
+# comma-separated), and with none set no cross-origin is allowed (same-origin only).
+_cors_default = "*" if not _IS_PROD else ""
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", _cors_default).split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

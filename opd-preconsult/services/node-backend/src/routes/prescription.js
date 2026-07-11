@@ -55,6 +55,15 @@ function signPayload(payload) {
   return crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex');
 }
 
+// §8d — QR payload version and configurable expiry. v2 drops patient_phone from
+// the slip (a durable identifier the pharmacy doesn't need) and is expiry-checked
+// against issued_at. Default 30 days; QR_EXPIRY_DAYS=0 disables the expiry check.
+const QR_PAYLOAD_VERSION = 2;
+const QR_EXPIRY_DAYS = (() => {
+  const n = parseInt(process.env.QR_EXPIRY_DAYS, 10);
+  return Number.isFinite(n) ? n : 30;
+})();
+
 // Create prescription (doctor auth required)
 router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
   try {
@@ -108,14 +117,16 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
       insertedItems.push(result.rows[0]);
     }
 
-    // Generate QR payload
+    // Generate QR payload. §8d: v2 — patient_phone is NOT embedded (the pharmacy
+    // needs name/age/gender to dispense, not the durable phone identifier), and
+    // issued_at is signed so verify-qr can enforce an expiry window.
     const issuedAt = new Date().toISOString();
     const qrData = {
+      v: QR_PAYLOAD_VERSION,
       rx_id: rx.id,
       patient: patientName,
       patient_age: patientAge,
       patient_gender: patientGender,
-      patient_phone: patientPhone,
       doctor: doctorName,
       doctor_registration: doctorReg,
       department: doctorDept,
@@ -135,6 +146,14 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
     const qrPayload = Buffer.from(JSON.stringify({ ...qrData, sig: signature })).toString('base64');
 
     await pool.query('UPDATE prescriptions SET qr_payload = $1 WHERE id = $2', [qrPayload, rx.id]);
+
+    // §6a — PHI-free audit of prescription creation (ids + counts only).
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'prescription_created', $2, $3)`,
+        [session_id, String(doctorId), JSON.stringify({ rx_id: rx.id, item_count: insertedItems.length })]
+      );
+    } catch { /* audit_log optional */ }
 
     res.json({ prescription: { ...rx, qr_payload: qrPayload }, items: insertedItems, issued_at: issuedAt });
   } catch (err) {
@@ -166,6 +185,17 @@ router.get('/session/:session_id', authMiddleware, requireSessionOwnership('sess
   }
 });
 
+// §6a — PHI-free audit of a QR verification (ids + result only; actor unknown as
+// the verify endpoint is unauthenticated pharmacy-facing).
+async function auditQr(rxId, result) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_log (event_type, actor, payload) VALUES ('qr_verified', 'pharmacy', $1)`,
+      [JSON.stringify({ rx_id: rxId || null, result })]
+    );
+  } catch { /* audit_log optional */ }
+}
+
 // Verify QR prescription
 router.post('/verify-qr', async (req, res) => {
   try {
@@ -176,10 +206,26 @@ router.post('/verify-qr', async (req, res) => {
     const { sig, ...data } = decoded;
     const expected = signPayload(JSON.stringify(data));
 
-    if (sig !== expected) {
+    // Constant-time signature compare (unequal lengths => reject).
+    const a = Buffer.from(String(sig || ''));
+    const b = Buffer.from(expected);
+    const sigOk = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!sigOk) {
+      await auditQr(data.rx_id, 'invalid_signature');
       return res.json({ valid: false, error: 'Invalid signature' });
     }
 
+    // §8d — reject a slip past its expiry window (signed issued_at). Backward
+    // compatible: a legacy payload without issued_at skips the check.
+    if (QR_EXPIRY_DAYS > 0 && data.issued_at) {
+      const ageMs = Date.now() - new Date(data.issued_at).getTime();
+      if (Number.isFinite(ageMs) && ageMs > QR_EXPIRY_DAYS * 86400000) {
+        await auditQr(data.rx_id, 'expired');
+        return res.json({ valid: false, error: 'Prescription expired', expired: true });
+      }
+    }
+
+    await auditQr(data.rx_id, 'valid');
     res.json({ valid: true, prescription: data });
   } catch (err) {
     res.json({ valid: false, error: 'Invalid QR data' });

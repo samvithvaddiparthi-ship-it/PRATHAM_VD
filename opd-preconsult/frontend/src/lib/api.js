@@ -26,6 +26,9 @@ export const api = {
   checkActive: (name) => apiFetch('/api/session/active-check', { method: 'POST', body: JSON.stringify({ name }) }),
   requestOtp: (phone) => apiFetch('/api/otp/request', { method: 'POST', body: JSON.stringify({ phone }) }),
   verifyOtp: (phone, code) => apiFetch('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone, code }) }),
+  // §8f — the OTP response only returns masked initials for prior people on this
+  // number; this reveals the FULL identity of the one the patient selects.
+  revealPerson: (index) => apiFetch('/api/otp/reveal', { method: 'POST', body: JSON.stringify({ index }) }),
   consent: () => apiFetch('/api/session/consent', { method: 'POST', body: '{}' }),
   getSession: (id) => apiFetch(`/api/session/${id}`),
   listSessions: (params) => apiFetch(`/api/session?${new URLSearchParams(params)}`),

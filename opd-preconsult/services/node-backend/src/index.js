@@ -8,7 +8,19 @@ const app = express();
 // Trust the reverse proxy (Caddy/nginx) so req.protocol and forwarded headers
 // reflect the real client — needed for Twilio signature URL reconstruction (§8a).
 app.set('trust proxy', true);
-app.use(cors());
+
+// §7a — CORS. The app is same-origin (browser → gateway → backend), so cross-
+// origin access is not needed in production. In prod we only allow the explicitly
+// configured origins (CORS_ALLOW_ORIGINS, comma-separated); with none set, no
+// permissive CORS header is emitted (same-origin only). Dev stays permissive.
+const _corsOrigins = (process.env.CORS_ALLOW_ORIGINS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+if (process.env.NODE_ENV === 'production') {
+  if (_corsOrigins.length) app.use(cors({ origin: _corsOrigins }));
+  // else: no CORS middleware — browser same-origin policy applies.
+} else {
+  app.use(cors());
+}
 app.use(express.json({ limit: '20mb' }));
 // Twilio posts webhooks as application/x-www-form-urlencoded — parse those too so
 // the WhatsApp webhook body (and its signature validation) work (§8a).

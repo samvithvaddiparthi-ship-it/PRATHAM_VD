@@ -164,7 +164,15 @@ export default function Register() {
       id = { patient_name: form.patient_name.trim(), patient_age: age, patient_gender: form.patient_gender };
     } else if (selected !== null && people[selected]) {
       const p = people[selected];
-      id = { patient_name: p.name, patient_age: p.age, patient_gender: p.gender };
+      // §8f — the chooser only had masked initials; fetch the full identity for
+      // the selected person now (authenticated by the OTP-verified session).
+      try {
+        const full = await api.revealPerson(p.index != null ? p.index : selected);
+        id = { patient_name: full.name, patient_age: full.age, patient_gender: full.gender };
+      } catch {
+        setError(t('who_title', lang));
+        return;
+      }
     } else {
       setError(t('who_title', lang));   // nudge: pick someone
       return;
@@ -505,9 +513,10 @@ export default function Register() {
                   }}>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontWeight: 700, fontSize: 15, color: 'var(--text)', overflowWrap: 'anywhere' }}>{p.name}</span>
+                    {/* §8f — age/gender are withheld here (masked chooser); show
+                        only the non-identifying last-visit date to disambiguate. */}
                     <span style={{ display: 'block', fontSize: 12, color: 'var(--text-light)', marginTop: 2 }}>
-                      {[p.age != null && p.age !== '' ? `${p.age}` : null, p.gender || null].filter(Boolean).join(' · ')}
-                      {p.last_visit ? `  ·  ${t('last_visit_label', lang)}: ${fmtVisit(p.last_visit)}` : ''}
+                      {p.last_visit ? `${t('last_visit_label', lang)}: ${fmtVisit(p.last_visit)}` : ''}
                     </span>
                   </span>
                   <span style={{ fontSize: 18, color: active ? 'var(--primary)' : '#C7CDD2' }}>{active ? '◉' : '◯'}</span>
