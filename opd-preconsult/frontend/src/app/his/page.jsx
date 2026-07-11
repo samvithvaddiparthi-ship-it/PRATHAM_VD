@@ -1544,6 +1544,10 @@ function DepartmentsManager({ depts, onChange }) {
   const [iconEdit, setIconEdit] = useState(null);
   const [iconValue, setIconValue] = useState('');
   const [iconSaving, setIconSaving] = useState(false);
+  // Report-focus modal: the department being edited + the pending focus text.
+  const [focusEdit, setFocusEdit] = useState(null);
+  const [focusValue, setFocusValue] = useState('');
+  const [focusSaving, setFocusSaving] = useState(false);
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
@@ -1593,6 +1597,26 @@ function DepartmentsManager({ depts, onChange }) {
       toast(err.message, 'error');
     } finally {
       setIconSaving(false);
+    }
+  }
+
+  // Open the report-focus editor for a department (see the modal below). Blank
+  // clears it → the report LLM uses the base prompt unchanged for this department.
+  function handleEditFocus(d) {
+    setFocusValue(d.report_focus || '');
+    setFocusEdit(d);
+  }
+  async function saveFocus() {
+    if (!focusEdit) return;
+    setFocusSaving(true);
+    try {
+      await api.updateDepartment(focusEdit.code, { report_focus: focusValue.trim() });
+      setFocusEdit(null);
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setFocusSaving(false);
     }
   }
 
@@ -1654,6 +1678,44 @@ function DepartmentsManager({ depts, onChange }) {
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-outline" onClick={() => saveIcon('')} disabled={iconSaving}>Clear (auto)</button>
               <button className="btn btn-primary" onClick={() => saveIcon()} disabled={iconSaving}>{iconSaving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Report-focus editor — specialty-specific emphasis appended to the report
+          LLM prompt. Structure (headings, verbatim meds/allergies/vitals) is fixed;
+          this only steers what the AI prioritises and how it words the interpretive
+          sections. Blank = base prompt unchanged. */}
+      {focusEdit && (
+        <Modal
+          onClose={() => setFocusEdit(null)}
+          labelledBy="focus-editor-title"
+          scrimStyle={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60 }}
+          panelStyle={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 61,
+            width: 560, maxWidth: '94vw', background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 12px 40px rgba(0,0,0,0.22)' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+              <h3 id="focus-editor-title" style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Report focus — {focusEdit.name}</h3>
+              <button type="button" onClick={() => setFocusEdit(null)} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex' }}>
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19" /><line x1="19" y1="5" x2="5" y2="19" /></svg>
+              </button>
+            </div>
+            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12, lineHeight: 1.6 }}>
+              Specialty-specific emphasis added to the AI report for this department — e.g. what symptoms to characterise
+              and which prior findings to surface. It only steers <strong>wording and priority</strong>; it never changes the
+              report’s sections and cannot make the AI invent information. Leave blank to use the standard report.
+            </p>
+            <textarea className="input" value={focusValue} rows={7} maxLength={2000}
+              onChange={e => setFocusValue(e.target.value)}
+              placeholder="e.g. Emphasise cardiovascular assessment: characterise chest pain (exertional vs rest, radiation), note cardiac risk factors, and surface prior ECG/echo findings in Past Medical History."
+              style={{ resize: 'vertical', lineHeight: 1.5, fontSize: 'calc(13px * var(--fs))' }} />
+            <div style={{ display: 'flex', alignItems: 'center', marginTop: 16 }}>
+              <span style={{ flex: 1, fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{focusValue.length}/2000</span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-outline" onClick={() => setFocusValue('')} disabled={focusSaving}>Clear</button>
+                <button className="btn btn-primary" onClick={() => saveFocus()} disabled={focusSaving}>{focusSaving ? 'Saving…' : 'Save'}</button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -1739,10 +1801,19 @@ function DepartmentsManager({ depts, onChange }) {
                     </button>
                   </td>
                   <td style={{ padding: '10px 12px' }}>
-                    <button onClick={() => handleDelete(d.code)}
-                      style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
-                      Delete
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => handleEditFocus(d)}
+                        title="Specialty-specific emphasis for the AI report in this department"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', fontWeight: 600,
+                          border: (d.report_focus && d.report_focus.trim()) ? '1px solid var(--primary)' : '1px solid #E0E0E0',
+                          color: (d.report_focus && d.report_focus.trim()) ? 'var(--primary)' : 'var(--text-light)' }}>
+                        {(d.report_focus && d.report_focus.trim()) ? '📝 Report focus' : '＋ Report focus'}
+                      </button>
+                      <button onClick={() => handleDelete(d.code)}
+                        style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
             ))}

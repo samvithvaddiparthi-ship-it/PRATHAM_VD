@@ -140,7 +140,7 @@ router.post('/departments', ...adminOnly, async (req, res) => {
 router.patch('/departments/:code', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const { name, collect_vitals, icon } = req.body;
+    const { name, collect_vitals, icon, report_focus } = req.body;
     const sets = [];
     const params = [];
 
@@ -154,6 +154,11 @@ router.patch('/departments/:code', ...adminOnly, async (req, res) => {
     if (icon !== undefined) {
       // Empty string clears the icon (falls back to the code-based guess).
       params.push(String(icon).trim() || null); sets.push(`icon = $${params.length}`);
+    }
+    if (report_focus !== undefined) {
+      // Specialty-specific report emphasis (migration 029). Empty string clears it
+      // → the report LLM uses the base prompt unchanged for this department.
+      params.push(String(report_focus).trim() || null); sets.push(`report_focus = $${params.length}`);
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
 

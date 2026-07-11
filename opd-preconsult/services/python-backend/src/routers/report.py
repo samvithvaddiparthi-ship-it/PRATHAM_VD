@@ -167,6 +167,21 @@ async def _generate_report_impl(req: ReportRequest):
     if has_llm():
         try:
             system_prompt = (PROMPT_DIR / "system_report.txt").read_text()
+            # Department-specific emphasis (admin-editable, migration 029). Appended
+            # to the base prompt so the SAME fixed section schema is reused for every
+            # department — this only reshapes prioritisation/wording, never the
+            # structure or the no-fabrication rule (spelled out in the wrapper below).
+            focus = _department_report_focus(session.get("department"))
+            if focus:
+                system_prompt += (
+                    f"\n\n## Department focus — {session.get('department')}\n"
+                    "The following is specialty-specific emphasis for this department. "
+                    "Apply it ONLY to what you prioritise and how you word the four "
+                    "sections above. It must NOT add, rename, drop, or reorder any "
+                    "section, and it can NEVER override the rule against inferring or "
+                    "fabricating clinical information.\n\n"
+                    f"{focus}"
+                )
             user_content = json.dumps(session_json, indent=2, default=str)
             # When no documents were scanned (OCR off, or nothing uploaded), tell the
             # model plainly so it can't reference or invent prescription/lab/document
@@ -279,6 +294,25 @@ async def edit_report(session_id: str, body: dict, claims: dict = Depends(requir
 # in the report are guaranteed to match what was entered (no paraphrase or
 # hallucination risk) and cost zero tokens. Shared by BOTH the LLM/hybrid path
 # and the no-LLM fallback so the two always produce identical pass-through blocks.
+
+def _department_report_focus(dept_code):
+    """Specialty-specific report emphasis for a department (migration 029),
+    admin-editable in HIS. Returns the trimmed focus text, or None when unset or
+    when the departments table isn't present (older deployments) — the caller then
+    uses the base prompt unchanged. Never raises: a lookup failure must not block
+    report generation."""
+    if not dept_code:
+        return None
+    try:
+        rows = query("SELECT report_focus FROM departments WHERE code = %s", (dept_code,))
+    except Exception:
+        logger.warning("department report_focus lookup failed; using base prompt", exc_info=True)
+        return None
+    if not rows:
+        return None
+    focus = (rows[0].get("report_focus") or "").strip()
+    return focus or None
+
 
 def _base_answer(answers, role):
     """Resolve a BASE questionnaire answer by its role, i.e. the id suffix after
