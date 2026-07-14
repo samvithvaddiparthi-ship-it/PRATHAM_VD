@@ -17,7 +17,7 @@ export default function Consent() {
 
   async function handleConsent() {
     await api.consent();
-    router.push('/patient/documents');
+    router.push('/patient/register');
   }
 
   return (
@@ -46,7 +46,7 @@ export default function Consent() {
         <button className="btn btn-primary" onClick={handleConsent}>
           {t('consent_agree', lang)}
         </button>
-        <button className="btn btn-outline" onClick={() => router.push('/patient/register')}>
+        <button className="btn btn-outline" onClick={() => router.push('/')}>
           ← {t('go_back', lang)}
         </button>
       </div>

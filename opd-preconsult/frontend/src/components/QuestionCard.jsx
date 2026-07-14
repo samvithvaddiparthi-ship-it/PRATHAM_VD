@@ -21,10 +21,12 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
   const [translation, setTranslation] = useState('');        // English translation (NMT)
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
-  // The language the patient chose to SPEAK in — picked once on the first voice
-  // question and applied to every mic after. Kept ONLY in component state (NOT
-  // sessionStorage), so a page refresh or a new patient entry asks again; within
-  // one entry it persists across all the question mics.
+  // The language the patient chose to SPEAK in — picked ONCE on the first voice
+  // question and reused on every mic after, so they're never re-asked mid-flow.
+  // Persisted in sessionStorage keyed by session_id: it survives the card
+  // unmounting between questions (the interview shows a loading state between
+  // questions) AND a page refresh, but a NEW patient entry (new session_id) or a
+  // closed tab starts fresh and asks again.
   const [voiceLang, setVoiceLang] = useState('');
   const [showLangPicker, setShowLangPicker] = useState(false);
   const voiceRef = useRef(null);        // imperative handle on VoiceButton (start)
@@ -46,6 +48,16 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     setTranslation(''); setShowTranslation(false); setTranslating(false);
   }, [question?.id]);
 
+  // Restore the spoken-language choice for THIS session on mount, so every
+  // question after the first one auto-uses it (no re-asking the language).
+  useEffect(() => {
+    try {
+      const sid = sessionStorage.getItem('session_id') || '';
+      const saved = sessionStorage.getItem('voice_lang_' + sid);
+      if (saved) setVoiceLang(saved);
+    } catch {}
+  }, []);
+
   // Any edit/new transcription invalidates a previously-fetched translation.
   function resetTranslation() { setTranslation(''); setShowTranslation(false); }
 
@@ -60,7 +72,13 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
     else { setShowLangPicker(true); }
   }
   function chooseVoiceLang(code) {
-    setVoiceLang(code);          // state only — no caching across entries/refreshes
+    setVoiceLang(code);
+    // Persist for the rest of this session so every following question's mic
+    // auto-uses it (keyed by session_id → a new patient entry asks again).
+    try {
+      const sid = sessionStorage.getItem('session_id') || '';
+      sessionStorage.setItem('voice_lang_' + sid, code);
+    } catch {}
     setShowLangPicker(false);    // just set the language; patient taps mic to record
   }
 

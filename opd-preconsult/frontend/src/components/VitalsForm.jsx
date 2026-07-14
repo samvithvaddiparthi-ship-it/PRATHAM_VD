@@ -5,6 +5,18 @@ import { t } from '../lib/i18n';
 // The vital fields a session can carry (matches the session_vitals columns).
 const VITAL_KEYS = ['bp_systolic', 'bp_diastolic', 'weight_kg', 'spo2_pct', 'heart_rate', 'temperature_c'];
 
+// Hard input limits [min, max] — mirror the node-backend guard in routes/vitals.js.
+// Enforced live in the field (values above max simply won't type), so impossible
+// entries are impossible to enter, not just rejected on submit.
+const VITAL_LIMITS = {
+  bp_systolic:   [0, 999],
+  bp_diastolic:  [0, 999],
+  weight_kg:     [0, 999],
+  spo2_pct:      [0, 100],
+  heart_rate:    [0, 999],
+  temperature_c: [0, 99],
+};
+
 // True if a session_vitals row actually holds any measured value. Needed because
 // "Skip vitals" still inserts a row with all-NULL fields — so row-presence alone
 // does NOT mean vitals were recorded.
@@ -26,6 +38,19 @@ export default function VitalsForm({
   const [form, setForm] = useState({
     bp_systolic: '', bp_diastolic: '', weight_kg: '', spo2_pct: '', heart_rate: '', temperature_c: '',
   });
+  const [limitError, setLimitError] = useState('');
+
+  // Live input filter — allow only digits and a single decimal point, and reject
+  // any keystroke that would push the number above the field's max (so you cannot
+  // type an impossible value at all, like the 10-digit cap on the phone field).
+  function handleChange(key, raw) {
+    if (raw === '') { setForm(f => ({ ...f, [key]: '' })); return; }
+    if (!/^\d*\.?\d*$/.test(raw)) return;              // digits + optional single dot only (no -, e, +)
+    const [, max] = VITAL_LIMITS[key] || [0, Infinity];
+    const n = parseFloat(raw);
+    if (!Number.isNaN(n) && n > max) return;           // would exceed the cap → ignore keystroke
+    setForm(f => ({ ...f, [key]: raw }));
+  }
 
   const fields = [
     ['bp_systolic', t('bp_systolic', lang), 'number', '120'],
@@ -42,6 +67,17 @@ export default function VitalsForm({
     for (const [k, v] of Object.entries(form)) {
       if (v !== '' && v !== null && v !== undefined) data[k] = parseFloat(v);
     }
+    // Hard-limit check before submitting — catch impossible entries locally.
+    for (const [k, val] of Object.entries(data)) {
+      const lim = VITAL_LIMITS[k];
+      if (!lim) continue;
+      if (!Number.isFinite(val) || val < lim[0] || val > lim[1]) {
+        const label = (fields.find(f => f[0] === k) || [])[1] || k;
+        setLimitError(`${label}: enter a value between ${lim[0]} and ${lim[1]}.`);
+        return;
+      }
+    }
+    setLimitError('');
     onSubmit(data);
   }
 
@@ -53,18 +89,18 @@ export default function VitalsForm({
           <label style={{ fontSize: 13, color: 'var(--text-light)' }}>{label}</label>
           <input
             className="input"
-            type={type}
+            type="text"
+            inputMode="decimal"
             placeholder={placeholder}
             value={form[key]}
-            onChange={e => setForm({ ...form, [key]: e.target.value })}
-            step="any"
+            onChange={e => handleChange(key, e.target.value)}
           />
         </div>
       ))}
 
-      {error && (
+      {(limitError || error) && (
         <div style={{ background: '#FADBD8', color: '#C0392B', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
-          {error}
+          {limitError || error}
         </div>
       )}
 

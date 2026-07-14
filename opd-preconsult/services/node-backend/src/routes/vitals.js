@@ -4,12 +4,41 @@ const { authMiddleware, requireSessionOwnership } = require('../middleware/auth'
 
 const router = Router();
 
+// Hard physiological sanity limits [min, max] per vital. These reject impossible /
+// fat-finger entries (e.g. HR 7000, SpO2 150) — NOT clinical normal ranges. A value
+// outside these is a data error, so we refuse it rather than store garbage that
+// would skew triage/report. Kept intentionally wide so no real reading is rejected.
+const VITAL_LIMITS = {
+  bp_systolic:   [0, 999],
+  bp_diastolic:  [0, 999],
+  spo2_pct:      [0, 100],
+  heart_rate:    [0, 999],
+  temperature_c: [0, 99],
+  weight_kg:     [0, 999],
+};
+
+// Returns an error string if any provided vital is non-numeric or out of range,
+// else null. Absent/blank fields are allowed (vitals are optional per-field).
+function validateVitals(body) {
+  for (const [key, [min, max]] of Object.entries(VITAL_LIMITS)) {
+    const raw = body[key];
+    if (raw === undefined || raw === null || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return `${key} must be a number`;
+    if (n < min || n > max) return `${key} must be between ${min} and ${max}`;
+  }
+  return null;
+}
+
 // Submit vitals — a patient submits their own; clinicians may enter for any
 // session (§5c ownership; role bypass for doctor/admin).
 router.post('/:session_id', authMiddleware, requireSessionOwnership('session_id'), async (req, res) => {
   try {
     const { session_id } = req.params;
     const { bp_systolic, bp_diastolic, bp_side, weight_kg, spo2_pct, heart_rate, temperature_c, source } = req.body;
+
+    const invalid = validateVitals(req.body);
+    if (invalid) return res.status(400).json({ error: invalid });
 
     const result = await pool.query(
       `INSERT INTO session_vitals (session_id, bp_systolic, bp_diastolic, bp_side, weight_kg, spo2_pct, heart_rate, temperature_c, source)

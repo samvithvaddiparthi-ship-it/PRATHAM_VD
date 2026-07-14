@@ -178,13 +178,14 @@ router.post('/verify', authMiddleware, async (req, res) => {
       [phone, session_id]
     );
 
-    // §8f — return ONLY masked initials + non-identifying visit metadata for the
-    // chooser. Age/gender/full name are withheld until the patient selects one
-    // (POST /reveal). `index` is the stable position in the (deterministically
-    // ordered) list the reveal call re-derives.
+    // Chooser shows the FULL name (product decision) so a patient can recognise
+    // themselves easily. Age/gender are still withheld until the patient selects
+    // one (POST /reveal) — so a shared number doesn't disclose everyone's full
+    // demographics, only their names. `index` is the stable position in the
+    // (deterministically ordered) list the reveal call re-derives.
     const people = (await priorPeople(phone)).map((p, i) => ({
       index: i,
-      name: maskName(p.name),
+      name: p.name,
       last_visit: p.last_visit,
       visit_count: p.visit_count,
     }));

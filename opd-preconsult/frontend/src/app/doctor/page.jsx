@@ -482,14 +482,15 @@ function DoctorDashboard({ doctor }) {
     setTab('consulted');
   }
 
-  // Release a CONSULTED visit back to the active queue. Clears the doctor link +
-  // consulted stamp on the server and pops it to the top of the queue as a NEW
-  // entry. We also un-"see" the visit locally so its NEW badge shows again.
+  // Release the patient I've opened back to the active queue — for when a patient
+  // was opened by mistake. Clears the doctor link + consulted stamp on the server
+  // (which also frees my active lock) and pops the visit to the top of the queue as
+  // a NEW entry. We also un-"see" the visit locally so its NEW badge shows again.
   async function handleRelease() {
     if (!selected) return;
     if (!(await confirm({
       title: 'Release back to queue?',
-      message: 'This removes the visit from your Consulted list and sends it back to the top of the active queue as a new entry.',
+      message: 'This ends your consultation with this patient and sends them back to the top of the active queue as a new entry.',
       confirmLabel: 'Release',
     }))) return;
     try {
@@ -1017,9 +1018,9 @@ function DoctorDashboard({ doctor }) {
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                 <TriageBadge level={selected.triage_level} />
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center', position: 'relative' }}>
-                {/* Queue: reassign — to another department's general queue, or to
-                    a specific doctor (searchable). Release lives on the Consulted
-                    side. */}
+                {/* Queue / Consulting: reassign — to another department's general
+                    queue, or to a specific doctor (searchable). Release (open by
+                    mistake) lives on the Consulting side. */}
                 {tab !== 'consulted' && selected.assigned_doctor_id && (
                   <div style={{ position: 'relative' }}>
                     <button onClick={() => setReassignOpen(o => !o)} title="Reassign this patient"
@@ -1050,10 +1051,11 @@ function DoctorDashboard({ doctor }) {
                   </div>
                 )}
 
-                {/* Consulted: release this visit back to the active queue. */}
-                {tab === 'consulted' && (
+                {/* Consulting: opened a patient by mistake? Release them back to the
+                    active queue (clears your lock so you can open the right one). */}
+                {tab === 'consulting' && (
                   <button onClick={handleRelease}
-                    title="Send this visit back to the active queue"
+                    title="Send this patient back to the active queue"
                     style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 8, padding: '4px 12px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
                     ↩ Release to queue
                   </button>

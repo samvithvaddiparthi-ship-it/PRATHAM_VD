@@ -91,7 +91,7 @@ function HomeContent() {
   // browser, so a new scan never inherits an old session_id, OTP-verified flag,
   // form draft, or welcome card.
   function clearPatientState() {
-    ['token', 'session_id', 'department', 'qr', 'otp_verified', 'register_form', 'welcome_back']
+    ['token', 'session_id', 'department', 'qr', 'otp_verified', 'register_form', 'welcome_back', 'register_progress']
       .forEach(k => { try { sessionStorage.removeItem(k); } catch {} });
     setToken(null);
   }
@@ -102,7 +102,7 @@ function HomeContent() {
     setLang(code);
     try { sessionStorage.setItem('lang', code); } catch {}
     if (hasSession) {
-      router.push('/patient/register');
+      router.push('/patient/consent');
     } else if (pendingQr) {
       beginEntry(pendingQr, code);
     }
@@ -134,7 +134,7 @@ function HomeContent() {
       sessionStorage.setItem('qr', payload);
       const chosen = (langOverride && ['en', 'hi', 'te'].includes(langOverride)) ? langOverride : lang;
       sessionStorage.setItem('lang', chosen);
-      router.push('/patient/register');
+      router.push('/patient/consent');
     } catch (err) {
       setError(err.message);
       setLoading(false);

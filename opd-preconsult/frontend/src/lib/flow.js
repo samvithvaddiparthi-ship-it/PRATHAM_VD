@@ -2,7 +2,7 @@
 // progress indicator. Keeping it here (instead of hardcoding dot counts per page)
 // means the "Step X of Y" bar stays correct as the flow changes, and register's
 // phone/OTP/identify sub-steps all count as the SAME step 1.
-export const PATIENT_STEPS = ['register', 'consent', 'documents', 'interview', 'vitals'];
+export const PATIENT_STEPS = ['consent', 'register', 'documents', 'interview', 'vitals'];
 
 // { index (1-based), total } for a step id. When a department doesn't collect
 // vitals, that step drops out of the count (pass { hasVitals: false }).
