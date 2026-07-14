@@ -24,15 +24,17 @@ function fmtDateTime(ts) {
 }
 
 // Display status for the HIS State column. Keyed by the backend-derived
-// `display_state` (the single source of truth — see /all-sessions). A patient
-// released from Consulted back to the queue has dispatched_at cleared, so the
-// backend derives QUEUE and this shows "In Queue", not "Completed".
+// `display_state` (the single source of truth — see /all-sessions). Uses the
+// dashboard-wide lifecycle vocabulary: Registered → (Interview/Vitals) → Ready →
+// Started → Completed. A visit released from Completed back to the queue has
+// dispatched_at/consulted_at cleared, so the backend derives READY again.
 const STATE_META = {
   REGISTERED: { label: 'Registered', bg: '#F1F3F5', fg: 'var(--text)' },
   INTERVIEW:  { label: 'In Interview', bg: '#D6EAF8', fg: '#1B4F72' },
   VITALS:     { label: 'Vitals', bg: '#FDEBD0', fg: '#9C640C' },
-  QUEUE:      { label: 'In Queue', bg: '#FCF3CF', fg: '#7D6608' },
-  CONSULTED:  { label: 'Consulted', bg: '#D5F5E3', fg: '#1E8449' },
+  READY:      { label: 'Ready', bg: '#FCF3CF', fg: '#7D6608' },
+  STARTED:    { label: 'Started', bg: '#D6EAF8', fg: '#1B4F72' },
+  COMPLETED:  { label: 'Completed', bg: '#D5F5E3', fg: '#1E8449' },
 };
 function stateMeta(displayState) {
   return STATE_META[displayState] || { label: displayState || '—', bg: '#F1F3F5', fg: 'var(--text)' };
@@ -477,8 +479,9 @@ function HISDashboard() {
                         <option value="REGISTERED">Registered</option>
                         <option value="INTERVIEW">In Interview</option>
                         <option value="VITALS">Vitals</option>
-                        <option value="QUEUE">In Queue</option>
-                        <option value="CONSULTED">Consulted</option>
+                        <option value="READY">Ready</option>
+                        <option value="STARTED">Started</option>
+                        <option value="COMPLETED">Completed</option>
                       </select>
                     </div>
 
@@ -533,8 +536,13 @@ function HISDashboard() {
                   <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     <strong>{s.patient_name || 'Unregistered'}</strong>
                     <br /><span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>
-                      {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · #{s.queue_slot || '-'}
+                      {s.patient_age ? `${s.patient_age}y` : ''} {s.patient_gender || ''} · {s.token_label || '—'}
                     </span>
+                    {s.patient_phone && (
+                      <><br /><span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>
+                        📞 {formatPhoneDisplay(s.patient_phone)}
+                      </span></>
+                    )}
                     {s.created_at && (
                       <><br /><span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))' }}>
                         🗓 {fmtDateTime(s.created_at)}
@@ -2128,7 +2136,15 @@ function AnalyticsDashboard() {
   const cardStyle = { background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: '1 1 160px', minWidth: 160 };
   const thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', background: 'var(--primary)', color: '#fff' };
   const tdStyle = { padding: '8px 12px', fontSize: 'calc(13px * var(--fs))', borderBottom: '1px solid #F0F0F0' };
-  const fmtMin = (v) => (v == null ? '—' : `${Math.round(v)} min`);
+  // Minutes → "9 min" for short spans, rolling over to "6h 33m" once past an hour
+  // (avg wait is usually minutes; avg total can be hours).
+  const fmtMin = (v) => {
+    if (v == null) return '—';
+    const m = Math.round(v);
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60), mm = m % 60;
+    return mm ? `${h}h ${mm}m` : `${h}h`;
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -2143,50 +2159,79 @@ function AnalyticsDashboard() {
         ))}
       </div>
 
-      {/* Throughput — the numbers an OPD head watches all day */}
+      {/* Throughput funnel — one row, one vocabulary, used identically across the
+          whole HIS dashboard: Registered → Ready → Started → Completed, then the
+          live "Waiting now" gauge and the two timing averages. Each label carries
+          its exact definition as a hover title. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registered</p>
+          <p title="Patients who got past the QR scan into registration" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registered</p>
           <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--primary)' }}>{data.registered ?? data.total_sessions}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Completed pre-consult</p>
+          <p title="Finished the AI pre-consult (questionnaire, vitals, documents, summary) — waiting for a doctor" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Ready</p>
           <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>{data.completed ?? data.completed_count}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Consulted</p>
+          <p title="A doctor has opened the visit — consultation started" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Started</p>
           <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.consulted ?? '—'}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Waiting now</p>
+          <p title="Doctor finished the consultation (Save & Generate QR / prescription issued)" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Completed</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.dispatched ?? '—'}</p>
+        </div>
+        <div style={cardStyle}>
+          <p title="Ready patients not yet picked up by a doctor (live)" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Waiting now</p>
           <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: (data.waiting ?? 0) > 0 ? 'var(--amber)' : 'var(--text-light)' }}>{data.waiting ?? '—'}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg wait · arrival→seen</p>
+          <p title="Average time from arrival (registration) to a doctor opening the visit" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg wait · arrival→started</p>
           <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_wait_minutes)}</p>
         </div>
         <div style={cardStyle}>
-          <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg total time</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.avg_total_minutes} min</p>
+          <p title="Average end-to-end time from arrival (registration) to a completed consultation" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg total · arrival→completed</p>
+          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_total_minutes)}</p>
         </div>
       </div>
 
-      {/* Triage mix — safety + staffing signal */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {data.by_triage?.map(t => (
-          <div key={t.level} style={cardStyle}>
-            <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{t.level || 'GREEN'} Triage</p>
-            <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: t.level === 'RED' ? 'var(--red)' : t.level === 'AMBER' ? 'var(--amber)' : 'var(--green)' }}>{t.count}</p>
+      {/* Triage mix — safety + staffing signal. Always render RED→AMBER→GREEN in
+          that fixed order (not data order) with human labels. "Untriaged" (a
+          session with no triage_level — the patient never finished the interview)
+          is its own card, never merged into GREEN. */}
+      {(() => {
+        const byLevel = Object.fromEntries((data.by_triage || []).map(t => [t.level, t.count]));
+        const TRIAGE = [
+          ['RED', 'Severe · RED', 'var(--red)'],
+          ['AMBER', 'Moderate · AMBER', 'var(--amber-text)'],
+          ['GREEN', 'Mild · GREEN', 'var(--green)'],
+        ];
+        return (
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {TRIAGE.map(([key, label, color]) => (
+              <div key={key} style={cardStyle}>
+                <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{label}</p>
+                <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color }}>{byLevel[key] || 0}</p>
+              </div>
+            ))}
+            {byLevel.NONE > 0 && (
+              <div style={cardStyle}>
+                <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Untriaged</p>
+                <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--text-light)' }}>{byLevel.NONE}</p>
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        );
+      })()}
 
       <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
         <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>By Department · throughput & live load</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            <th style={thStyle}>Department</th><th style={thStyle}>Registered</th><th style={thStyle}>Completed</th>
-            <th style={thStyle}>Consulted</th><th style={thStyle}>Waiting</th><th style={thStyle}>Avg wait</th><th style={thStyle}>%</th>
+            <th style={thStyle}>Department</th><th style={thStyle}>Registered</th>
+            <th style={thStyle} title="Finished pre-consult, waiting for a doctor">Ready</th>
+            <th style={thStyle} title="A doctor has opened the visit — consultation started">Started</th>
+            <th style={thStyle}>Waiting</th><th style={thStyle}>Avg wait</th>
+            <th style={thStyle} title="Share of registered patients who reached Ready (Ready ÷ Registered)">Completion</th>
           </tr></thead>
           <tbody>
             {data.by_department?.map(d => {
@@ -2211,7 +2256,13 @@ function AnalyticsDashboard() {
         <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>By Doctor · productivity</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
-            <th style={thStyle}>Doctor</th><th style={thStyle}>Dept</th><th style={thStyle}>Seen</th><th style={thStyle}>Done</th><th style={thStyle}>Avg consult</th><th style={thStyle}>RED</th>
+            <th style={thStyle}>Doctor</th><th style={thStyle}>Dept</th>
+            <th style={thStyle} title="Visits this doctor has opened — consultations started">Started</th>
+            <th style={thStyle} title="Consultations this doctor finished (Save & Generate QR)">Completed</th>
+            <th style={thStyle}>Avg consult</th>
+            <th style={{ ...thStyle, textAlign: 'center' }} title="Severe-triage patients handled">RED</th>
+            <th style={{ ...thStyle, textAlign: 'center' }} title="Moderate-triage patients handled">AMBER</th>
+            <th style={{ ...thStyle, textAlign: 'center' }} title="Mild-triage patients handled">GREEN</th>
           </tr></thead>
           <tbody>
             {data.by_doctor?.map(d => (
@@ -2221,7 +2272,9 @@ function AnalyticsDashboard() {
                 <td style={tdStyle}>{d.seen ?? '—'}</td>
                 <td style={tdStyle}>{d.completed}</td>
                 <td style={tdStyle}>{fmtMin(d.avg_consult_minutes)}</td>
-                <td style={{ ...tdStyle, color: d.red_count > 0 ? 'var(--red)' : 'inherit', fontWeight: d.red_count > 0 ? 700 : 400 }}>{d.red_count}</td>
+                <td style={{ ...tdStyle, textAlign: 'center', color: d.red_count > 0 ? 'var(--red)' : 'var(--text-light)', fontWeight: d.red_count > 0 ? 700 : 400 }}>{d.red_count}</td>
+                <td style={{ ...tdStyle, textAlign: 'center', color: (d.amber_count ?? 0) > 0 ? 'var(--amber-text)' : 'var(--text-light)' }}>{d.amber_count ?? 0}</td>
+                <td style={{ ...tdStyle, textAlign: 'center', color: (d.green_count ?? 0) > 0 ? 'var(--green)' : 'var(--text-light)' }}>{d.green_count ?? 0}</td>
               </tr>
             ))}
           </tbody>
@@ -2240,28 +2293,72 @@ function AnalyticsDashboard() {
           const max = Math.max(1, ...counts);
           const anyData = counts.some(c => c > 0);
           if (!anyData) return <p style={{ textAlign: 'center', color: 'var(--text-light)', padding: 8, fontSize: 'calc(13px * var(--fs))' }}>No registrations in this period</p>;
+          const peakHour = counts.indexOf(max);
+          const total = counts.reduce((a, b) => a + b, 0);
+          // 12-hour clock label, e.g. 0->12am, 13->1pm — friendlier than "13:00".
+          const fmtHour = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'am' : 'pm'}`;
+          const PLOT_H = 150, X_AXIS = 18;      // px: bar area height + x-label gutter
+          const ticks = [max, Math.round(max / 2), 0];   // y-axis: top / mid / baseline
+          const axisLabel = { fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' };
           return (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130 }}>
-              {counts.map((c, h) => (
-                <div key={h} title={`${String(h).padStart(2, '0')}:00 — ${c} registration${c === 1 ? '' : 's'}`}
-                  style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
-                  <div style={{ width: '100%', height: `${(c / max) * 100}%`, minHeight: c > 0 ? 3 : 0,
-                    background: c === max ? 'var(--primary)' : 'var(--secondary)', borderRadius: '3px 3px 0 0' }} />
-                  <span style={{ fontSize: 'calc(8px * var(--fs))', color: 'var(--text-light)', marginTop: 3 }}>{h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span>
+            <div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {/* y-axis scale (registrations) */}
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                  height: PLOT_H, paddingBottom: X_AXIS, textAlign: 'right', minWidth: 16, ...axisLabel }}>
+                  {ticks.map((t, i) => <span key={i}>{t}</span>)}
                 </div>
-              ))}
+                {/* plot: dashed gridlines behind, bars in front */}
+                <div style={{ flex: 1, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: X_AXIS,
+                    display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
+                    {ticks.map((t, i) => <div key={i} style={{ borderTop: '1px dashed #E6EBF0' }} />)}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: PLOT_H, paddingBottom: X_AXIS }}>
+                    {counts.map((c, h) => (
+                      <div key={h} title={`${fmtHour(h)} — ${c} registration${c === 1 ? '' : 's'}`}
+                        style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column',
+                          alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+                        {h === peakHour && (
+                          <span style={{ position: 'absolute', top: -16, fontSize: 'calc(10px * var(--fs))', fontWeight: 700, color: 'var(--primary)' }}>{c}</span>
+                        )}
+                        <div style={{ width: '100%', height: `${(c / max) * 100}%`, minHeight: c > 0 ? 3 : 0,
+                          background: h === peakHour ? 'var(--primary)' : 'var(--secondary)', borderRadius: '4px 4px 0 0' }} />
+                        {/* x-axis: label every 3rd hour, in the gutter below the baseline */}
+                        <span style={{ position: 'absolute', bottom: -16, whiteSpace: 'nowrap', ...axisLabel }}>
+                          {h % 3 === 0 ? fmtHour(h) : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* caption — names the axes and calls out the peak */}
+              <p style={{ marginTop: 12, fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>
+                Busiest hour <strong style={{ color: 'var(--primary)' }}>{fmtHour(peakHour)}</strong> ({max} registration{max === 1 ? '' : 's'}) · {total} total in period.
+                Bars = registrations per hour of day (x-axis); height = count (y-axis).
+              </p>
             </div>
           );
         })()}
       </div>
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {data.by_state?.map(s => (
-          <div key={s.state} style={{ background: '#fff', borderRadius: 8, padding: '8px 16px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-            <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{s.state}</p>
-            <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{s.count}</p>
-          </div>
-        ))}
+      {/* Intake funnel — raw pre-consult stages (a session's `state` only moves
+          through intake; "Started"/"Completed" are later doctor-workflow stamps,
+          so they don't appear here). Labels mapped to the dashboard vocabulary. */}
+      <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>Intake stages · pre-consult funnel</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {(() => {
+            const RAW_STATE_LABEL = { INIT: 'Scanned', CONSENTED: 'Consented', REGISTERED: 'Registered', INTERVIEW: 'In Interview', VITALS: 'Vitals', COMPLETE: 'Ready' };
+            return (data.by_state || []).map(s => (
+              <div key={s.state} style={{ background: '#F8FAFC', borderRadius: 8, padding: '8px 16px', textAlign: 'center' }}>
+                <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{RAW_STATE_LABEL[s.state] || s.state}</p>
+                <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{s.count}</p>
+              </div>
+            ));
+          })()}
+        </div>
       </div>
 
       {data.followups?.length > 0 && (

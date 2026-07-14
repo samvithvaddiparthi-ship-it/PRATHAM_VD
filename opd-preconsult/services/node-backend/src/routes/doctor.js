@@ -599,16 +599,26 @@ router.get('/all-sessions', ...clinicianOnly, async (req, res) => {
     // display_state — the SINGLE source of truth for the HIS "State" column AND
     // the State filter. The raw `state` column stays COMPLETE once the pre-consult
     // report is generated and never changes through the doctor workflow, so it
-    // can't tell "in queue" from "consulted" from "released back to queue".
-    // Derive it from the workflow stamps instead:
-    //   dispatched_at set            -> CONSULTED  (doctor finished: Save & Generate)
-    //   COMPLETE + not dispatched    -> QUEUE      (ready/waiting — incl. released-back)
-    //   otherwise                    -> the pre-consult state (REGISTERED/INTERVIEW/VITALS)
+    // can't tell "ready/waiting" from "in consultation" from "finished". Derive it
+    // from the workflow stamps instead, using the dashboard-wide vocabulary:
+    //   dispatched_at set              -> COMPLETED  (doctor finished: Save & Generate QR)
+    //   consulted_at set, not finished -> STARTED    (doctor opened — consultation in progress)
+    //   COMPLETE + not yet seen        -> READY      (pre-consult done, waiting for doctor)
+    //   otherwise                      -> the pre-consult stage (REGISTERED/INTERVIEW/VITALS)
+    // NB: a visit released from COMPLETED back to the queue has dispatched_at (and
+    // consulted_at) cleared, so it correctly derives READY again.
     const displayStateSql = `CASE
-        WHEN s.dispatched_at IS NOT NULL THEN 'CONSULTED'
-        WHEN s.state = 'COMPLETE' THEN 'QUEUE'
+        WHEN s.dispatched_at IS NOT NULL THEN 'COMPLETED'
+        WHEN s.consulted_at IS NOT NULL THEN 'STARTED'
+        WHEN s.state = 'COMPLETE' THEN 'READY'
         ELSE s.state END`;
-    let q = `SELECT s.*, d.name as doctor_name, d.department as doctor_dept,
+    // A session can have MORE THAN ONE row in session_reports (e.g. the report was
+    // regenerated after late vitals). A plain LEFT JOIN would then emit one row per
+    // report → the same patient shows up twice/thrice on the dashboard. DISTINCT ON
+    // (s.id) collapses each session to a single row, keeping its LATEST report
+    // (same guard as /consulted). The outer query restores created_at DESC order.
+    let inner = `SELECT DISTINCT ON (s.id)
+             s.*, d.name as doctor_name, d.department as doctor_dept,
              sr.doctor_feedback, sr.created_at as report_created_at,
              ${displayStateSql} AS display_state
              FROM sessions s
@@ -616,12 +626,13 @@ router.get('/all-sessions', ...clinicianOnly, async (req, res) => {
              LEFT JOIN session_reports sr ON sr.session_id = s.id
              WHERE s.state NOT IN ('INIT', 'CONSENTED')`;
     const params = [];
-    if (department) { params.push(department); q += ` AND s.department = $${params.length}`; }
-    if (doctor_id) { params.push(doctor_id); q += ` AND s.assigned_doctor_id = $${params.length}`; }
+    if (department) { params.push(department); inner += ` AND s.department = $${params.length}`; }
+    if (doctor_id) { params.push(doctor_id); inner += ` AND s.assigned_doctor_id = $${params.length}`; }
     // Filter on the DERIVED status so the dropdown and the column always agree.
-    if (state) { params.push(state); q += ` AND ${displayStateSql} = $${params.length}`; }
-    if (triage) { params.push(triage); q += ` AND s.triage_level = $${params.length}`; }
-    q += ' ORDER BY s.created_at DESC LIMIT 200';
+    if (state) { params.push(state); inner += ` AND ${displayStateSql} = $${params.length}`; }
+    if (triage) { params.push(triage); inner += ` AND s.triage_level = $${params.length}`; }
+    inner += ' ORDER BY s.id, sr.created_at DESC NULLS LAST';
+    const q = `SELECT * FROM (${inner}) t ORDER BY t.created_at DESC LIMIT 200`;
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {
