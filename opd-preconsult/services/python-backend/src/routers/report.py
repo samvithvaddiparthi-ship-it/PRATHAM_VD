@@ -356,8 +356,14 @@ def _render_medications(session_json) -> str:
     if patient_meds and patient_meds.lower() not in ('none', 'nil', 'no', ''):
         doc_names = " ".join(m.get('name', '').lower() for m in doc_meds)
         reported = [tok.strip() for tok in re.split(r'[,;\n]', patient_meds) if tok.strip()]
-        for term in [tok for tok in reported if tok.lower() not in doc_names]:
-            lines.append(f"- {term}")
+        new_terms = [tok for tok in reported if tok.lower() not in doc_names]
+        if new_terms:
+            # Label the source so the doctor can tell these apart from the
+            # OCR-extracted prescription meds above: these were typed by the patient
+            # at intake (self-reported, not read off an uploaded document).
+            lines.append("**Reported by patient (typed at intake):**")
+            for term in new_terms:
+                lines.append(f"- {term}")
     elif not doc_meds:
         lines.append("None")
     return "\n".join(lines)

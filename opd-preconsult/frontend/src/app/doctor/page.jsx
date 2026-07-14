@@ -1374,6 +1374,24 @@ function primaryDose(s) {
   return m ? m[0].replace(/\s+/g, '') : String(s).trim();
 }
 
+// Split a free-text medicine entry into { name, dose } so a patient-typed string
+// like "Dolo 650" or "Acutret 10mg" pre-fills the dose column instead of dumping
+// the whole thing into the drug-name field. Handles an explicit strength token
+// ("10mg", "500 mcg") and the Indian bare-number shorthand ("Dolo 650" = 650).
+// Doctor still verifies/edits before prescribing.
+function splitNameDose(s) {
+  const str = String(s || '').trim();
+  if (!str) return { name: '', dose: '' };
+  const unit = str.match(DOSE_TOKEN_RE);
+  if (unit) {
+    const name = str.replace(unit[0], '').replace(/[\s,–-]+$/, '').replace(/^[\s,–-]+/, '').trim();
+    return { name: name || str, dose: unit[0].replace(/\s+/g, '') };
+  }
+  const bare = str.match(/^(.*\S)[\s-]+(\d+(?:\.\d+)?)$/);   // trailing bare number = strength
+  if (bare) return { name: bare[1].trim(), dose: bare[2] };
+  return { name: str, dose: '' };
+}
+
 // Searchable drug dropdown: filters DRUG_LIST as you type, supports keyboard
 // (↑/↓/Enter/Esc) and click selection, closes on click-away. Free text is still
 // allowed (whatever is typed is the value) so doctors aren't limited to the list.
@@ -1753,11 +1771,12 @@ function PrescriptionPanel({ session, doctor, onDispatched }) {
         const _medKey = Object.keys(_ans).find(k => k.endsWith('_base_medications'));
         const patientMeds = _medKey ? _ans[_medKey] : _ans.q_medications;
         if (patientMeds && patientMeds.toLowerCase() !== 'none' && patientMeds.toLowerCase() !== 'nil') {
-          // Try to parse comma-separated
+          // Comma-separated; split each entry into name + strength so the dose
+          // column is populated (e.g. "Dolo 650" -> Dolo / 650).
           patientMeds.split(',').forEach(m => {
-            const trimmed = m.trim();
-            if (trimmed && !meds.some(existing => existing.drug_name.toLowerCase() === trimmed.toLowerCase())) {
-              meds.push({ id: rxUid(), drug_name: trimmed, dose: '', frequency: '', source: 'patient', duration: '', instructions: '' });
+            const { name, dose } = splitNameDose(m);
+            if (name && !meds.some(existing => existing.drug_name.toLowerCase() === name.toLowerCase())) {
+              meds.push({ id: rxUid(), drug_name: name, dose, frequency: '', source: 'patient', duration: '', instructions: '' });
             }
           });
         }
