@@ -373,7 +373,7 @@ function DoctorDashboard({ doctor }) {
     try {
       await api.submitVitals(selected.id, { ...data, source: 'nurse' });
       const tri = await api.evaluate(selected.id);
-      await api.generateReport(selected.id);
+      await api.generateReport(selected.id, { force: true });   // vitals changed → refresh in place
       const [rep, v] = await Promise.all([api.getReport(selected.id), api.getVitals(selected.id)]);
       setReport(rep);
       setVitals(v);

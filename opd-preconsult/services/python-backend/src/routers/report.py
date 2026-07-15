@@ -26,6 +26,10 @@ PROMPT_DIR = Path(__file__).parent.parent / "prompts"
 
 class ReportRequest(BaseModel):
     session_id: str
+    # Regenerate even when a report already exists. Patient-flow callers omit this
+    # (idempotent — reuse the existing report). Only the doctor's late-vitals path
+    # sets it, because the vitals just changed and the report must reflect them.
+    force: bool = False
 
 @router.post("/generate", dependencies=[Depends(_rl_report)])
 async def generate_report(req: ReportRequest, claims: dict = Depends(require_auth)):
@@ -48,6 +52,34 @@ async def _generate_report_impl(req: ReportRequest):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     session = session[0]
+
+    # Is there already a report for this session? Generation runs up to three times
+    # per visit (patient vitals page, patient done page, and again when a nurse adds
+    # late vitals). Without this guard each call INSERTed a NEW session_reports row —
+    # wasting an LLM call and, worse, orphaning doctor-attached data (scribe notes,
+    # corrections, HIS-push status live on a specific row, so a fresh row makes them
+    # vanish from view). We keep ONE row per session: reuse it when unchanged,
+    # UPDATE it in place when forced.
+    existing = query(
+        "SELECT id, report_md, report_json, fhir_bundle FROM session_reports "
+        "WHERE session_id = %s ORDER BY created_at DESC LIMIT 1",
+        (req.session_id,),
+    )
+    existing = existing[0] if existing else None
+
+    # A report already exists and no refresh was requested → return it untouched
+    # (no LLM call, no new row). This is the common patient-flow case.
+    if existing and not req.force:
+        execute(
+            "UPDATE sessions SET state = 'COMPLETE', updated_at = NOW() WHERE id = %s",
+            (req.session_id,),
+        )
+        return {
+            "report_md": existing["report_md"],
+            "report_json": existing["report_json"],
+            "fhir_bundle": existing["fhir_bundle"],
+            "triage_level": session.get("triage_level") or "GREEN",
+        }
 
     answers = query(
         """SELECT sa.question_id, sa.answer_raw, qn.text_en AS question_text
@@ -206,12 +238,22 @@ async def _generate_report_impl(req: ReportRequest):
     # Build FHIR bundle
     fhir_bundle = _build_fhir_bundle(session, answers, vitals, all_doc_meds, all_doc_labs)
 
-    # Store report
-    execute(
-        """INSERT INTO session_reports (session_id, report_md, report_json, fhir_bundle)
-           VALUES (%s, %s, %s, %s)""",
-        (req.session_id, report_md, json.dumps(session_json, default=str), json.dumps(fhir_bundle, default=str)),
-    )
+    # Store report — UPDATE the existing row in place (preserving doctor_feedback,
+    # doctor_correction, scribe_*, his_pushed on that row) when regenerating, or
+    # INSERT the first one. Keeps at most one report row per session.
+    report_json_s = json.dumps(session_json, default=str)
+    fhir_s = json.dumps(fhir_bundle, default=str)
+    if existing:
+        execute(
+            "UPDATE session_reports SET report_md = %s, report_json = %s, fhir_bundle = %s WHERE id = %s",
+            (report_md, report_json_s, fhir_s, existing["id"]),
+        )
+    else:
+        execute(
+            """INSERT INTO session_reports (session_id, report_md, report_json, fhir_bundle)
+               VALUES (%s, %s, %s, %s)""",
+            (req.session_id, report_md, report_json_s, fhir_s),
+        )
 
     # Update session state
     execute(

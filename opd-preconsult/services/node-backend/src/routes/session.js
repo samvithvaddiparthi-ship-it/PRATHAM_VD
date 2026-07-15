@@ -275,25 +275,12 @@ router.post('/consent', authMiddleware, async (req, res) => {
   }
 });
 
-// Update session state
-router.post('/state', authMiddleware, async (req, res) => {
-  try {
-    const { session_id } = req.session_data;
-    const { state } = req.body;
-    const valid = ['INIT', 'REGISTERED', 'CONSENTED', 'INTERVIEW', 'VITALS', 'COMPLETE'];
-    if (!valid.includes(state)) return res.status(400).json({ error: 'Invalid state' });
-
-    const result = await pool.query(
-      `UPDATE sessions SET state = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [state, session_id]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('state error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// NOTE: a generic "set session state" endpoint used to live here. It was removed
+// because it let a patient token PATCH its own session to any state — including
+// COMPLETE, which is the doctor-queue entry criterion — bypassing the interview
+// and report. It had no callers. State transitions are owned by the flow that
+// performs them: the questionnaire advances to INTERVIEW, vitals -> VITALS, and
+// report generation sets COMPLETE. Do not reintroduce a client-settable state.
 
 // Get session by ID — the patient's own flow (done/interview pages) and the
 // clinician views both read this. A patient may only read their OWN session

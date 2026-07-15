@@ -302,15 +302,37 @@ router.post('/assign/:session_id', ...doctorOnly, async (req, res) => {
   try {
     const decoded = req.session_data;
 
+    // Ownership: a doctor may only self-assign a patient who is FREE or already
+    // theirs — never steal one another doctor is consulting/holds. Moving a patient
+    // BETWEEN doctors is an admin action (POST /reassign, role-gated). Mirrors the
+    // atomic guard on /open.
     // consulted_at is stamped ONCE (first open) and never overwritten, so the
     // Consulted list keeps a fixed order even when a patient is re-opened.
     const result = await pool.query(
       `UPDATE sessions SET assigned_doctor_id = $1, updated_at = NOW(),
               consulted_at = COALESCE(consulted_at, NOW())
-       WHERE id = $2 RETURNING *`,
+       WHERE id = $2
+         AND dispatched_at IS NULL
+         AND (assigned_doctor_id IS NULL OR assigned_doctor_id = $1)
+       RETURNING *`,
       [decoded.doctor_id, req.params.session_id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!result.rows.length) {
+      // Couldn't acquire — say why (held by another, already done, or gone).
+      const cur = await pool.query(
+        `SELECT s.assigned_doctor_id, s.dispatched_at, d.name AS doctor_name
+           FROM sessions s LEFT JOIN doctors d ON s.assigned_doctor_id = d.id
+          WHERE s.id = $1`,
+        [req.params.session_id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+      const row = cur.rows[0];
+      return res.status(409).json({
+        error: row.dispatched_at ? 'dispatched' : 'locked',
+        locked_by: row.doctor_name || 'another doctor',
+        dispatched: !!row.dispatched_at,
+      });
+    }
 
     await pool.query(
       `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_assigned', $2, $3)`,
@@ -395,16 +417,28 @@ router.post('/dispatch/:session_id', ...doctorOnly, async (req, res) => {
   try {
     const decoded = req.session_data;
 
+    // Ownership: only the doctor holding the visit (or nobody) may finish it — a
+    // doctor must not finalize another doctor's active consultation.
     const result = await pool.query(
       `UPDATE sessions
           SET dispatched_at = NOW(),
               assigned_doctor_id = COALESCE(assigned_doctor_id, $1),
               consulted_at = COALESCE(consulted_at, NOW()),
               updated_at = NOW()
-        WHERE id = $2 RETURNING *`,
+        WHERE id = $2
+          AND (assigned_doctor_id IS NULL OR assigned_doctor_id = $1)
+        RETURNING *`,
       [decoded.doctor_id, req.params.session_id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!result.rows.length) {
+      const cur = await pool.query(
+        `SELECT s.assigned_doctor_id, d.name AS doctor_name
+           FROM sessions s LEFT JOIN doctors d ON s.assigned_doctor_id = d.id WHERE s.id = $1`,
+        [req.params.session_id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+      return res.status(409).json({ error: 'locked', locked_by: cur.rows[0].doctor_name || 'another doctor' });
+    }
 
     await pool.query(
       `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_dispatched', $2, $3)`,
@@ -423,12 +457,23 @@ router.post('/unassign/:session_id', ...doctorOnly, async (req, res) => {
     const decoded = req.session_data;
 
     // Abandon a lock — release the patient back to "waiting" (clear the doctor
-    // link AND the consulted stamp so it's open for anyone again).
+    // link AND the consulted stamp so it's open for anyone again). Ownership: only
+    // the doctor holding it (or a free session) — don't yank another doctor's lock;
+    // admins move patients via /reassign.
     const result = await pool.query(
-      `UPDATE sessions SET assigned_doctor_id = NULL, consulted_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [req.params.session_id]
+      `UPDATE sessions SET assigned_doctor_id = NULL, consulted_at = NULL, updated_at = NOW()
+        WHERE id = $1 AND (assigned_doctor_id IS NULL OR assigned_doctor_id = $2) RETURNING *`,
+      [req.params.session_id, decoded.doctor_id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!result.rows.length) {
+      const cur = await pool.query(
+        `SELECT s.assigned_doctor_id, d.name AS doctor_name
+           FROM sessions s LEFT JOIN doctors d ON s.assigned_doctor_id = d.id WHERE s.id = $1`,
+        [req.params.session_id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+      return res.status(409).json({ error: 'locked', locked_by: cur.rows[0].doctor_name || 'another doctor' });
+    }
 
     await pool.query(
       `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_unassigned', $2, $3)`,
@@ -451,14 +496,25 @@ router.post('/release/:session_id', ...doctorOnly, async (req, res) => {
   try {
     const decoded = req.session_data;
 
+    // Ownership: only the doctor who consulted this visit may release it back to
+    // the queue (it sits in THEIR Consulted list). Not free-or-mine — a release
+    // acts on a visit that is, by definition, assigned to the releasing doctor.
     const result = await pool.query(
       `UPDATE sessions
           SET assigned_doctor_id = NULL, consulted_at = NULL, dispatched_at = NULL,
               released_at = NOW(), updated_at = NOW()
-        WHERE id = $1 RETURNING *`,
-      [req.params.session_id]
+        WHERE id = $1 AND assigned_doctor_id = $2 RETURNING *`,
+      [req.params.session_id, decoded.doctor_id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (!result.rows.length) {
+      const cur = await pool.query(
+        `SELECT s.assigned_doctor_id, d.name AS doctor_name
+           FROM sessions s LEFT JOIN doctors d ON s.assigned_doctor_id = d.id WHERE s.id = $1`,
+        [req.params.session_id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+      return res.status(409).json({ error: 'not_yours', locked_by: cur.rows[0].doctor_name || 'another doctor' });
+    }
 
     await pool.query(
       `INSERT INTO audit_log (session_id, event_type, actor, payload) VALUES ($1, 'doctor_released', $2, $3)`,
@@ -483,6 +539,18 @@ router.post('/release/:session_id', ...doctorOnly, async (req, res) => {
 router.post('/reassign/:session_id', ...clinicianOnly, async (req, res) => {
   try {
     const { target_doctor_id, department } = req.body;
+
+    // Once the consultation is finished (Save & Generate QR → dispatched_at set),
+    // the doctor assignment is LOCKED — reassigning would silently reopen a closed
+    // visit (it clears dispatched_at/consulted_at) and detach the completed record.
+    // Admins must not reassign a completed consultation (mentor rule, 2026-07-15).
+    // The deliberate way to send a FINISHED patient back to the queue is the
+    // assigned doctor's own POST /release, which is unaffected by this guard.
+    const cur = await pool.query('SELECT dispatched_at FROM sessions WHERE id = $1', [req.params.session_id]);
+    if (!cur.rows.length) return res.status(404).json({ error: 'Session not found' });
+    if (cur.rows[0].dispatched_at) {
+      return res.status(409).json({ error: 'Consultation already completed — reassignment is locked' });
+    }
 
     // ── Reassign to a specific doctor (+ follow their department) ──
     if (target_doctor_id) {

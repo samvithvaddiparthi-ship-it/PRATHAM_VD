@@ -81,8 +81,15 @@ router.post('/', authMiddleware, requireRole('doctor'), async (req, res) => {
     // Patient identity from the session (signed into the payload so the digital
     // Rx shows the same details — which the template may optionally display).
     const session = await pool.query(
-      'SELECT patient_phone, patient_name, patient_age, patient_gender FROM sessions WHERE id = $1', [session_id]);
+      'SELECT patient_phone, patient_name, patient_age, patient_gender, assigned_doctor_id FROM sessions WHERE id = $1', [session_id]);
     if (!session.rows.length) return res.status(404).json({ error: 'Session not found' });
+    // Ownership: don't let a doctor prescribe for a patient assigned to ANOTHER
+    // doctor (wrong-prescriber attribution). Unassigned/own is allowed — the normal
+    // flow opens (self-assigns) the patient before prescribing.
+    const assignedTo = session.rows[0].assigned_doctor_id;
+    if (assignedTo && assignedTo !== doctorId) {
+      return res.status(403).json({ error: 'This patient is assigned to another doctor' });
+    }
     const patientPhone = session.rows[0].patient_phone;
     const patientName = session.rows[0].patient_name;
     const patientAge = session.rows[0].patient_age;

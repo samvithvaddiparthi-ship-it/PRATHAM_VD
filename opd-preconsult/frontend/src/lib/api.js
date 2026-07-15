@@ -32,7 +32,6 @@ export const api = {
   consent: () => apiFetch('/api/session/consent', { method: 'POST', body: '{}' }),
   getSession: (id) => apiFetch(`/api/session/${id}`),
   listSessions: (params) => apiFetch(`/api/session?${new URLSearchParams(params)}`),
-  updateState: (state) => apiFetch('/api/session/state', { method: 'POST', body: JSON.stringify({ state }) }),
 
   // Public waiting-room board (no auth) — token numbers only
   queueBoard: (department) => apiFetch(`/api/queue/board?department=${encodeURIComponent(department)}`),
@@ -71,7 +70,9 @@ export const api = {
   evaluate: (sessionId) => apiFetch('/api/triage/evaluate', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }),
 
   // Report
-  generateReport: (sessionId) => apiFetch('/api/report/generate', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }),
+  // force: regenerate even if a report exists (used when late vitals change the
+  // inputs). Patient-flow callers omit it — generation is then idempotent.
+  generateReport: (sessionId, opts = {}) => apiFetch('/api/report/generate', { method: 'POST', body: JSON.stringify({ session_id: sessionId, force: !!opts.force }) }),
   getReport: (sessionId) => apiFetch(`/api/report/${sessionId}`),
   submitFeedback: (sessionId, feedback) => apiFetch(`/api/report/${sessionId}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
   saveReportEdit: (sessionId, report_md) => apiFetch(`/api/report/${sessionId}/edit`, { method: 'POST', body: JSON.stringify({ report_md }) }),

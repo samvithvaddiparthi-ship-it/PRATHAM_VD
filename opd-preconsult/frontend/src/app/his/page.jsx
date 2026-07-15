@@ -61,6 +61,17 @@ function consultDuration(s) {
 // it calls) behind authentication.
 export default function HISPage() {
   const [authed, setAuthed] = useState(false);
+  const [ready, setReady] = useState(false);
+  // Restore a prior admin session on refresh. The token lives in sessionStorage
+  // (tab-scoped), mirroring the doctor page — without this, every reload dropped
+  // the in-memory token and forced a fresh passcode login. If the token is stale,
+  // the first API call 401s and drops back to the login screen (same as doctor).
+  useEffect(() => {
+    const saved = sessionStorage.getItem('admin_token');
+    if (saved) { setToken(saved); setAuthed(true); }
+    setReady(true);
+  }, []);
+  if (!ready) return null;   // avoid a flash of the login form before restore runs
   if (!authed) return <AdminLogin onSuccess={() => setAuthed(true)} />;
   return <HISDashboard />;
 }
@@ -78,6 +89,7 @@ function AdminLogin({ onSuccess }) {
     try {
       const { token } = await api.adminLogin(passcode, name.trim());
       setToken(token);
+      try { sessionStorage.setItem('admin_token', token); } catch {}
       onSuccess();
     } catch (err) {
       setError(err.message || 'Login failed');
@@ -230,20 +242,14 @@ function HISDashboard() {
   }
 
   async function handleUnassign(sessionId) {
-    // Use the reassign endpoint with null — but we need unassign via direct API
-    // Actually we have doctorUnassign but it needs a doctor token. For HIS, use reassign route workaround.
-    // Let's call the node backend directly for unassign
+    // Unassign = reassign with a null target (backend clears the doctor). Must go
+    // through the authed API client — the reassign route is clinician-only, so a
+    // bare fetch() without the admin token 401s.
     try {
-      const res = await fetch(`/api/doctor/reassign/${sessionId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_doctor_id: null }),
-      });
-      if (!res.ok) throw new Error('Failed');
+      await api.doctorReassign(sessionId, null);
       loadData();
-    } catch {
-      // Fallback: set via session endpoint
-      toast('Unassign requires doctor login. Use reassign instead.', 'error');
+    } catch (err) {
+      toast('Unassign failed: ' + err.message, 'error');
     }
   }
 
@@ -572,19 +578,40 @@ function HISDashboard() {
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 'calc(13px * var(--fs))' }}>
                     {s.doctor_name || <span style={{ color: 'var(--amber)', fontSize: 'calc(11px * var(--fs))' }}>Unassigned</span>}
+                    {/* Doctor the patient asked for at registration — a hint for the
+                        admin when balancing the queue, NOT an auto-assignment. */}
+                    {s.preferred_doctor_name && (
+                      <div title="Preferred doctor — chosen by the patient at registration"
+                        style={{ marginTop: 3, fontSize: 'calc(10.5px * var(--fs))', color: 'var(--text-light)', display: 'flex', alignItems: 'center', gap: 3 }}>
+                        <span style={{ color: 'var(--amber)' }} aria-hidden>★</span>
+                        Prefers {s.preferred_doctor_name}
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: '10px 12px' }} onClick={e => e.stopPropagation()}>
-                    <select
-                      value={s.assigned_doctor_id || ''}
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (val) handleReassign(s.id, val);
-                        else handleUnassign(s.id);
-                      }}
-                      style={{ border: '1px solid #ccc', borderRadius: 6, padding: '4px 6px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', maxWidth: 160 }}>
-                      <option value="">Unassigned</option>
-                      {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </select>
+                    {/* A finished consultation is locked — reassigning would reopen a
+                        closed visit. Backend enforces this too (409). */}
+                    {s.display_state === 'COMPLETED' ? (
+                      <span title="Consultation completed — assignment is locked"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                        Locked
+                      </span>
+                    ) : (
+                      <select
+                        value={s.assigned_doctor_id || ''}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (val) handleReassign(s.id, val);
+                          else handleUnassign(s.id);
+                        }}
+                        style={{ border: '1px solid #ccc', borderRadius: 6, padding: '4px 6px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', maxWidth: 160 }}>
+                        <option value="">Unassigned</option>
+                        {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    )}
                   </td>
                 </tr>
               ))}
