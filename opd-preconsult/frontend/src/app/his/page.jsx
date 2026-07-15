@@ -150,6 +150,7 @@ function HISDashboard() {
   const [filters, setFilters] = useState({ department: '', doctor_id: '', triage: '', state: '' });
   const [showFilters, setShowFilters] = useState(false);   // filter popover open?
   const [search, setSearch] = useState('');                // name / phone search
+  const [exactMatch, setExactMatch] = useState(false);     // Enter commits an EXACT name/phone match (not substring)
   const [refreshing, setRefreshing] = useState(false);     // brief spin on the header refresh
   const [refreshKey, setRefreshKey] = useState(0);         // bumped to remount the active tab
   const { toast, toastView } = useToast();
@@ -253,12 +254,16 @@ function HISDashboard() {
     }
   }
 
-  // Client-side name/phone search over the (already filtered) sessions.
+  // Client-side name/phone search over the (already filtered) sessions. Substring
+  // by default; pressing Enter narrows to an EXACT name/phone match (so "d" shows
+  // only the patient literally named "d", not everyone whose name contains a d).
   const q = search.trim().toLowerCase();
   const visibleSessions = q
-    ? sessions.filter(s =>
-        (s.patient_name || '').toLowerCase().includes(q) ||
-        (s.patient_phone || '').toLowerCase().includes(q))
+    ? sessions.filter(s => {
+        const name = (s.patient_name || '').toLowerCase();
+        const phone = (s.patient_phone || '').toLowerCase();
+        return exactMatch ? (name === q || phone === q) : (name.includes(q) || phone.includes(q));
+      })
     : sessions;
 
   return (
@@ -371,28 +376,33 @@ function HISDashboard() {
                   <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
               </span>
-              {/* ghost overlay — mirrors typed text (transparent) then grey tail */}
+              {/* ghost overlay — mirrors typed text (transparent) then grey tail.
+                  It must share the input's box model exactly (border-box + a
+                  transparent 1px border + matching line-height) or the grey tail
+                  sits a pixel off the typed text. */}
               {ghostTail && (
-                <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
-                  display: 'flex', alignItems: 'center', fontSize: 'calc(14px * var(--fs))', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+                <div aria-hidden style={{ position: 'absolute', inset: 0, boxSizing: 'border-box',
+                  border: '1px solid transparent', paddingLeft: 36, paddingRight: 12,
+                  fontSize: 'calc(14px * var(--fs))', lineHeight: '38px', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
                   <span style={{ color: 'transparent' }}>{search}</span>
                   <span style={{ color: 'var(--text-light)' }}>{ghostTail}</span>
                 </div>
               )}
               <input
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => { setSearch(e.target.value); setExactMatch(false); }}
                 onKeyDown={e => {
                   if ((e.key === 'Tab' || e.key === 'ArrowRight') && ghostTail) { e.preventDefault(); acceptGhost(); }
-                  if (e.key === 'Escape') setSearch('');
+                  if (e.key === 'Enter') { e.preventDefault(); setExactMatch(true); }   // commit an exact match
+                  if (e.key === 'Escape') { setSearch(''); setExactMatch(false); }
                 }}
                 placeholder="Search patient name or phone…"
-                style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
-                  border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', background: 'transparent',
+                style={{ width: '100%', height: 40, boxSizing: 'border-box', paddingLeft: 36, paddingRight: search ? 32 : 12,
+                  border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', lineHeight: '38px', background: 'transparent',
                   outline: 'none', position: 'relative' }}
               />
               {search && (
-                <button onClick={() => setSearch('')} title="Clear search"
+                <button onClick={() => { setSearch(''); setExactMatch(false); }} title="Clear search"
                   style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
                     background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)', display: 'flex', padding: 4 }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
@@ -854,8 +864,9 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
             </svg>
           </span>
           {ghostTail && (
-            <div aria-hidden style={{ position: 'absolute', inset: 0, paddingLeft: 36, paddingRight: 12,
-              display: 'flex', alignItems: 'center', fontSize: 'calc(14px * var(--fs))', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
+            <div aria-hidden style={{ position: 'absolute', inset: 0, boxSizing: 'border-box',
+              border: '1px solid transparent', paddingLeft: 36, paddingRight: 12,
+              fontSize: 'calc(14px * var(--fs))', lineHeight: '38px', whiteSpace: 'pre', pointerEvents: 'none', overflow: 'hidden' }}>
               <span style={{ color: 'transparent' }}>{search}</span>
               <span style={{ color: 'var(--text-light)' }}>{ghostTail}</span>
             </div>
@@ -868,8 +879,8 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
               if (e.key === 'Escape') setSearch('');
             }}
             placeholder="Search doctor name or department…"
-            style={{ width: '100%', height: 40, paddingLeft: 36, paddingRight: search ? 32 : 12,
-              border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', background: 'transparent', outline: 'none' }}
+            style={{ width: '100%', height: 40, boxSizing: 'border-box', paddingLeft: 36, paddingRight: search ? 32 : 12,
+              border: '1px solid #CBD5E0', borderRadius: 10, fontSize: 'calc(14px * var(--fs))', lineHeight: '38px', background: 'transparent', outline: 'none' }}
           />
           {search && (
             <button onClick={() => setSearch('')} title="Clear search"
@@ -881,26 +892,17 @@ function DoctorInfo({ doctors = [], depts = [], onChange = () => {} }) {
             </button>
           )}
         </div>
+        {/* Count of registered doctors — mirrors the patient count on the Patients
+            tab. Replaces the old 4-card summary strip (per mentor feedback: the
+            aggregate cards weren't useful here). */}
+        <span style={{ fontSize: 'calc(14px * var(--fs))', fontWeight: 600, color: 'var(--text)' }}>
+          {doctors.length}
+          <span style={{ color: 'var(--text-light)', fontWeight: 400 }}> doctor{doctors.length !== 1 ? 's' : ''} registered</span>
+        </span>
         <button className="btn btn-primary" onClick={() => setShowAdd(true)}
           style={{ marginLeft: 'auto', height: 40, width: 'auto', padding: '0 18px', fontSize: 'calc(14px * var(--fs))', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           + Add Doctor
         </button>
-      </div>
-
-      {/* Summary strip */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        {[
-          ['Doctors', doctors.length, 'var(--primary)'],
-          ['Patients assigned', totals.total, 'var(--text)'],
-          ['Completed', totals.completed, 'var(--green)'],
-          ['Active', totals.active, 'var(--secondary)'],
-        ].map(([label, val, color]) => (
-          <div key={label} style={{ background: '#fff', borderRadius: 12, padding: '12px 18px',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.06)', minWidth: 120 }}>
-            <div style={{ fontSize: 'calc(22px * var(--fs))', fontWeight: 700, color }}>{val}</div>
-            <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>{label}</div>
-          </div>
-        ))}
       </div>
 
       <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 230px)', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -2383,8 +2385,10 @@ function AnalyticsDashboard() {
         <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 12 }}>Intake stages · pre-consult funnel</h3>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           {(() => {
-            const RAW_STATE_LABEL = { INIT: 'Scanned', CONSENTED: 'Consented', REGISTERED: 'Registered', INTERVIEW: 'In Interview', VITALS: 'Vitals', COMPLETE: 'Ready' };
-            return (data.by_state || []).map(s => (
+            const RAW_STATE_LABEL = { CONSENTED: 'Consented', REGISTERED: 'Registered', INTERVIEW: 'In Interview', VITALS: 'Vitals', COMPLETE: 'Ready' };
+            // Hide INIT (scanned but abandoned before registering) — it's noise in
+            // the intake funnel, not a stage anyone acts on (mentor feedback).
+            return (data.by_state || []).filter(s => s.state !== 'INIT').map(s => (
               <div key={s.state} style={{ background: '#F8FAFC', borderRadius: 8, padding: '8px 16px', textAlign: 'center' }}>
                 <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{RAW_STATE_LABEL[s.state] || s.state}</p>
                 <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{s.count}</p>

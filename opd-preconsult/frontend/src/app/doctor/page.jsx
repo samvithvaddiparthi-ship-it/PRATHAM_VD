@@ -428,7 +428,7 @@ function DoctorDashboard({ doctor }) {
       // tree stays expanded, so "← Back to list" still shows the visit history).
       if (isMobile) {
         setExpanded(e => ({ ...e, [p.key]: true }));
-        if (p.latest) { markSeen(p.latest.id); selectSession(p.latest); }
+        if (p.latest) { markSeen(p.latest.id); selectSession({ ...p.latest, assigned_doctor_id: doctor.id }); }
       } else {
         setExpanded(e => ({ ...e, [p.key]: !e[p.key] }));
       }
@@ -456,7 +456,11 @@ function DoctorDashboard({ doctor }) {
       setActiveLock(p.key);
       setExpanded(e => ({ ...e, [p.key]: true }));
       markSeen(p.latest.id);
-      selectSession(p.latest);
+      // The server just assigned this visit to me (doctorOpen). Reflect that on the
+      // selected object right away — otherwise `selected.assigned_doctor_id` stays
+      // null (the pre-open cache) and the Reassign button stays hidden until a
+      // fresh reselect.
+      selectSession({ ...p.latest, assigned_doctor_id: doctor.id });
       setTab('consulting');   // patient is now in-progress → move to the Consulting tab
       loadQueue();
     } else if (res.locked) {
