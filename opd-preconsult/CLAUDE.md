@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI-powered OPD pre-consultation system for Indian hospitals. Patients complete intake (QR scan or WhatsApp) during their wait; doctors receive AI-enriched summaries. Currently a POC — not yet for clinical use.
 
+## Related repos & production status (updated 2026-07-13)
+
+**This folder is the upstream `crtx-sg/pratham` clone — a dev/experimentation sandbox.** Dhyan's **production** repo is a *separate sibling checkout* `../../pratham-opd-clean` = `github.com/Dhyan-rao-10/Pratham-OPD` (public). Production work goes there and is pushed from there.
+
+- **The two repos have DIVERGED — do not assume parity or blanket-mirror.** Different env-var names (clean: `HOSPITAL_ID`/`HOSPITAL_NAME`/`QR_SIGNING_SECRET`; here: `DEMO_HOSPITAL_ID`/`DEMO_HOSPITAL_NAME`/`DEMO_QR_SECRET`), and each has files the other lacks. Port features as targeted changes, never a file copy.
+- **Production security hardening was done in the CLEAN repo (not here) on 2026-07-13 and pushed:** bcrypt doctor-PIN hashing with lazy SHA-256→bcrypt migration, Redis-backed per-phone login lockout (`LOGIN_MAX_ATTEMPTS`/`LOGIN_LOCKOUT_SECONDS`), nginx rate-limit zones (`login`/`ai`/`otp`/`uploads`) + `real_ip` in both `services/gateway/nginx.conf` and `deploy/nginx.conf`, added missing `/api/audio,transcribe,tts` prod routes, GitHub Actions CI, and node authz/PIN unit tests.
+- **Outstanding production TODO is kept OUTSIDE git** at `Documents/Internship-2026/PRODUCTION-TODO-pratham-opd.md`. Parked items: DPDP retention worker, per-user admin accounts (currently one shared `ADMIN_PASSCODE`), error tracking (Sentry vs self-hosted GlitchTip — needs a DSN), LICENSE/SECURITY.md (asking mentor), Postgres TLS (only when DB moves off-box).
+- **Bhashini STT** needs `BHASHINI_INFERENCE_API_KEY` (required) + `BHASHINI_UDYAT_KEY`; the working values are in this folder's `.env` (lines 53–54, from mentor Ebith — rotate before go-live). Now documented in `.env.example`. Health check: `GET /api/transcribe/health` → `{"bhashini": true}`.
+
 ## Production intent (apply this lens)
 
 This is a POC **but it is intended for real deployment in Indian hospitals.** Make production-grade decisions by default; explicitly flag anything that is demo-only (e.g., the testing phone hard-cap). Hold work to these standards:
