@@ -119,9 +119,20 @@ async function seedQuestionnaires() {
     }
     console.log(`[seed] Base questions seeded for: ${deptCodes.join(', ')}`);
 
-    // 2) Department-specific DAG questions from seed files — ONLY for departments
-    //    that actually exist, so a blank install never resurrects demo content.
-    const seedFiles = { CARD: 'cardiology.json', GEN: 'general.json' };
+    // 2) Department-specific DAG questions from seed files — DEMO CONTENT, off by
+    //    default. Opt in with SEED_DEMO_QUESTIONS=true (local/testing only).
+    //
+    //    Off by default because these are demo questionnaires, and a real hospital
+    //    would plausibly code its cardiology department `CARD` — which is all it
+    //    takes for demo questions to be injected into a live department's intake.
+    //    The `deptCodes` guard below is not enough on its own for that reason.
+    //    Gating on env rather than diverging the code keeps this file byte-identical
+    //    between here and the generated production repo: a difference that lives in
+    //    configuration cannot drift, one that lives in a diff eventually will.
+    //    Same intent as the demo doctors/departments split in migrations 005/006.
+    const seedFiles = process.env.SEED_DEMO_QUESTIONS === 'true'
+      ? { CARD: 'cardiology.json', GEN: 'general.json' }
+      : {};
     for (const [code, file] of Object.entries(seedFiles)) {
       if (!deptCodes.includes(code)) continue;
       const filePath = path.join(__dirname, 'seed', file);

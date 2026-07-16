@@ -50,6 +50,16 @@ PIN-1234 doctors to every fresh hospital deployment.
 
 Every other migration is byte-identical across both repos. Keep it that way.
 
+**Demo questionnaires are handled by config, not by divergence.** The demo cardiology/
+general DAG seeds (`services/node-backend/src/seed/*.json`) are gated on
+`SEED_DEMO_QUESTIONS=true` (set in this folder's `.env`, never in production). The files
+ship to both repos and `index.js` is byte-identical — production simply never sets the
+flag, so `seedFiles` resolves to `{}`. **Do not "fix" this by hardcoding `{}` in one repo
+and the map in the other**: that recreates exactly the kind of code-level drift the sync
+model exists to eliminate. The `deptCodes` guard is not sufficient on its own — a real
+hospital would plausibly code its cardiology department `CARD`, and demo questions would
+be injected into a live department's intake.
+
 ### Outstanding production TODO
 
 Kept OUTSIDE git at `Documents/Internship-2026/PRODUCTION-TODO-pratham-opd.md`. Parked:
