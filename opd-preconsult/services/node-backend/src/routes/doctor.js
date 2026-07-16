@@ -1,29 +1,22 @@
 const { Router } = require('express');
-const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
 const pool = require('../models/db');
 const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
 const { isLocked, recordFailure, clearFailures, MAX_ATTEMPTS } = require('../utils/loginLimiter');
+const { hashPin, verifyPin } = require('../utils/pinHash');
 
 const router = Router();
 
 const IS_PROD = process.env.NODE_ENV === 'production';
-const BCRYPT_ROUNDS = 10;
-// SHA-256 of the seeded demo PIN "1234" — used to detect doctors still on the
-// insecure default (§8b). We never hardcode the PIN itself, only its digest.
-const DEMO_PIN_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
+// The seeded demo PIN (§8b). Stored hashes are bcrypt — salted, so there is no
+// fixed digest to compare against; detecting this PIN requires the plaintext.
+// It is a published default, not a secret (see README seed doctors).
+const DEMO_PIN = '1234';
 
 // Every PHI route below goes through authMiddleware + requireRole rather than an
 // inline token check, so a missing gate is visible at the route definition
 // (§5a — `all-sessions` and `reassign` previously had no check at all).
 const doctorOnly = [authMiddleware, requireRole('doctor')];
 const clinicianOnly = [authMiddleware, requireRole('doctor', 'admin')];
-
-// Legacy unsalted SHA-256 (kept only to verify pre-migration PINs once, then
-// rehash with bcrypt — see §8b lazy migration in the login handler).
-function hashPin(pin) {
-  return crypto.createHash('sha256').update(pin).digest('hex');
-}
 
 // Doctor PIN login
 router.post('/login', async (req, res) => {
@@ -50,30 +43,27 @@ router.post('/login', async (req, res) => {
 
     const doctor = result.rows[0];
 
-    // §8b — verify against bcrypt if migrated, else the legacy SHA-256 hash.
-    // On a successful legacy verify, lazily rehash the PIN with bcrypt so the
-    // weak hash is never used again.
-    let ok = false;
-    if (doctor.pin_hash_bcrypt) {
-      ok = await bcrypt.compare(String(pin), doctor.pin_hash_bcrypt);
-    } else if (doctor.pin_hash) {
-      ok = (doctor.pin_hash === hashPin(String(pin)));
-      if (ok) {
-        try {
-          const bh = await bcrypt.hash(String(pin), BCRYPT_ROUNDS);
-          await pool.query('UPDATE doctors SET pin_hash_bcrypt = $1 WHERE id = $2', [bh, doctor.id]);
-        } catch { /* non-fatal — login still succeeds, migrates next time */ }
-      }
-    }
+    // §8b — verify against the stored hash. verifyPin handles both bcrypt and
+    // the legacy unsalted SHA-256; a legacy hash that matches sets needsRehash,
+    // and we upgrade it in place so the weak hash is never used again.
+    const { ok, needsRehash } = await verifyPin(pin, doctor.pin_hash);
 
     if (!ok) {
       await recordFailure('doctor', String(phone));
       return res.status(401).json({ error: 'Invalid PIN' });
     }
 
+    if (needsRehash) {
+      try {
+        await pool.query('UPDATE doctors SET pin_hash = $1 WHERE id = $2', [await hashPin(pin), doctor.id]);
+      } catch { /* non-fatal — login still succeeds, migrates next time */ }
+    }
+
     // §8b — in production, refuse to admit a doctor still on the demo PIN even if
-    // the row survived the startup guard (fail closed, like JWT_SECRET).
-    if (IS_PROD && doctor.pin_hash === DEMO_PIN_HASH) {
+    // the row survived the startup guard (fail closed, like JWT_SECRET). Compare
+    // the plaintext we just verified: the stored bcrypt hash is salted, so there
+    // is nothing to match it against directly.
+    if (IS_PROD && String(pin) === DEMO_PIN) {
       return res.status(403).json({ error: 'This account uses the default demo PIN. Ask an admin to reset it.' });
     }
 
@@ -115,14 +105,13 @@ router.post('/', authMiddleware, requireRole('admin'), async (req, res) => {
       return res.status(400).json({ error: 'Refusing to set the well-known demo PIN (1234) in production.' });
     }
 
-    // §8b — new PINs are stored as bcrypt only. pin_hash (NOT NULL legacy column)
-    // is set to '' so there is no reversible SHA-256 hash on disk for new doctors.
-    const bh = await bcrypt.hash(String(pin), BCRYPT_ROUNDS);
+    // §8b — new PINs are stored as bcrypt in pin_hash. There is no reversible
+    // SHA-256 hash on disk for new doctors.
     const result = await pool.query(
-      `INSERT INTO doctors (name, department, phone, pin_hash, pin_hash_bcrypt, registration_no)
-       VALUES ($1, $2, $3, '', $4, $5)
+      `INSERT INTO doctors (name, department, phone, pin_hash, registration_no)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, name, department, phone, registration_no, is_active, created_at`,
-      [name, department.toUpperCase(), phone, bh, registration_no || null]
+      [name, department.toUpperCase(), phone, await hashPin(pin), registration_no || null]
     );
 
     res.json(result.rows[0]);
@@ -166,11 +155,9 @@ router.patch('/:id', authMiddleware, requireRole('admin'), async (req, res) => {
       if (IS_PROD && pin === '1234') {
         return res.status(400).json({ error: 'Refusing to set the well-known demo PIN (1234) in production.' });
       }
-      // §8b — reset writes bcrypt and clears the legacy SHA-256 hash so the
-      // account is no longer flagged as demo-PIN and has no reversible hash.
-      const bh = await bcrypt.hash(String(pin), BCRYPT_ROUNDS);
-      params.push(bh); sets.push(`pin_hash_bcrypt = $${params.length}`);
-      params.push(''); sets.push(`pin_hash = $${params.length}`);
+      // §8b — reset overwrites pin_hash with bcrypt, so the account is no longer
+      // flagged as demo-PIN and has no reversible hash left on disk.
+      params.push(await hashPin(pin)); sets.push(`pin_hash = $${params.length}`);
     }
 
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
@@ -738,18 +725,14 @@ router.post('/change-pin', ...doctorOnly, async (req, res) => {
     if (new_pin.length < 4 || new_pin.length > 6 || !/^\d+$/.test(new_pin)) return res.status(400).json({ error: 'PIN must be 4-6 digits' });
     if (IS_PROD && new_pin === '1234') return res.status(400).json({ error: 'Refusing to set the well-known demo PIN (1234) in production.' });
 
-    const doc = await pool.query('SELECT pin_hash, pin_hash_bcrypt FROM doctors WHERE id = $1', [decoded.doctor_id]);
+    const doc = await pool.query('SELECT pin_hash FROM doctors WHERE id = $1', [decoded.doctor_id]);
     if (!doc.rows.length) return res.status(401).json({ error: 'Invalid current PIN' });
-    const row = doc.rows[0];
-    // §8b — verify current PIN against bcrypt if migrated, else legacy SHA-256.
-    let ok = false;
-    if (row.pin_hash_bcrypt) ok = await bcrypt.compare(String(old_pin), row.pin_hash_bcrypt);
-    else if (row.pin_hash) ok = (row.pin_hash === hashPin(String(old_pin)));
-    if (!ok) return res.status(401).json({ error: 'Invalid current PIN' });
+    // §8b — verifyPin handles both bcrypt and the legacy SHA-256.
+    const okOld = (await verifyPin(old_pin, doc.rows[0].pin_hash)).ok;
+    if (!okOld) return res.status(401).json({ error: 'Invalid current PIN' });
 
-    // Store the new PIN as bcrypt only; clear the legacy hash.
-    const bh = await bcrypt.hash(String(new_pin), BCRYPT_ROUNDS);
-    await pool.query('UPDATE doctors SET pin_hash_bcrypt = $1, pin_hash = $2 WHERE id = $3', [bh, '', decoded.doctor_id]);
+    // Store the new PIN as bcrypt, overwriting whatever was there.
+    await pool.query('UPDATE doctors SET pin_hash = $1 WHERE id = $2', [await hashPin(new_pin), decoded.doctor_id]);
     res.json({ updated: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

@@ -1,0 +1,71 @@
+# .cleanignore — what does NOT ship to the production repo (Dhyan-rao-10/Pratham-OPD).
+#
+# Gitignore syntax, matched against paths RELATIVE TO THIS FILE (opd-preconsult/),
+# which are also the paths in the production repo (it has no opd-preconsult/ prefix).
+#
+# Used by scripts/sync-clean.py. Two things to understand:
+#
+#  1. The sync reads files from git (HEAD), never from your working tree. Untracked
+#     files therefore CANNOT ship — .env, node_modules/, eval/, .next/ and friends are
+#     already invisible and need no rule here. Rules below are for files that ARE
+#     committed but must not be published.
+#
+#  2. Excluding a path also PROTECTS it in the production repo: the sync will not copy
+#     it, and will not delete it if it already exists there. That is how the two seed
+#     migrations below keep their production-specific contents.
+#
+# Do NOT add patterns matching "claude" or "anthropic" generally — the product legitimately
+# calls the Anthropic API (llm_client.py, requirements.txt). Only CLAUDE.md is the tell,
+# and the sync separately asserts that no shipped file even mentions it.
+
+# ---------------------------------------------------------------------------
+# AI-assisted-development artifacts
+# ---------------------------------------------------------------------------
+CLAUDE.md
+.claude/
+
+# ---------------------------------------------------------------------------
+# Internal process / mentor-facing working docs
+# ---------------------------------------------------------------------------
+# Names collaborators and internal rules; not for the shared repo.
+docs/changes-for-samvith.md
+docs/mentor-questions.md
+docs/bhasini-access-request.md
+# Candid list of open vulnerabilities incl. an unfixed High. Real value for mentors, but
+# publish it deliberately after a rewrite — not silently via a mirror.
+docs/SECURITY_GAP_ANALYSIS.md
+# Internal pilot tracking.
+PILOT-CHECKLIST.md
+
+# ---------------------------------------------------------------------------
+# Prototypes / experiments
+# ---------------------------------------------------------------------------
+# Never containerised (see .dockerignore), each carries its own .env, and none is
+# imported by the app.
+bhashini-lab/
+ocr-lab/
+stt-lab/
+
+# ---------------------------------------------------------------------------
+# Demo seed data — THE ONLY DELIBERATE test/prod difference. Read before touching.
+# ---------------------------------------------------------------------------
+# Here these seed 3 demo doctors (PIN 1234) + CARD/GEN so the app is testable.
+# In production they seed a clean slate, so a fresh hospital deployment does NOT come up
+# with demo logins. Both files are already applied in every existing database
+# (schema_migrations is keyed on filename, so they never re-run) — they are frozen
+# history, and excluding them is what keeps each side correct.
+#
+# Do NOT "fix" this divergence by removing these lines: that ships PIN-1234 doctors to
+# every fresh hospital deployment. Every OTHER migration is byte-identical across repos.
+db/migrations/005_doctors.sql
+db/migrations/006_departments.sql
+
+# ---------------------------------------------------------------------------
+# The sync tooling itself
+# ---------------------------------------------------------------------------
+# This is how the production repo is BUILT. Production does not build anything, and
+# these files necessarily discuss CLAUDE.md/exclusions — which the sync's own assertion
+# would (correctly) refuse to ship.
+.cleanignore
+scripts/sync-clean.py
+SYNC.md

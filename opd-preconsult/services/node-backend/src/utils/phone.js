@@ -13,8 +13,8 @@ function normalizeIndianPhone(raw) {
   return { national: d, e164: valid ? '+91' + d : '', valid };
 }
 
-// Mask a phone number for logs (PHI must never appear in plaintext logs — see
-// CLAUDE.md). Keeps only the last 2 digits: 9876543210 -> ***10.
+// Mask a phone number for logs (PHI must never appear in plaintext logs).
+// Keeps only the last 2 digits: 9876543210 -> ***10.
 function maskPhone(raw) {
   const d = String(raw == null ? '' : raw).replace(/\D/g, '');
   return d.length < 2 ? '***' : '***' + d.slice(-2);

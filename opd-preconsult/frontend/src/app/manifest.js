@@ -2,7 +2,7 @@
 // into every page automatically. See app/layout.jsx for the iOS-side meta.
 //
 // This is a MANIFEST ONLY. There is deliberately no service worker, and adding
-// one is not a small change — read the note in CLAUDE.md first. Without a service
+// one is not a small change — read the engineering notes first. Without a service
 // worker nothing is intercepted or cached, so this file cannot affect runtime
 // behaviour: it only tells the OS how to present the app if someone adds it to
 // their home screen.

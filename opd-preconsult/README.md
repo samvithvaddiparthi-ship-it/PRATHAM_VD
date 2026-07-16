@@ -2,7 +2,7 @@
 
 AI-powered OPD system for Indian hospitals. Collects patient history, documents, and vitals DURING the wait, delivers structured reports to doctors, enables prescription writing with drug interaction checks, ambient consultation recording, automated follow-ups, and analytics.
 
-> Original base repository: [github.com/crtx-sg/pratham](https://github.com/crtx-sg/pratham). This is the actively-developed continuation. See [CLAUDE.md](CLAUDE.md) for the detailed engineering/production-intent notes and the mandatory DB-migration rule.
+> Original base repository: [github.com/crtx-sg/pratham](https://github.com/crtx-sg/pratham). This is the actively-developed continuation. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed engineering notes, and [deploy/OPERATIONS.md](deploy/OPERATIONS.md) for the runbook.
 
 ## Why
 
@@ -428,7 +428,7 @@ All config lives in `.env` (gitignored; template in `.env.example`). Run `node s
 - **Phone OTP.** Patient entry gates on an SMS OTP (Twilio, dry-run on-screen code without keys) — 6-digit, hashed, expiring, attempt-capped, rate-limited.
 - **Prescription QR** is HMAC-signed with `DEMO_QR_SECRET` and verified at `/api/prescription/verify-qr`.
 - **Encryption & audit (DPDP).** Uploaded PHI encrypted at rest in MinIO (SSE-S3) when `MINIO_KMS_SECRET_KEY` is set; viewing a patient report logs a `patient_viewed` audit row. Postgres relies on host/volume disk encryption in prod.
-- **Still open (release blockers):** single shared admin passcode (no per-user SSO), no per-hospital tenancy, patient-data retention/deletion (B2) TODO. See [CLAUDE.md](CLAUDE.md) for the full status.
+- **Still open (release blockers):** single shared admin passcode (no per-user SSO), no per-hospital tenancy, patient-data retention/deletion (B2) TODO.
 
 ## Testing Each Feature
 

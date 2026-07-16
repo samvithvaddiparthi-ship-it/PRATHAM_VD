@@ -1,0 +1,58 @@
+name: CI
+
+# Runs on every push/PR to main. Purpose: stop a broken build reaching the
+# hospital deploy — catches failing unit tests, JS syntax errors, and invalid
+# nginx configs (the class of bug that let the prod proxy ship with no rate
+# limiting and missing routes). Fast + dependency-light so it stays green.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  node-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/node-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Syntax-check every source file
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Unit tests (authz + PIN hashing)
+        run: npm test
+
+  python-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/python-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Unit tests (drug interactions / data / LLM JSON)
+        run: python -m pytest tests -q
+
+  nginx-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nginx
+        run: sudo apt-get update && sudo apt-get install -y nginx
+      - name: Validate gateway + production nginx configs
+        run: |
+          set -e
+          for f in services/gateway/nginx.conf deploy/nginx.conf; do
+            echo "== nginx -t: $f =="
+            { echo 'events{}'; echo 'http{'; cat "$f"; echo '}'; } > /tmp/wrapped.conf
+            sudo nginx -t -c /tmp/wrapped.conf
+          done

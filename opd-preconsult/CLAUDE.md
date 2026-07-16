@@ -6,13 +6,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI-powered OPD pre-consultation system for Indian hospitals. Patients complete intake (QR scan or WhatsApp) during their wait; doctors receive AI-enriched summaries. Currently a POC — not yet for clinical use.
 
-## Related repos & production status (updated 2026-07-13)
+## Related repos & the sync model (updated 2026-07-16 — READ THIS FIRST)
 
-**This folder is the upstream `crtx-sg/pratham` clone — a dev/experimentation sandbox.** Dhyan's **production** repo is a *separate sibling checkout* `../../pratham-opd-clean` = `github.com/Dhyan-rao-10/Pratham-OPD` (public). Production work goes there and is pushed from there.
+**This repo is CANONICAL. Everything is authored here.** The production repo
+`../../pratham-opd-clean` = `github.com/Dhyan-rao-10/Pratham-OPD` (public, deploys to
+opd-app.coherentix.com) is a **BUILD ARTIFACT generated from this one**.
 
-- **The two repos have DIVERGED — do not assume parity or blanket-mirror.** Different env-var names (clean: `HOSPITAL_ID`/`HOSPITAL_NAME`/`QR_SIGNING_SECRET`; here: `DEMO_HOSPITAL_ID`/`DEMO_HOSPITAL_NAME`/`DEMO_QR_SECRET`), and each has files the other lacks. Port features as targeted changes, never a file copy.
-- **Production security hardening was done in the CLEAN repo (not here) on 2026-07-13 and pushed:** bcrypt doctor-PIN hashing with lazy SHA-256→bcrypt migration, Redis-backed per-phone login lockout (`LOGIN_MAX_ATTEMPTS`/`LOGIN_LOCKOUT_SECONDS`), nginx rate-limit zones (`login`/`ai`/`otp`/`uploads`) + `real_ip` in both `services/gateway/nginx.conf` and `deploy/nginx.conf`, added missing `/api/audio,transcribe,tts` prod routes, GitHub Actions CI, and node authz/PIN unit tests.
-- **Outstanding production TODO is kept OUTSIDE git** at `Documents/Internship-2026/PRODUCTION-TODO-pratham-opd.md`. Parked items: DPDP retention worker, per-user admin accounts (currently one shared `ADMIN_PASSCODE`), error tracking (Sentry vs self-hosted GlitchTip — needs a DSN), LICENSE/SECURITY.md (asking mentor), Postgres TLS (only when DB moves off-box).
+### The rule that replaced the old ledger
+
+- **NEVER author, edit, or hand-fix anything in `pratham-opd-clean`.** It is regenerated
+  from here by `scripts/sync-clean.sh` and force-pushed. Any change made there directly
+  will be silently destroyed on the next sync — and, worse, it recreates the drift that
+  caused the July 2026 near-outage.
+- **Why this replaced the old "port targeted changes + ledger" process:** both repos were
+  being authored in, so neither was the source of truth. "Sync" became a manual merge
+  needing judgment on every conflict, and things fell through. A derived artifact cannot
+  drift. If you want to know whether clean is up to date: re-run the sync and check the
+  diff is empty.
+- The old `SYNC-LEDGER-pratham-to-clean.md` is **history now, not process.** Do not add
+  rows to it. It documents how the two repos diverged and what it cost.
+
+### What is excluded from the generated repo
+
+Exclusions live in `.cleanignore` (gitignore syntax) at the repo root — that file is the
+single source of truth, not this list. Broad strokes: `CLAUDE.md`, the `*-lab/`
+prototypes, mentor/process docs, and the demo-seed migrations (see below).
+
+**Never pattern-match on "claude"/"anthropic" to decide what ships.** The product
+legitimately calls the Anthropic API (`llm_client.py`, `requirements.txt`, `render.yaml`).
+Only `CLAUDE.md`-as-a-document is the tell. No shipped file may contain the string
+`CLAUDE.md` — the sync asserts this and refuses to run otherwise. Fix such a reference at
+source; do not scrub it in transit.
+
+### Demo seed data — the one legitimate test/prod difference
+
+`db/migrations/005_doctors.sql` and `006_departments.sql` are **excluded from the sync**
+and are the *only* migrations that differ between the repos. Here they seed 3 demo doctors
+(PIN 1234) + CARD/GEN so the app is testable; in production they seed a clean slate so a
+new hospital does not deploy with demo logins. Both are already applied in every existing
+DB (`schema_migrations` is keyed on filename), so they will never re-run and are
+effectively frozen. **Do not "fix" this divergence by mirroring them** — that would ship
+PIN-1234 doctors to every fresh hospital deployment.
+
+Every other migration is byte-identical across both repos. Keep it that way.
+
+### Outstanding production TODO
+
+Kept OUTSIDE git at `Documents/Internship-2026/PRODUCTION-TODO-pratham-opd.md`. Parked:
+DPDP retention worker, per-user admin accounts (currently one shared `ADMIN_PASSCODE`),
+error tracking (Sentry vs self-hosted GlitchTip — needs a DSN), LICENSE/SECURITY.md
+(asking mentor), Postgres TLS (only when DB moves off-box).
 - **Bhashini STT** needs `BHASHINI_INFERENCE_API_KEY` (required) + `BHASHINI_UDYAT_KEY`; the working values are in this folder's `.env` (lines 53–54, from mentor Ebith — rotate before go-live). Now documented in `.env.example`. Health check: `GET /api/transcribe/health` → `{"bhashini": true}`.
 
 ## Production intent (apply this lens)
@@ -29,13 +72,44 @@ This is a POC **but it is intended for real deployment in Indian hospitals.** Ma
 
 ---
 
+## ⚠️ DOCTOR PIN STORAGE — the bug that nearly locked out production
+
+**PINs are bcrypt, stored IN PLACE in `doctors.pin_hash`. There is no
+`pin_hash_bcrypt` column. Never add one.**
+
+All PIN work goes through `services/node-backend/src/utils/pinHash.js`
+(`hashPin` / `verifyPin`). `verifyPin` returns `{ ok, needsRehash }` and transparently
+accepts the legacy unsalted SHA-256 (detected by shape: 64 hex chars), flagging
+`needsRehash` so the login handler upgrades it to bcrypt in place. Never call `bcrypt.*`
+or `crypto.createHash` for a PIN directly from a route.
+
+**What went wrong (2026-07-16):** an earlier design kept SHA-256 in `pin_hash` and put
+bcrypt in a separate `pin_hash_bcrypt` column defaulted to `''`. Against production's real
+data — where bcrypt already sat in `pin_hash` — that column read falsy, login fell to the
+legacy branch, SHA-256-compared a bcrypt string, never matched, and **every doctor would
+have been locked out and then rate-limited.**
+
+**The part that matters for testing:** that bug was *invisible on a fresh local DB*. A
+fresh DB seeds SHA-256 PINs, so the legacy branch matched and login worked perfectly.
+Only a database whose `pin_hash` already holds bcrypt reproduces it. **"It worked locally"
+was true and worthless.** Any change touching PIN storage, or any migration adding a
+column that code branches on, must be tested against a DB seeded to look like production —
+see `scripts/verify-clean.sh`.
+
+**Corollary:** because bcrypt is salted, there is no fixed digest for the demo PIN. Both
+demo-PIN guards (login in `routes/doctor.js`, startup force-expire in `index.js`) must use
+`verifyPin('1234', ...)` or compare the plaintext just verified. A `WHERE pin_hash = $digest`
+check silently matches nobody and fails open.
+
+---
+
 ## ⚠️ DATABASE MIGRATION RULE — READ THIS BEFORE ANY DB CHANGE
 
 This is the most common source of bugs when teammates sync. Follow this exactly every time.
 
 ### When YOU add a migration (adding a new feature that changes the DB):
 
-1. Create a new file: `db/migrations/0NN_description.sql` (next number in sequence — currently at 027)
+1. Create a new file: `db/migrations/0NN_description.sql` (next number in sequence — currently at 029; the next new migration is 030)
 2. Every statement MUST be idempotent:
    - Tables: `CREATE TABLE IF NOT EXISTS`
    - Columns: wrap in `DO $$ BEGIN ALTER TABLE ... ADD COLUMN ...; EXCEPTION WHEN duplicate_column THEN NULL; END $$`

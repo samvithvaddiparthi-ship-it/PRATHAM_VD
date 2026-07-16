@@ -73,6 +73,16 @@ function requireRole(...roles) {
 // exactly one session_id at issuance and may only touch that session's data. Any
 // other combination (patient reading someone else's id, or a token with no
 // session_id) is 403. Default param name is 'id'.
+//
+// Signing a token is not the same as being allowed to read the session named in
+// the URL: POST /api/session/scan mints a token for anyone, so without this gate
+// any valid token would read every patient's record.
+//
+// NOTE: doctors are deliberately NOT scoped to their own department here. The
+// queue intentionally surfaces a patient's visits from other departments (see
+// routes/doctor.js /queue) and reassignment moves patients across departments,
+// so a department filter would break history. Narrowing clinical access further
+// is a policy decision, not a code one.
 function requireSessionOwnership(paramName = 'id') {
   return (req, res, next) => {
     const sd = req.session_data || {};

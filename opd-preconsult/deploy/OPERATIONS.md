@@ -71,7 +71,12 @@ node scripts/smoke.js https://$DOMAIN    # scan → OTP → register → triage;
 ## Health of the demo secrets
 - `node scripts/gen-secrets.js` regenerates all secrets. Rotating `JWT_SECRET` logs everyone out.
 - node-backend refuses to boot in production with a weak `JWT_SECRET` or `DEMO_QR_SECRET`.
-- On startup, node warns if any active doctor still uses the default PIN `1234` — reset via HIS or `POST /api/doctor/change-pin`.
+- On startup, node checks whether any active doctor still uses the default PIN `1234`.
+  In **development** it only warns. In **production it force-expires those accounts**
+  (`is_active = false`) so the weak PIN cannot be used.
+  **If a doctor suddenly cannot log in after a deploy and sees "Doctor not found", this is
+  why** — re-activate them in HIS and set a fresh PIN (or `POST /api/doctor/change-pin`).
+  Detection runs through `verifyPin`, so it catches both bcrypt and legacy SHA-256 hashes.
 
 ## Encryption at rest (B1)
 - **Uploaded PHI (MinIO):** set `MINIO_KMS_SECRET_KEY` in `.env` (format `key-name:base64-of-32-bytes`;

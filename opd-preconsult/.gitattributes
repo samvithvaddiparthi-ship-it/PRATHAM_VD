@@ -1,0 +1,13 @@
+# Ensure shell scripts ALWAYS use LF line endings, even when checked out on
+# Windows. Without this, Git's autocrlf can rewrite these to CRLF, which breaks
+# the `#!/bin/bash` shebang inside Linux containers (Postgres init, etc.) and
+# causes "exited (126)" / "cannot execute" errors.
+*.sh text eol=lf
+
+# SQL migrations and the Dockerfile are also run inside Linux — keep them LF.
+*.sql text eol=lf
+Dockerfile text eol=lf
+docker-entrypoint*.sh text eol=lf
+
+# Let Git handle normal text normalization for everything else.
+* text=auto

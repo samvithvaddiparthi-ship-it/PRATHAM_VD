@@ -1,4 +1,4 @@
--- 029: Per-department "report focus" — admin-editable, specialty-specific emphasis
+-- 028: Per-department "report focus" — admin-editable, specialty-specific emphasis
 -- appended to the report LLM prompt at generation time. Structure (the four section
 -- headings + the verbatim Python-rendered sections) stays fixed; this only steers
 -- prioritisation and wording within the interpretive sections. NULL/blank = use the
