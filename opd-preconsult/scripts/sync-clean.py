@@ -94,10 +94,15 @@ def main():
         fail(f"{dest} has uncommitted changes. Commit or discard them first —\n"
              f"             this sync overwrites and deletes files there.")
 
-    # Warn (do not block) if this repo is dirty: uncommitted work will NOT ship, and
-    # that surprise is worth a sentence.
-    if git_text(src_repo, "status", "--porcelain", "--", "opd-preconsult").strip():
-        print(f"{YELLOW}note{RESET}: this repo has uncommitted changes under opd-preconsult/.")
+    # Warn (do not block) if TRACKED files are modified: that work will not ship, and
+    # the surprise is worth a sentence.
+    #
+    # --untracked-files=no on purpose. Untracked files can never ship (the sync reads
+    # from git), so warning about them is noise that trains you to ignore the warning
+    # — and this repo permanently carries two of them (eval/, Pratham-OPD/), so the
+    # note would fire on every single run and mean nothing.
+    if git_text(src_repo, "status", "--porcelain", "--untracked-files=no", "--", "opd-preconsult").strip():
+        print(f"{YELLOW}note{RESET}: this repo has uncommitted changes to tracked files under opd-preconsult/.")
         print(f"      The sync reads from HEAD, so those changes will NOT ship. Commit first")
         print(f"      if you meant to include them.\n")
 
