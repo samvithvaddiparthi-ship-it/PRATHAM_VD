@@ -7,6 +7,22 @@ import { normalizeIndianPhone } from '../../../lib/phone';
 import ProgressBar from '../../../components/ProgressBar';
 import ListenButton from '../../../components/ListenButton';
 
+// Hard input cap for age — mirrors the node-backend guard in routes/session.js and
+// the VitalsForm pattern: a value above the cap simply won't type, rather than being
+// rejected on submit. 120 is a sanity bound (the oldest verified human was 122), not
+// a clinical one — deliberately wide so no real patient is turned away.
+//
+// Rejects the keystroke rather than clamping, exactly like VitalsForm: clamping 999
+// down to 120 would silently store an age nobody entered.
+export const MAX_AGE = 120;
+
+// Returns the accepted value, or null if this keystroke should be ignored.
+function capAge(raw) {
+  if (raw === '') return '';
+  if (!/^\d+$/.test(raw)) return null;                    // digits only — no -, ., e, +
+  return parseInt(raw, 10) > MAX_AGE ? null : raw;
+}
+
 // Friendly per-department icon (matched by a substring of the code); admin-set
 // icon from the DB wins, else a code guess, else the generic hospital symbol.
 const DEPT_ICONS = [
@@ -600,8 +616,9 @@ export default function Register() {
             </div>
             <div>
               <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('age', lang)} *</label>
-              <input className="input" type="number" value={form.patient_age}
-                onChange={e => setForm({ ...form, patient_age: e.target.value })} />
+              <input className="input" type="tel" inputMode="numeric" maxLength={3} value={form.patient_age}
+                onChange={e => { const v = capAge(e.target.value); if (v !== null) setForm({ ...form, patient_age: v }); }}
+                placeholder="45" />
             </div>
             <div>
               <label style={{ fontSize: 14, color: 'var(--text-light)' }}>{t('gender', lang)} *</label>

@@ -17,6 +17,11 @@ import { useDialogA11y } from './useDialogA11y';
  *   icon          emoji shown above the heading (decorative, aria-hidden).
  *   acknowledge   a checkbox the user must tick before Confirm enables. Use for
  *                 the truly irreversible ones, not as a speed bump on everything.
+ *   confirmText   a string the user must type EXACTLY before Confirm enables (the
+ *                 GitHub "type the repo name" pattern). Stronger than `acknowledge`:
+ *                 it cannot be cleared by a reflex click, and naming the thing makes
+ *                 you notice WHICH thing you are destroying. Reserve it for
+ *                 permanent, unrecoverable deletion of a named object.
  *   hideCancel    one-button notice (role becomes alertdialog, centred layout).
  *                 `confirm()` still resolves — true on the button, false on
  *                 Escape/backdrop.
@@ -28,11 +33,13 @@ import { useDialogA11y } from './useDialogA11y';
  */
 export function ConfirmDialog({
   title, message, confirmLabel, cancelLabel, danger, busy, icon,
-  acknowledge, hideCancel, onConfirm, onCancel,
+  acknowledge, confirmText, hideCancel, onConfirm, onCancel,
 }) {
   const titleId = useId();
   const messageId = useId();
+  const promptId = useId();
   const [acked, setAcked] = useState(false);
+  const [typed, setTyped] = useState('');
 
   // Open on the safe control, never on the destructive one: a stray Enter must
   // not fire an action the user has not read yet. With no Cancel button, the
@@ -40,7 +47,7 @@ export function ConfirmDialog({
   const safeRef = useRef(null);
   const panelRef = useDialogA11y(onCancel, { focusRef: safeRef });
 
-  const confirmBlocked = busy || (acknowledge && !acked);
+  const confirmBlocked = busy || (acknowledge && !acked) || (confirmText && typed !== confirmText);
   // An alert's only button dismisses; it destroys nothing. Painting it red would
   // claim otherwise. `danger` still colours the heading, which is where the
   // severity actually belongs.
@@ -69,6 +76,21 @@ export function ConfirmDialog({
             <input type="checkbox" checked={acked} onChange={e => setAcked(e.target.checked)} style={{ marginTop: 2 }} />
             <span>{acknowledge}</span>
           </label>
+        )}
+
+        {confirmText && (
+          <div style={{ marginBottom: 18 }}>
+            <label htmlFor={promptId} style={{ display: 'block', fontSize: 'calc(13px * var(--fs, 1))', marginBottom: 6, color: 'var(--text)' }}>
+              Type <strong style={{ fontFamily: 'monospace', userSelect: 'none' }}>{confirmText}</strong> to confirm
+            </label>
+            {/* autoComplete off + no autoFocus: focus stays on Cancel (the safe
+                control), so a stray Enter cannot arm and fire the deletion. */}
+            <input id={promptId} className="input" type="text" value={typed}
+              onChange={e => setTyped(e.target.value)}
+              autoComplete="off" spellCheck="false" disabled={busy}
+              aria-describedby={messageId}
+              style={{ fontFamily: 'monospace' }} />
+          </div>
         )}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: centred ? 'center' : 'flex-end' }}>

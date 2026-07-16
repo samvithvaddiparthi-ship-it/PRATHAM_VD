@@ -6,6 +6,22 @@ const { APP_TIMEZONE } = require('../utils/time');
 
 const router = Router();
 
+// Hard sanity bound on patient age. Like VITAL_LIMITS in routes/vitals.js this is a
+// data-error guard, not a clinical range — kept wide so no real patient is rejected
+// (the oldest verified human reached 122).
+const MAX_AGE = 120;
+const INVALID_AGE = Symbol('invalid_age');
+
+// '' / null / undefined -> null (age is optional). A valid whole 0..MAX_AGE -> that
+// number. Anything else -> INVALID_AGE. Note 0 must survive as 0 (infants), which a
+// plain `patient_age || null` would quietly turn into null.
+function normalizeAge(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > MAX_AGE) return INVALID_AGE;
+  return n;
+}
+
 // How long an unfinished visit keeps blocking a re-entry for the same person.
 // A visit abandoned mid-flow (patient closes the tab at interview/vitals) is never
 // dispatched or removed, so without a cutoff it would block that name+phone from
@@ -75,6 +91,16 @@ router.post('/register', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid phone number' });
     }
 
+    // Age sanity guard — mirrors VITAL_LIMITS in routes/vitals.js and the input cap
+    // on the register page. MAX_AGE is a sanity bound (oldest verified human: 122),
+    // not a clinical one: it rejects fat-finger/garbage (age 9999, -5, "abc") that
+    // would otherwise reach an INTEGER column and skew triage and the report.
+    // Age is optional — absent/blank stays null.
+    const age = normalizeAge(patient_age);
+    if (age === INVALID_AGE) {
+      return res.status(400).json({ error: `Age must be a whole number between 0 and ${MAX_AGE}` });
+    }
+
     // Gate on OTP: the session must have passed phone verification (POST
     // /api/otp/verify) and the number being registered must be the exact one that
     // was verified — so the request can't be edited to register a different,
@@ -140,7 +166,7 @@ router.post('/register', authMiddleware, async (req, res) => {
         preferred_doctor_id = $7, preferred_doctor_name = $8,
         state = 'REGISTERED', updated_at = NOW()
        WHERE id = $9 RETURNING *`,
-      [patient_name, normalizedPhone, patient_age || null, patient_gender || null, language,
+      [patient_name, normalizedPhone, age, patient_gender || null, language,
        department ? String(department).toUpperCase() : null,
        preferred_doctor_id || null, (preferred_doctor_name || '').trim() || null, session_id]
     );

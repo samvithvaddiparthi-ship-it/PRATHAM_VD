@@ -1095,8 +1095,9 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
           </div>
           <div>
             <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Phone *</label>
-            <input className="input" type="tel" required value={form.phone}
-              onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
+            <input className="input" type="tel" inputMode="numeric" maxLength={10} required value={form.phone}
+              onChange={e => setForm({ ...form, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+              placeholder="9876500099" />
           </div>
           <div>
             <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registration / license no. (optional)</label>
@@ -1185,8 +1186,9 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
           </div>
           <div>
             <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Phone *</label>
-            <input className="input" type="tel" required value={form.phone}
-              onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="9876500099" />
+            <input className="input" type="tel" inputMode="numeric" maxLength={10} required value={form.phone}
+              onChange={e => setForm({ ...form, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+              placeholder="9876500099" />
           </div>
           <div>
             <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registration / license no.</label>
@@ -1663,15 +1665,67 @@ function DepartmentsManager({ depts, onChange }) {
     }
   }
 
+  // Hide a department from the patient picker without destroying anything. The
+  // reversible option, and the right one in almost every case — a department with
+  // patient visits cannot be deleted at all, only deactivated.
+  async function handleToggleActive(d) {
+    try {
+      await api.updateDepartment(d.code, { is_active: !d.is_active });
+      toast(d.is_active ? `"${d.code}" deactivated — hidden from patients` : `"${d.code}" reactivated`, 'success');
+      onChange();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
   async function handleDelete(code) {
+    let impact;
+    try {
+      impact = await api.departmentImpact(code);
+    } catch (err) {
+      toast(err.message, 'error');
+      return;
+    }
+
+    // Patient visits are clinical records — never collateral damage of a config
+    // change. Say so plainly and point at the reversible option instead of letting
+    // the admin type the code and then hit a 409.
+    if (!impact.deletable) {
+      await confirm({
+        title: `"${code}" cannot be deleted`,
+        icon: '🛑',
+        message: `${impact.sessions} patient visit${impact.sessions === 1 ? '' : 's'} reference this department, and deleting it would strand those records. `
+               + `Deactivate it instead — it disappears from the patient picker immediately, every visit stays intact, and you can reactivate it any time.`,
+        confirmLabel: 'Got it',
+        hideCancel: true,
+        danger: true,
+      });
+      return;
+    }
+
+    const losses = [
+      impact.questions > 0 && `${impact.questions} questionnaire question${impact.questions === 1 ? '' : 's'} will be permanently deleted`,
+      impact.doctors > 0 && `${impact.doctors} doctor${impact.doctors === 1 ? ' will be' : 's will be'} deactivated and unable to log in (you can reactivate them into another department)`,
+    ].filter(Boolean);
+
     if (!(await confirm({
-      title: `Delete department "${code}"?`,
-      message: 'Only possible if no doctors, patients, or questions are linked to it.',
-      confirmLabel: 'Delete',
+      title: `Permanently delete "${code}"?`,
+      icon: '⚠️',
+      message: losses.length
+        ? `This cannot be undone. ${losses.join('. ')}.`
+        : 'This cannot be undone.',
+      confirmText: code,
+      confirmLabel: 'Delete this department',
       danger: true,
     }))) return;
+
     try {
-      await api.deleteDepartment(code);
+      const r = await api.forceDeleteDepartment(code, code);
+      const done = [
+        r.questions_deleted > 0 && `${r.questions_deleted} question(s) deleted`,
+        r.doctors_deactivated > 0 && `${r.doctors_deactivated} doctor(s) deactivated`,
+      ].filter(Boolean);
+      toast(`"${code}" deleted${done.length ? ` — ${done.join(', ')}` : ''}`, 'success');
       onChange();
     } catch (err) {
       toast(err.message, 'error');
@@ -1852,7 +1906,15 @@ function DepartmentsManager({ depts, onChange }) {
                           color: (d.report_focus && d.report_focus.trim()) ? 'var(--primary)' : 'var(--text-light)' }}>
                         {(d.report_focus && d.report_focus.trim()) ? '📝 Report focus' : '＋ Report focus'}
                       </button>
+                      <button onClick={() => handleToggleActive(d)}
+                        title={d.is_active
+                          ? 'Hide from the patient department picker. Nothing is deleted; reversible.'
+                          : 'Show in the patient department picker again.'}
+                        style={{ background: 'none', border: '1px solid #E0E0E0', color: 'var(--text-light)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
+                        {d.is_active ? '🚫 Deactivate' : '✅ Reactivate'}
+                      </button>
                       <button onClick={() => handleDelete(d.code)}
+                        title="Permanently delete this department. Blocked while any patient visit references it."
                         style={{ background: 'none', border: '1px solid var(--red)', color: 'var(--red)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>
                         Delete
                       </button>

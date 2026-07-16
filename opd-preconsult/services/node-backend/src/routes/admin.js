@@ -140,13 +140,20 @@ router.post('/departments', ...adminOnly, async (req, res) => {
 router.patch('/departments/:code', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-    const { name, collect_vitals, icon, report_focus } = req.body;
+    const { name, collect_vitals, icon, report_focus, is_active } = req.body;
     const sets = [];
     const params = [];
 
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ error: 'name cannot be empty' });
       params.push(String(name).trim()); sets.push(`name = $${params.length}`);
+    }
+    if (is_active !== undefined) {
+      // The reversible alternative to deletion, and the one migration 027 already
+      // tells operators to reach for ("Deactivate it in HIS instead") — the column
+      // existed but nothing could ever set it. Hides the department from the patient
+      // picker while every visit, doctor and question stays exactly as it is.
+      params.push(!!is_active); sets.push(`is_active = $${params.length}`);
     }
     if (collect_vitals !== undefined) {
       params.push(!!collect_vitals); sets.push(`collect_vitals = $${params.length}`);
@@ -175,28 +182,104 @@ router.patch('/departments/:code', ...adminOnly, async (req, res) => {
 });
 
 // Delete department (only if no doctors, sessions, or questions reference it)
-router.delete('/departments/:code', ...adminOnly, async (req, res) => {
+// What a delete would destroy. Drives the confirmation UI so the admin is told what
+// they are about to lose BEFORE typing the code, not after a 409.
+router.get('/departments/:code/impact', ...adminOnly, async (req, res) => {
   try {
     const code = req.params.code.toUpperCase();
-
-    // Check for references
-    const doctors = await pool.query('SELECT COUNT(*) FROM doctors WHERE department = $1', [code]);
-    if (parseInt(doctors.rows[0].count) > 0) {
-      return res.status(409).json({ error: `Cannot delete: ${doctors.rows[0].count} doctor(s) in this department` });
-    }
-    const sessions = await pool.query('SELECT COUNT(*) FROM sessions WHERE department = $1', [code]);
-    if (parseInt(sessions.rows[0].count) > 0) {
-      return res.status(409).json({ error: `Cannot delete: ${sessions.rows[0].count} session(s) in this department` });
-    }
-    const questions = await pool.query('SELECT COUNT(*) FROM questionnaire_nodes WHERE department = $1', [code]);
-    if (parseInt(questions.rows[0].count) > 0) {
-      return res.status(409).json({ error: `Cannot delete: ${questions.rows[0].count} question(s) in this department. Delete them first.` });
-    }
-
-    await pool.query('DELETE FROM departments WHERE code = $1', [code]);
-    res.json({ deleted: true });
+    const dept = await pool.query('SELECT code FROM departments WHERE code = $1', [code]);
+    if (!dept.rows.length) return res.status(404).json({ error: 'Department not found' });
+    const counts = await pool.query(
+      `SELECT (SELECT COUNT(*) FROM doctors            WHERE department = $1 AND is_active = true) AS doctors,
+              (SELECT COUNT(*) FROM sessions           WHERE department = $1) AS sessions,
+              (SELECT COUNT(*) FROM questionnaire_nodes WHERE department = $1) AS questions`,
+      [code]
+    );
+    const r = counts.rows[0];
+    res.json({
+      code,
+      doctors: parseInt(r.doctors),
+      sessions: parseInt(r.sessions),
+      questions: parseInt(r.questions),
+      // Patient visits are clinical records. They are never collateral damage of a
+      // config change — erasure is a separate, audited, per-session action
+      // (utils/erase.js, DPDP). So sessions make deletion impossible, not merely
+      // scary, and the admin is pointed at deactivation instead.
+      deletable: parseInt(r.sessions) === 0,
+    });
   } catch (err) {
     sendServerError(res, err);
+  }
+});
+
+// Delete a department.
+//
+//   plain       refuses if ANYTHING references it (doctors / sessions / questions).
+//   ?force=1    additionally deletes its questions and deactivates its doctors.
+//               Requires { confirm: "<CODE>" } in the body — checked HERE, not just
+//               in the UI, so a stray scripted DELETE cannot wipe a department.
+//
+// Sessions block BOTH paths. Migration 027 set this precedent for the starter
+// department ("if any patient session already chose OPD, keep everything") and the
+// reasoning holds generally: department codes are loose strings with no FK, so
+// deleting a department that visits reference strands those records — an in-progress
+// interview loses the questionnaire nodes it is walking, and the queue board loses
+// its heading. Deactivate instead: it hides the department from the patient picker
+// while every visit stays intact.
+router.delete('/departments/:code', ...adminOnly, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const code = req.params.code.toUpperCase();
+    const force = req.query.force === '1' || req.query.force === 'true';
+
+    const sessions = await client.query('SELECT COUNT(*) FROM sessions WHERE department = $1', [code]);
+    const sessionCount = parseInt(sessions.rows[0].count);
+    if (sessionCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete: ${sessionCount} patient visit(s) reference this department. `
+             + `Deactivate it instead — it disappears from the patient picker and the visits stay intact.`,
+      });
+    }
+
+    const doctors = await client.query('SELECT COUNT(*) FROM doctors WHERE department = $1 AND is_active = true', [code]);
+    const questions = await client.query('SELECT COUNT(*) FROM questionnaire_nodes WHERE department = $1', [code]);
+    const doctorCount = parseInt(doctors.rows[0].count);
+    const questionCount = parseInt(questions.rows[0].count);
+
+    if (!force) {
+      if (doctorCount > 0) {
+        return res.status(409).json({ error: `Cannot delete: ${doctorCount} doctor(s) in this department` });
+      }
+      if (questionCount > 0) {
+        return res.status(409).json({ error: `Cannot delete: ${questionCount} question(s) in this department. Delete them first.` });
+      }
+    } else if (String(req.body?.confirm || '').toUpperCase() !== code) {
+      return res.status(400).json({ error: 'Confirmation does not match the department code' });
+    }
+
+    await client.query('BEGIN');
+    if (force) {
+      // Questions are configuration, regenerated from seed/HIS — safe to drop.
+      await client.query('DELETE FROM questionnaire_nodes WHERE department = $1', [code]);
+      // Doctors are NOT deleted: the audit log and past visits reference them, and
+      // doctors.department is NOT NULL so it cannot simply be cleared. Deactivating
+      // keeps the record and the history while stopping the login, and an admin can
+      // reactivate them into another department.
+      await client.query('UPDATE doctors SET is_active = false WHERE department = $1', [code]);
+    }
+    const del = await client.query('DELETE FROM departments WHERE code = $1 RETURNING code', [code]);
+    if (!del.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Department not found' });
+    }
+    await client.query('COMMIT');
+
+    res.json({ deleted: true, questions_deleted: force ? questionCount : 0, doctors_deactivated: force ? doctorCount : 0 });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendServerError(res, err);
+  } finally {
+    client.release();
   }
 });
 

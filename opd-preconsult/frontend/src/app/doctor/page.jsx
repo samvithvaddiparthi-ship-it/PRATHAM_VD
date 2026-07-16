@@ -157,7 +157,9 @@ function PinLogin({ onLogin }) {
         </div>
         <div>
           <label style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Phone Number</label>
-          <input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="9876500001" required autoFocus />
+          <input className="input" type="tel" inputMode="numeric" maxLength={10} value={phone}
+            onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+            placeholder="9876500001" required autoFocus />
         </div>
         <div>
           <label style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>PIN (4-6 digits)</label>

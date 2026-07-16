@@ -3,8 +3,22 @@ const pool = require('../models/db');
 const { signToken, authMiddleware, requireRole } = require('../middleware/auth');
 const { isLocked, recordFailure, clearFailures, MAX_ATTEMPTS } = require('../utils/loginLimiter');
 const { hashPin, verifyPin } = require('../utils/pinHash');
+const { normalizeIndianPhone } = require('../utils/phone');
 
 const router = Router();
+
+// Validate + canonicalise a doctor's phone. Returns the 10-digit NATIONAL form, or
+// null if it isn't a valid Indian mobile.
+//
+// Deliberately NOT the e164 form that sessions store: doctors are matched on the
+// bare 10 digits (`WHERE phone = $1` in /login, and the 005 seed inserts
+// '9876500001'). Storing '+91…' here would make every doctor unable to log in.
+// Accepting the util's other formats (+91…, 0…, spaces) and storing the national
+// form means an admin can paste any of them and login still matches.
+function normalizeDoctorPhone(raw) {
+  const { national, valid } = normalizeIndianPhone(raw);
+  return valid ? national : null;
+}
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 // The seeded demo PIN (§8b). Stored hashes are bcrypt — salted, so there is no
@@ -104,6 +118,12 @@ router.post('/', authMiddleware, requireRole('admin'), async (req, res) => {
     if (IS_PROD && pin === '1234') {
       return res.status(400).json({ error: 'Refusing to set the well-known demo PIN (1234) in production.' });
     }
+    // A doctor whose phone isn't a real 10-digit mobile can never log in (login
+    // matches on it), so reject it here rather than create an unusable account.
+    const doctorPhone = normalizeDoctorPhone(phone);
+    if (!doctorPhone) {
+      return res.status(400).json({ error: 'Invalid phone number — must be a 10-digit Indian mobile' });
+    }
 
     // §8b — new PINs are stored as bcrypt in pin_hash. There is no reversible
     // SHA-256 hash on disk for new doctors.
@@ -111,7 +131,7 @@ router.post('/', authMiddleware, requireRole('admin'), async (req, res) => {
       `INSERT INTO doctors (name, department, phone, pin_hash, registration_no)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, name, department, phone, registration_no, is_active, created_at`,
-      [name, department.toUpperCase(), phone, await hashPin(pin), registration_no || null]
+      [name, department.toUpperCase(), doctorPhone, await hashPin(pin), registration_no || null]
     );
 
     res.json(result.rows[0]);
@@ -146,7 +166,9 @@ router.patch('/:id', authMiddleware, requireRole('admin'), async (req, res) => {
     }
     if (phone !== undefined) {
       if (!String(phone).trim()) return res.status(400).json({ error: 'phone cannot be empty' });
-      params.push(String(phone).trim()); sets.push(`phone = $${params.length}`);
+      const p = normalizeDoctorPhone(phone);
+      if (!p) return res.status(400).json({ error: 'Invalid phone number — must be a 10-digit Indian mobile' });
+      params.push(p); sets.push(`phone = $${params.length}`);
     }
     if (pin !== undefined && pin !== '') {
       if (pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) {

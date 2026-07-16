@@ -52,6 +52,12 @@ export const api = {
   createDepartment: (data) => apiFetch('/api/admin/departments', { method: 'POST', body: JSON.stringify(data) }),
   updateDepartment: (code, data) => apiFetch(`/api/admin/departments/${code}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteDepartment: (code) => apiFetch(`/api/admin/departments/${code}`, { method: 'DELETE' }),
+  // What a delete would destroy — drives the confirmation copy.
+  departmentImpact: (code) => apiFetch(`/api/admin/departments/${code}/impact`),
+  // Permanent delete: also drops the department's questions and deactivates its
+  // doctors. `confirm` must equal the code; the server re-checks it.
+  forceDeleteDepartment: (code, confirm) =>
+    apiFetch(`/api/admin/departments/${code}?force=1`, { method: 'DELETE', body: JSON.stringify({ confirm }) }),
 
   // Admin — Questionnaire management
   getQuestions: (department) => apiFetch(`/api/admin/questions/${department}`),
