@@ -27,6 +27,19 @@ function validateVitals(body) {
     if (!Number.isFinite(n)) return `${key} must be a number`;
     if (n < min || n > max) return `${key} must be between ${min} and ${max}`;
   }
+
+  // Cross-field: systolic must exceed diastolic. The per-field ranges above are
+  // deliberately wide, so each half of a transposed reading passes on its own —
+  // only comparing them catches it. This matters clinically: 120/80 entered as
+  // 80/120 gives a systolic of 80, which trips the "< 90 → shock" rule in
+  // triage.py and marks a well patient RED. Only enforced when both are present.
+  const sys = Number(body.bp_systolic);
+  const dia = Number(body.bp_diastolic);
+  const hasSys = body.bp_systolic !== undefined && body.bp_systolic !== null && body.bp_systolic !== '';
+  const hasDia = body.bp_diastolic !== undefined && body.bp_diastolic !== null && body.bp_diastolic !== '';
+  if (hasSys && hasDia && Number.isFinite(sys) && Number.isFinite(dia) && dia >= sys) {
+    return 'bp_systolic must be greater than bp_diastolic';
+  }
   return null;
 }
 

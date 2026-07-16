@@ -77,6 +77,16 @@ export default function VitalsForm({
         return;
       }
     }
+    // Systolic must exceed diastolic — the reverse is physiologically impossible, so
+    // it means the two numbers were typed into the wrong boxes. Worth catching on its
+    // own: a transposed 120/80 reads as a systolic of 80, which trips the "< 90 →
+    // shock" triage rule and flags a well patient RED. Only checked when BOTH are
+    // present, since either may be left blank.
+    if (data.bp_systolic !== undefined && data.bp_diastolic !== undefined
+        && data.bp_diastolic >= data.bp_systolic) {
+      setLimitError(t('err_bp_inverted', lang));
+      return;
+    }
     setLimitError('');
     onSubmit(data);
   }

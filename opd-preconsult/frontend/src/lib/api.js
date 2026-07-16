@@ -12,7 +12,13 @@ async function apiFetch(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
+    // Carry the HTTP status on the Error so callers can tell a dead session
+    // (401/440 — only recoverable by starting a fresh entry) apart from a
+    // transient failure worth retrying. The message is unchanged, so existing
+    // `catch (err) { setError(err.message) }` callers keep working.
+    const e = new Error(err.error || res.statusText);
+    e.status = res.status;
+    throw e;
   }
   return res.json();
 }

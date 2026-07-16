@@ -23,9 +23,10 @@ export default function Documents() {
   const [skipWarning, setSkipWarning] = useState(false);
   const [mustReview, setMustReview] = useState(false);   // uploaded doc(s) not yet reviewed
   const [error, setError] = useState('');
-  // Hospital-wide OCR flag (HIS admin → Settings). null = still loading; when
-  // false the upload/scan UI is hidden and the patient just continues (a nurse/
-  // doctor can view physical documents directly). Default true if the read fails.
+  // Hospital-wide OCR flag (HIS admin → Settings). null = still loading. Uploading
+  // stays available either way — when false the file is stored and passed to the
+  // doctor as-is, and only the AI extraction/review UI is hidden (there is nothing
+  // extracted to confirm). Default true if the read fails.
   const [ocrEnabled, setOcrEnabled] = useState(null);
 
   useEffect(() => {
@@ -57,10 +58,19 @@ export default function Documents() {
     }
   }
 
+  // Both review actions are authenticated writes: on failure the local state must
+  // stay put (the server did not record it) and the patient must be told, or the
+  // ✓/✗ buttons look dead — the same silent failure the consent Agree button had.
   async function handleConfirm(idx) {
     const doc = docs[idx];
     if (!doc.doc_id) return;
-    await api.confirmDocument(doc.doc_id, true);
+    setError('');
+    try {
+      await api.confirmDocument(doc.doc_id, true);
+    } catch (err) {
+      setError(err.message || 'Unknown error');
+      return;
+    }
     setDocs(prev => prev.map((d, i) => i === idx ? { ...d, confirmed: true } : d));
     setMustReview(false);   // they're reviewing — clear the nudge
   }
@@ -68,7 +78,13 @@ export default function Documents() {
   async function handleReject(idx) {
     const doc = docs[idx];
     if (!doc.doc_id) return;
-    await api.confirmDocument(doc.doc_id, false);
+    setError('');
+    try {
+      await api.confirmDocument(doc.doc_id, false);
+    } catch (err) {
+      setError(err.message || 'Unknown error');
+      return;
+    }
     setDocs(prev => prev.filter((_, i) => i !== idx));
     setMustReview(false);
   }

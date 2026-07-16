@@ -201,4 +201,22 @@ async function start() {
   startRetentionWorker();
 }
 
+// Last-resort safety nets. Every route and worker has its own try/catch, so these
+// only see what slips past — but since Node 15 an unhandled rejection terminates
+// the process, and losing the backend drops every in-flight request plus the SSE
+// alert stream for one stray promise. The two cases are NOT the same:
+//
+//  - unhandledRejection: a promise nobody awaited. The process is still sound, so
+//    log it loudly and keep serving rather than vanishing mid-consultation.
+//  - uncaughtException: the process may be in an undefined state. Serving on from
+//    corrupt state is worse than a restart for a clinical tool, so exit and let the
+//    supervisor bring us back clean (`restart: unless-stopped` in prod compose).
+process.on('unhandledRejection', (reason) => {
+  console.error('[node-backend] unhandled promise rejection (still serving):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[node-backend] uncaught exception — exiting for a clean restart:', err);
+  process.exit(1);
+});
+
 start();

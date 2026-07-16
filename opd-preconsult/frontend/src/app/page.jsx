@@ -58,6 +58,7 @@ function HomeContent() {
   const [hasSession, setHasSession] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const urlLang = searchParams.get('lang');
     if (urlLang && ['en', 'hi', 'te'].includes(urlLang)) setLang(urlLang);
     const qr = searchParams.get('qr');
@@ -66,18 +67,43 @@ function HomeContent() {
     // a token left over from a previous patient on this (shared) device. Only when
     // there's NO new entry param but a token exists do we treat it as the patient
     // returning from the form and reuse that session.
-    let storedQr = null, hasTok = false;
-    try { storedQr = sessionStorage.getItem('qr'); hasTok = !!sessionStorage.getItem('token'); } catch {}
+    let storedQr = null, tok = null, sid = null;
+    try {
+      storedQr = sessionStorage.getItem('qr');
+      tok = sessionStorage.getItem('token');
+      sid = sessionStorage.getItem('session_id');
+    } catch {}
     if (qr) {
       setPendingQr(qr);
       setHasSession(false);
     } else if (h) {
       setPendingQr(`h=${encodeURIComponent(h)}`);
       setHasSession(false);
-    } else if (hasTok) {
-      setHasSession(true);
+    } else if (tok && sid) {
+      // A token in sessionStorage is not proof of a LIVE session — the secret may
+      // have rotated (a redeploy invalidates every issued token), it may have
+      // expired, or the session may be gone server-side. Reusing it unchecked
+      // carried a dead token into the flow, where the first authed call 401s and
+      // the screen just looks frozen. Verify it once, and fall back to a fresh
+      // entry if it no longer works, so the patient never reaches that dead end.
+      setToken(tok);
       setPendingQr(storedQr);
-    } else if (storedQr) {
+      api.getSession(sid)
+        .then(() => { if (!cancelled) setHasSession(true); })
+        .catch(() => {
+          if (cancelled) return;
+          clearPatientState();
+          setHasSession(false);
+          // Reuse the stored entry only if it still resolves to a hospital: a stale
+          // or malformed value would fail parseEntry on every language tap, leaving
+          // the patient stuck here with no way forward. The single-tenant default
+          // always resolves.
+          setPendingQr(parseEntry(storedQr) ? storedQr : `h=${encodeURIComponent(DEFAULT_HOSPITAL_ID)}`);
+        });
+    } else if (storedQr && parseEntry(storedQr)) {
+      // Same guard as the validation fallback above: only carry the stored entry
+      // forward if it still resolves to a hospital, otherwise every language tap
+      // dead-ends on "session expired" with no way to start over.
       setPendingQr(storedQr);
       setHasSession(false);
     } else {
@@ -85,6 +111,7 @@ function HomeContent() {
       setPendingQr(`h=${encodeURIComponent(DEFAULT_HOSPITAL_ID)}`);
       setHasSession(false);
     }
+    return () => { cancelled = true; };
   }, [searchParams]);
 
   // Clear every trace of a previous patient on this (possibly shared kiosk)

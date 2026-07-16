@@ -56,6 +56,7 @@ const strings = {
     err_age_required: 'Please enter the age.',
     err_age_range: 'Age must be between 0 and 120.',
     err_session_expired: 'Your session expired. Restarting — please scan the QR again.',
+    err_bp_inverted: 'Systolic must be higher than diastolic — check the two BP numbers.',
     err_response_required: 'Please enter your response before continuing.',
     try_again: 'Please try again.',
     // ── Welcome-back card ──
@@ -214,6 +215,7 @@ const strings = {
     err_age_required: 'कृपया उम्र दर्ज करें।',
     err_age_range: 'उम्र 0 से 120 के बीच होनी चाहिए।',
     err_session_expired: 'आपका सत्र समाप्त हो गया। पुनः आरंभ हो रहा है — कृपया QR फिर से स्कैन करें।',
+    err_bp_inverted: 'सिस्टोलिक, डायस्टोलिक से अधिक होना चाहिए — BP की दोनों संख्याएँ जाँचें।',
     err_response_required: 'जारी रखने से पहले कृपया अपना उत्तर दर्ज करें।',
     try_again: 'कृपया पुनः प्रयास करें।',
     // ── Welcome-back card ──
@@ -368,6 +370,7 @@ const strings = {
     err_age_required: 'దయచేసి వయస్సును నమోదు చేయండి.',
     err_age_range: 'వయస్సు 0 మరియు 120 మధ్య ఉండాలి.',
     err_session_expired: 'మీ సెషన్ గడువు ముగిసింది. మళ్లీ ప్రారంభమవుతోంది — దయచేసి QRని మళ్లీ స్కాన్ చేయండి.',
+    err_bp_inverted: 'సిస్టోలిక్ డయాస్టోలిక్ కంటే ఎక్కువగా ఉండాలి — BP రెండు సంఖ్యలను తనిఖీ చేయండి.',
     err_response_required: 'కొనసాగించే ముందు దయచేసి మీ సమాధానాన్ని నమోదు చేయండి.',
     try_again: 'దయచేసి మళ్ళీ ప్రయత్నించండి.',
     // ── Welcome-back card ──

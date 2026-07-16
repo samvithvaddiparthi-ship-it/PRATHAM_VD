@@ -8,6 +8,8 @@ import ProgressBar from '../../../components/ProgressBar';
 export default function Consent() {
   const router = useRouter();
   const [lang, setLang] = useState('en');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setLang(sessionStorage.getItem('lang') || 'en');
@@ -16,8 +18,31 @@ export default function Consent() {
   }, []);
 
   async function handleConsent() {
-    await api.consent();
-    router.push('/patient/register');
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.consent();
+      router.push('/patient/register');
+    } catch (err) {
+      // This call is authenticated, so it fails whenever the device is holding a
+      // token that is no longer good (secret rotated, expired, session cleared).
+      // Recording consent is the first authed step in the flow, so a silent throw
+      // here left Agree looking dead — nothing moved and nothing was shown. Never
+      // swallow it: a dead session can only be recovered by a fresh entry, so wipe
+      // the stale state and send them back to scan; anything else is transient and
+      // worth another tap.
+      if (err.status === 401 || err.status === 440) {
+        ['token', 'session_id', 'department', 'qr', 'otp_verified', 'register_form', 'welcome_back', 'register_progress']
+          .forEach(k => { try { sessionStorage.removeItem(k); } catch {} });
+        setToken(null);
+        setError(t('err_session_expired', lang));
+        setTimeout(() => router.push('/'), 2000);
+        return;
+      }
+      setError(err.message);
+      setBusy(false);
+    }
   }
 
   return (
@@ -43,7 +68,8 @@ export default function Consent() {
         </section>
 
         <div style={{ flex: 1 }} />
-        <button className="btn btn-primary" onClick={handleConsent}>
+        {error && <p role="alert" style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center', lineHeight: 1.4 }}>{error}</p>}
+        <button className="btn btn-primary" onClick={handleConsent} disabled={busy}>
           {t('consent_agree', lang)}
         </button>
         <button className="btn btn-outline" onClick={() => router.push('/')}>
