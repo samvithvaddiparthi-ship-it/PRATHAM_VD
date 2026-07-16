@@ -70,7 +70,7 @@ node scripts/smoke.js https://$DOMAIN    # scan → OTP → register → triage;
 
 ## Health of the demo secrets
 - `node scripts/gen-secrets.js` regenerates all secrets. Rotating `JWT_SECRET` logs everyone out.
-- node-backend refuses to boot in production with a weak `JWT_SECRET` or `DEMO_QR_SECRET`.
+- node-backend refuses to boot in production with a weak `JWT_SECRET` or `QR_SIGNING_SECRET`.
 - On startup, node checks whether any active doctor still uses the default PIN `1234`.
   In **development** it only warns. In **production it force-expires those accounts**
   (`is_active = false`) so the weak PIN cannot be used.

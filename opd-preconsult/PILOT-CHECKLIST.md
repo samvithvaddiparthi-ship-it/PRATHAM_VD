@@ -34,7 +34,7 @@ This is a living document — update the markers as things land.
 - ✅ **A1 · Authenticate the python-backend.** `services/python-backend/src/auth.py` verifies the login JWT (shared `JWT_SECRET`, HS256, stdlib — no pyjwt) via a `require_auth` dependency on all sensitive routers. Media-`<src>` GETs (`/api/audio/clip/{id}`, `/api/ocr/documents/image/{id}`) + `/api/transcribe/health` stay open by design. **Requires `JWT_SECRET` set in `.env` (dev too).** *Refinement left: per-role gating of doctor-only routers.*
 - ✅ **A2 · HTTPS/TLS.** `docker-compose.prod.yml` + `deploy/Caddyfile` put Caddy (auto Let's Encrypt) in front of the gateway; only Caddy publishes 80/443. **Needs a real domain + DNS at deploy time.**
 - ✅ **A3 · `NODE_ENV=production`.** Set in `docker-compose.prod.yml` (activates the node JWT fail-closed guard).
-- ✅ **A4 · Rotate every secret.** `scripts/gen-secrets.js` prints strong values; `DEMO_QR_SECRET` fails closed in production (`prescription.js`); `.env.example` sharpened. **Operational step remains: generate + set them in the real deploy `.env`.**
+- ✅ **A4 · Rotate every secret.** `scripts/gen-secrets.js` prints strong values; `QR_SIGNING_SECRET` fails closed in production (`prescription.js`); `.env.example` sharpened. **Operational step remains: generate + set them in the real deploy `.env`.**
 - ✅ **A5 · Stop exposing infra ports.** Base `docker-compose.yml` binds postgres/redis/minio/backends to `127.0.0.1`; prod compose publishes only Caddy 80/443.
 - ✅ **A6 · Remove demo/testing artifacts.** Removed the phone-cap testing banner; OTP returns **503** in prod when SMS isn't configured; startup **warns** if any active doctor still uses PIN `1234`. *Forcing a PIN reset (a `must_change_pin` column) deferred — needs a migration.*
 

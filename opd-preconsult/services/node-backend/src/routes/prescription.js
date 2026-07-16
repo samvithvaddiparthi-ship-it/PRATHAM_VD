@@ -35,7 +35,7 @@ router.put('/template', authMiddleware, requireRole('admin'), async (req, res) =
   }
 });
 
-const QR_SECRET = (process.env.DEMO_QR_SECRET || 'changeme_qr_secret').trim();
+const QR_SECRET = (process.env.QR_SIGNING_SECRET || 'changeme_qr_secret').trim();
 // A weak/default HMAC key makes prescription QR slips forgeable. Fail closed in
 // production (mirrors the JWT_SECRET guard in middleware/auth.js); warn in dev.
 const QR_SECRET_WEAK =
@@ -43,11 +43,11 @@ const QR_SECRET_WEAK =
 if (QR_SECRET_WEAK) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
-      '[prescription] DEMO_QR_SECRET is missing or weak. Set a strong random ' +
-      'DEMO_QR_SECRET (>=16 chars, not the .env.example placeholder) before starting in production.'
+      '[prescription] QR_SIGNING_SECRET is missing or weak. Set a strong random ' +
+      'QR_SIGNING_SECRET (>=16 chars, not the .env.example placeholder) before starting in production.'
     );
   }
-  console.warn('[prescription] WARNING: DEMO_QR_SECRET is weak/default. Set a strong, secret DEMO_QR_SECRET before any real use — QR prescriptions are otherwise forgeable.');
+  console.warn('[prescription] WARNING: QR_SIGNING_SECRET is weak/default. Set a strong, secret QR_SIGNING_SECRET before any real use — QR prescriptions are otherwise forgeable.');
 }
 
 // Sign a payload for the prescription QR (full HMAC-SHA256, hex).

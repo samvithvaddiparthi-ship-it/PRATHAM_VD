@@ -51,7 +51,7 @@ services:
       # ── App secrets (auto-generated; rotate via dashboard) ───────
       - key: JWT_SECRET
         generateValue: true
-      - key: DEMO_QR_SECRET
+      - key: QR_SIGNING_SECRET
         generateValue: true
 
       # ── Demo config (safe to commit) ─────────────────────────────

@@ -206,7 +206,7 @@ opd-preconsult/
 - **Required secrets** (see [Environment & Secrets](#environment--secrets) below) — the app auth is now on by default, so these must be set even for local dev:
   - `JWT_SECRET` — signs/verifies login tokens; **shared by node-backend AND python-backend**
   - `ADMIN_PASSCODE` — HIS admin dashboard login (≥6 chars)
-  - `DEMO_QR_SECRET` — HMAC-signs prescription QR slips
+  - `QR_SIGNING_SECRET` — HMAC-signs prescription QR slips
   - Generate all of them at once with `node scripts/gen-secrets.js`
 - **(Optional) API keys** — every AI feature degrades gracefully without them:
   - `GEMINI_API_KEY` / `GROQ_API_KEY` / `ANTHROPIC_API_KEY` — LLM reports & OCR (rule-based/Tesseract fallback works without)
@@ -223,7 +223,7 @@ cd opd-preconsult
 # 1. Copy env template
 cp .env.example .env
 
-# 2. Generate the REQUIRED secrets (JWT_SECRET, ADMIN_PASSCODE, DEMO_QR_SECRET,
+# 2. Generate the REQUIRED secrets (JWT_SECRET, ADMIN_PASSCODE, QR_SIGNING_SECRET,
 #    MINIO_KMS_SECRET_KEY, OTP_SECRET) and write them into .env in one shot:
 node scripts/gen-secrets.js
 
@@ -242,7 +242,7 @@ First-run takes ~5 minutes (image pulls, Tesseract OCR models). Subsequent start
 
 All DB migrations (currently **26**, in `db/migrations/`) run automatically on node-backend startup — no manual step. 3 demo doctors and 2 departments are seeded.
 
-> **Note on secrets:** if you skip step 2, node-backend falls back to a *random ephemeral* JWT key in dev — which python-backend cannot verify, so OCR/triage/report/scribe will return `401`. Set a real `JWT_SECRET` (both backends read the same `.env`). In production, node-backend and python-backend **refuse to start** without strong `JWT_SECRET` / `DEMO_QR_SECRET`.
+> **Note on secrets:** if you skip step 2, node-backend falls back to a *random ephemeral* JWT key in dev — which python-backend cannot verify, so OCR/triage/report/scribe will return `401`. Set a real `JWT_SECRET` (both backends read the same `.env`). In production, node-backend and python-backend **refuse to start** without strong `JWT_SECRET` / `QR_SIGNING_SECRET`.
 
 ### Updating After Code Changes
 
@@ -405,7 +405,7 @@ All config lives in `.env` (gitignored; template in `.env.example`). Run `node s
 |-----|--------------|-------|
 | `JWT_SECRET` | Signs & verifies all login tokens (patient / doctor / admin roles). | **Shared by node-backend AND python-backend** (python verifies the same token). Must be strong even in dev. In prod, node **refuses to start** without it. |
 | `ADMIN_PASSCODE` | HIS admin dashboard login (`POST /api/admin/login`). | Shared credential, **≥6 chars**. |
-| `DEMO_QR_SECRET` | HMAC-signs prescription QR slips (tamper-proof). | Node **refuses to start in prod** with the weak default (otherwise prescriptions are forgeable). |
+| `QR_SIGNING_SECRET` | HMAC-signs prescription QR slips (tamper-proof). | Node **refuses to start in prod** with the weak default (otherwise prescriptions are forgeable). |
 
 ### Optional / environment-specific
 
@@ -426,7 +426,7 @@ All config lives in `.env` (gitignored; template in `.env.example`). Run `node s
 - **python-backend is JWT-gated too.** Its sensitive routers (`/api/ocr`, `/api/triage`, `/api/report`, `/api/scribe`, `/api/transcribe`) verify the **same** login token (`python-backend/src/auth.py`, HS256, shared `JWT_SECRET`). Media `<src>` GETs (`/api/audio/clip/{id}`, `/api/ocr/documents/image/{id}`) and `/api/transcribe/health` stay open per-route.
 - **HIS admin login** requires the admin's **name** + `ADMIN_PASSCODE`; every successful admin mutation is written to `audit_log` (who/what).
 - **Phone OTP.** Patient entry gates on an SMS OTP (Twilio, dry-run on-screen code without keys) — 6-digit, hashed, expiring, attempt-capped, rate-limited.
-- **Prescription QR** is HMAC-signed with `DEMO_QR_SECRET` and verified at `/api/prescription/verify-qr`.
+- **Prescription QR** is HMAC-signed with `QR_SIGNING_SECRET` and verified at `/api/prescription/verify-qr`.
 - **Encryption & audit (DPDP).** Uploaded PHI encrypted at rest in MinIO (SSE-S3) when `MINIO_KMS_SECRET_KEY` is set; viewing a patient report logs a `patient_viewed` audit row. Postgres relies on host/volume disk encryption in prod.
 - **Still open (release blockers):** single shared admin passcode (no per-user SSO), no per-hospital tenancy, patient-data retention/deletion (B2) TODO.
 
@@ -616,7 +616,7 @@ See `.env.example`. Key ones:
 | `TWILIO_AUTH_TOKEN` | Twilio auth | Optional |
 | `TWILIO_WHATSAPP_FROM` | WhatsApp sender number | Optional |
 | `TWILIO_SMS_FROM` | SMS sender number | Optional |
-| `DEMO_QR_SECRET` | QR/prescription HMAC signing | Yes |
+| `QR_SIGNING_SECRET` | QR/prescription HMAC signing | Yes |
 | `PORT` | Nginx listen port (Railway sets this) | Auto |
 
 **LLM provider selection:** Gemini if `GEMINI_API_KEY` set → Claude if `ANTHROPIC_API_KEY` set → rule-based fallback.
@@ -679,7 +679,7 @@ All services run in one container. Nginx handles routing. Migrations run automat
    DATABASE_URL=${{Postgres.DATABASE_URL}}
    REDIS_URL=${{Redis.REDIS_URL}}
    JWT_SECRET=<random-64-char-string>
-   DEMO_QR_SECRET=<random-string>
+   QR_SIGNING_SECRET=<random-string>
    GEMINI_API_KEY=AIzaSy...
    OPENAI_API_KEY=sk-...
    TWILIO_ACCOUNT_SID=AC...
@@ -844,7 +844,7 @@ Render Key Value (managed)   ← REDIS_URL auto-wired
    - `MINIO_*` — optional, only if wiring an external S3-compatible bucket (AWS S3 / Cloudflare R2 / Backblaze B2). Render does not host MinIO.
 5. Service redeploys automatically after each env edit.
 
-`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `DEMO_QR_SECRET` are populated automatically — do not touch them.
+`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `QR_SIGNING_SECRET` are populated automatically — do not touch them.
 
 ### Manual Setup (without Blueprint)
 

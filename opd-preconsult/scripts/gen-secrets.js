@@ -22,7 +22,7 @@ const minioKmsKey = () => `opd-key-1:${crypto.randomBytes(32).toString('base64')
 const lines = [
   ['JWT_SECRET', hex(32)],          // shared by node + python for auth
   ['ADMIN_PASSCODE', safe(20)],     // HIS dashboard login (>=6 required)
-  ['DEMO_QR_SECRET', hex(32)],      // HMAC-signs prescription QR slips
+  ['QR_SIGNING_SECRET', hex(32)],      // HMAC-signs prescription QR slips
   ['OTP_SECRET', hex(32)],          // binds OTP hashes
   ['POSTGRES_PASSWORD', safe(24)],
   ['MINIO_ACCESS_KEY', safe(20)],
