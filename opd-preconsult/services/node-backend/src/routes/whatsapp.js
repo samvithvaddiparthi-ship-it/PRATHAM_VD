@@ -121,7 +121,11 @@ async function chooseDepartment(phone, text, conv) {
   await pool.query(
     `INSERT INTO sessions (id, hospital_id, department, state, language)
      VALUES ($1, $2, $3, 'INIT', 'en')`,
-    [sessionId, 'demo_hospital_01', dept.code]
+    // Honour the deployment's configured hospital, falling back to the demo id.
+    // Hardcoding this tagged every WhatsApp-initiated visit as the demo hospital,
+    // which is invisible on a single-hospital box and silently wrong on any other:
+    // ?h=<hospital_id> is what lets one deployment serve several sites.
+    [sessionId, process.env.HOSPITAL_ID || 'demo_hospital_01', dept.code]
   );
 
   waConversations.set(phone, { ...conv, state: 'REGISTER_NAME', session_id: sessionId, department: dept.code });
