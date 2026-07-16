@@ -118,13 +118,15 @@ async function chooseDepartment(phone, text, conv) {
   // Create session in DB
   const { v4: uuidv4 } = require('uuid');
   const sessionId = uuidv4();
+  // Honour the deployment's configured hospital (HOSPITAL_ID), falling back to the
+  // demo id. Every other entry path carries the hospital in the request — ?h=<id>
+  // off the QR — but a WhatsApp visit has no URL to carry it, so this is the only
+  // place the backend has to be told. Hardcoding it tagged every WhatsApp-initiated
+  // visit as the demo hospital: invisible on a single-site box, silently wrong for
+  // any deployment serving more than one.
   await pool.query(
     `INSERT INTO sessions (id, hospital_id, department, state, language)
      VALUES ($1, $2, $3, 'INIT', 'en')`,
-    // Honour the deployment's configured hospital, falling back to the demo id.
-    // Hardcoding this tagged every WhatsApp-initiated visit as the demo hospital,
-    // which is invisible on a single-hospital box and silently wrong on any other:
-    // ?h=<hospital_id> is what lets one deployment serve several sites.
     [sessionId, process.env.HOSPITAL_ID || 'demo_hospital_01', dept.code]
   );
 
