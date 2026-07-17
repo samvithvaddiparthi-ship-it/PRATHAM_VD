@@ -2766,6 +2766,7 @@ function FormularyManager() {
   const [inter, setInter] = useState([]);
   const [classInter, setClassInter] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [drugForm, setDrugForm] = useState({ generic: '', classes: '', aliases: '' });
   const [intForm, setIntForm] = useState({ generic_a: '', generic_b: '', severity: 'warn', description: '' });
   const { confirm, dialog } = useConfirm();
@@ -2775,12 +2776,19 @@ function FormularyManager() {
     setLoading(true);
     try {
       const [q, d, i, c] = await Promise.all([
-        api.reviewQueue().catch(() => []),
-        api.formularyDrugs().catch(() => []),
-        api.formularyInteractions().catch(() => []),
-        api.formularyClassInteractions().catch(() => []),
+        api.reviewQueue(),
+        api.formularyDrugs(),
+        api.formularyInteractions(),
+        api.formularyClassInteractions(),
       ]);
       setQueue(q || []); setDrugs(d || []); setInter(i || []); setClassInter(c || []);
+      setLoadError(null);
+    } catch (e) {
+      // Do NOT fall back to empty arrays: a failed load and a genuinely empty formulary
+      // would render identically ("0 formulary drugs", "0 curated interactions"), leaving
+      // an admin unable to tell an un-curated formulary from a backend that is down — on
+      // the screen that governs drug-interaction checking. Surface it and show nothing.
+      setLoadError(e.message || 'Request failed');
     } finally { setLoading(false); }
   }
   useEffect(() => { loadAll(); }, []);
@@ -2831,6 +2839,18 @@ function FormularyManager() {
   const sev = (s) => <span style={{ fontWeight: 700, color: s === 'block' ? 'var(--red)' : '#B9770E' }}>{(s || '').toUpperCase()}</span>;
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text-light)' }}>Loading formulary…</div>;
+
+  if (loadError) return (
+    <div style={{ ...card, borderLeft: '4px solid var(--red)' }} role="alert">
+      <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--red)', marginBottom: 6 }}>Could not load the formulary</h3>
+      <p style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text)', marginBottom: 6 }}>{loadError}</p>
+      <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
+        Counts are hidden deliberately — <strong>this is not an empty formulary</strong>, it could not be read. Prescription
+        interaction checking is served by the same backend, so verify it before relying on any check.
+      </p>
+      <button onClick={loadAll} style={{ background: 'transparent', color: 'var(--primary)', border: '1px solid var(--primary)', borderRadius: 6, padding: '4px 10px', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer' }}>Retry</button>
+    </div>
+  );
 
   return (
     <div>

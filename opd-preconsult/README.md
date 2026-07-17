@@ -208,23 +208,27 @@ opd-preconsult/
   - `ADMIN_PASSCODE` — HIS admin dashboard login (≥6 chars)
   - `QR_SIGNING_SECRET` — HMAC-signs prescription QR slips
   - Generate all of them at once with `node scripts/gen-secrets.js`
-- **(Optional) API keys** — every AI feature degrades gracefully without them:
+- **Twilio — REQUIRED in production, optional in dev.** `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_SMS_FROM` deliver the patient's login OTP.
+  - In dev (`NODE_ENV=development`), OTP runs in dry-run: the code is returned on-screen, so no Twilio account is needed.
+  - **In production, `POST /api/otp/request` returns `503 "SMS delivery is not configured."` when Twilio is unset** (`routes/otp.js`) — patients cannot log in at all. This is a hard gate, not a degradation: budget for a Twilio account before any pilot.
+- **(Optional) AI API keys** — every AI feature degrades gracefully without them:
   - `GEMINI_API_KEY` / `GROQ_API_KEY` / `ANTHROPIC_API_KEY` — LLM reports & OCR (rule-based/Tesseract fallback works without)
   - `OPENAI_API_KEY` — Whisper transcription in ambient scribe
-  - `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` (+ `TWILIO_SMS_FROM`) — real SMS OTP & WhatsApp/SMS follow-ups (dry-run/on-screen code without)
 
 ## Setup
 
 ### Local Docker Compose
 
-```bash
-cd opd-preconsult
+Run these from the directory that contains `docker-compose.yml`.
 
+```bash
 # 1. Copy env template
 cp .env.example .env
 
 # 2. Generate the REQUIRED secrets (JWT_SECRET, ADMIN_PASSCODE, QR_SIGNING_SECRET,
-#    MINIO_KMS_SECRET_KEY, OTP_SECRET) and write them into .env in one shot:
+#    OTP_SECRET, POSTGRES_PASSWORD, MINIO_*). This PRINTS them to your terminal —
+#    it does NOT write .env. Paste each line over the matching key in .env,
+#    replacing the placeholder (do not just append — duplicate keys are ambiguous).
 node scripts/gen-secrets.js
 
 # 3. (Optional) add AI/messaging keys in .env — all optional, system degrades gracefully:
@@ -240,7 +244,15 @@ docker compose up --build
 
 First-run takes ~5 minutes (image pulls, Tesseract OCR models). Subsequent starts are fast.
 
-All DB migrations (currently **26**, in `db/migrations/`) run automatically on node-backend startup — no manual step. 3 demo doctors and 2 departments are seeded.
+All DB migrations (currently **29**, in `db/migrations/`) run automatically on node-backend startup — no manual step.
+
+**Whether the install comes up with demo doctors depends on `db/migrations/005_doctors.sql` and `006_departments.sql`** — the only two migrations that differ between a testing checkout and a clean/production one. A testing checkout seeds 3 demo doctors (PIN `1234`) + the CARD/GEN departments; a clean install seeds neither, so a new hospital never deploys with demo logins. Check which one you have:
+
+```bash
+docker compose exec postgres psql -U opd_user -d opd_preconsult -c "select name, phone, department from doctors;"
+```
+
+If that returns **0 rows**, this is a clean install: log in to HIS admin (`/his`) with your `ADMIN_PASSCODE`, create a department, then create your first doctor. There is no default doctor login to fall back on. Departments are empty by design on a clean install (migration 027 removes the starter department so the patient-facing picker isn't polluted); creating one in HIS automatically seeds its base intake questions.
 
 > **Note on secrets:** if you skip step 2, node-backend falls back to a *random ephemeral* JWT key in dev — which python-backend cannot verify, so OCR/triage/report/scribe will return `401`. Set a real `JWT_SECRET` (both backends read the same `.env`). In production, node-backend and python-backend **refuse to start** without strong `JWT_SECRET` / `QR_SIGNING_SECRET`.
 
@@ -262,7 +274,16 @@ docker compose restart gateway
 # Verify a migration ran:
 docker compose exec postgres psql -U opd_user -d opd_preconsult -c "\d <table_name>"
 
-# `docker compose restart <svc>` only helps for config/env (.env) changes, NOT source edits.
+# After editing .env — `restart` does NOT pick up .env changes. A container's environment
+# is fixed when it is CREATED, and `restart` reuses the existing container. Use `up -d`,
+# which recreates whatever changed. Name no service so EVERY service reading .env is
+# updated (node-backend, python-backend and postgres all read it — updating only one
+# leaves the others authenticating with stale credentials):
+docker compose up -d
+docker compose restart gateway
+
+# `docker compose restart <svc>` picks up neither source edits NOR .env changes. It is
+# only useful for dropping gateway upstream IPs, or forcing a process to restart.
 ```
 
 > **Note:** `frontend/.dockerignore` keeps a host `node_modules` / `.next` out of the
@@ -270,6 +291,66 @@ docker compose exec postgres psql -U opd_user -d opd_preconsult -c "\d <table_na
 > leaves platform-specific native binaries (`@next/swc-win32-x64-msvc`) that
 > `COPY . .` would paste over the Linux ones installed inside the image, and
 > `next build` fails in the container. Don't remove it.
+
+## Troubleshooting
+
+> On a self-hosted production stack, add `-f docker-compose.prod.yml` to every `docker compose` command below (e.g. `docker compose -f docker-compose.prod.yml logs node-backend`), and set `DOMAIN` — keeping `DOMAIN=...` in `.env` saves passing it on every command.
+
+### `password authentication failed for user "opd_user"` (every API call 500s)
+
+**Cause: `POSTGRES_PASSWORD` only ever applies on the FIRST start of a database volume.** Postgres reads it while initialising an empty data directory and stores the password inside the DB. On every later start the variable is *ignored*. So if a `pg-data` volume already exists and you then change `POSTGRES_PASSWORD` in `.env` — or run `gen-secrets.js` and paste in fresh secrets — the app's new password no longer matches the one stored in the DB, and node-backend logs:
+
+```
+error: password authentication failed for user "opd_user"   (severity: FATAL, code: 28P01)
+```
+
+Nothing in the logs points at the volume, and `docker compose up` reports every container healthy — the node-backend healthcheck only checks that the HTTP port answers, not that the DB works.
+
+**Fix — reset the stored password to match `.env`. Non-destructive: no data is lost, and no volume is recreated.**
+
+```bash
+# `psql` over the container's local socket does not need the password, so this works
+# even while the app cannot authenticate. Use the CURRENT value from .env verbatim.
+echo "ALTER USER opd_user WITH PASSWORD '<POSTGRES_PASSWORD from .env>';" \
+  | docker compose exec -T postgres psql -U opd_user -d opd_preconsult
+# -> ALTER ROLE
+
+# Use `up -d`, NOT `restart`. A container's environment is fixed when it is CREATED:
+# `docker compose restart` reuses the existing container and therefore keeps the OLD
+# .env values, so it silently does nothing here. `up -d` recreates any container whose
+# config changed. Naming no service updates every service that reads .env — miss one
+# (e.g. python-backend) and that service alone keeps failing while the rest look fine.
+docker compose up -d
+docker compose restart gateway   # drop stale upstream IPs from any recreated backend
+```
+
+Then confirm it actually recovered (health alone won't tell you):
+
+```bash
+# Time-bound the check. `restart` REUSES the container, so its old pre-fix errors stay in
+# the log forever — a plain `logs --tail=N | grep` re-reports them and looks like the fix
+# failed. --since only shows lines written after the restart:
+docker compose logs node-backend --since 60s | grep -i "password authentication failed"   # expect NO output
+
+# And exercise a real DB read end-to-end (a healthcheck pass does not prove the DB works):
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost/api/session/scan \
+  -H 'Content-Type: application/json' \
+  -d "{\"qr_payload\":\"$(printf '{"hospital_id":"demo_hospital_01"}' | base64 -w0)\"}"   # expect 200
+```
+
+**Do NOT reach for `docker compose down -v` on a server.** It deletes the `pg-data`, `minio-data` and `caddy-data` volumes — i.e. all patient data, all uploaded documents, and Caddy's TLS certificates/account key (forcing re-issuance and burning [Let's Encrypt rate limits](https://letsencrypt.org/docs/rate-limits/)). `down -v` is only appropriate on a throwaway local install you intend to reset.
+
+### Browser warns `NET::ERR_CERT_AUTHORITY_INVALID` on `https://localhost`
+
+Expected when running `docker-compose.prod.yml` with `DOMAIN=localhost`: Caddy cannot get a public certificate for `localhost`, so it issues one from its own local CA that your browser doesn't trust. Click **Advanced → Proceed**. With a real `DOMAIN` whose DNS points at the server, Caddy fetches a genuine Let's Encrypt certificate and the warning disappears.
+
+### `502 Bad Gateway` right after rebuilding a backend
+
+nginx cached the old container's IP. `docker compose restart gateway`.
+
+### `scripts/smoke.js` fails against a production stack
+
+It needs the dev-only OTP dry-run code, which production returns `503` for (see Twilio above). It only passes against a `NODE_ENV=development` stack.
 
 ## PWA (installable web app)
 
@@ -370,6 +451,9 @@ Conventions worth knowing before touching the UI:
 ## Demo Credentials
 
 ### Doctor Login (`/doctor`)
+
+> **These exist only where `005_doctors.sql` seeded them (see [Setup](#local-docker-compose)). A clean/production install has NO doctors — create the first one in HIS admin.** In production, any active doctor still on PIN `1234` is force-deactivated at startup (`index.js`), so these credentials cannot work there by design.
+
 PIN for all demo doctors: `1234`
 
 | Doctor | Phone | Department |
@@ -377,6 +461,24 @@ PIN for all demo doctors: `1234`
 | Dr. Priya Sharma | 9876500001 | CARD |
 | Dr. Anil Reddy | 9876500002 | CARD |
 | Dr. Kavitha Menon | 9876500003 | GEN |
+
+### Creating the first doctor (clean install)
+Log in at `/his` (admin name + `ADMIN_PASSCODE`), create a department, then add a doctor — or via the API:
+
+```bash
+# 1. Admin login -> token   (note the field is admin_name, not name)
+curl -s -X POST http://localhost/api/admin/login -H 'Content-Type: application/json' \
+  -d '{"admin_name":"Your Name","passcode":"<ADMIN_PASSCODE>"}'
+
+# 2. Create a department (also seeds its base intake questions)
+curl -s -X POST http://localhost/api/admin/departments -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer <token>" -d '{"code":"CARD","name":"Cardiology"}'
+
+# 3. Create a doctor  (POST /api/doctor — admin-gated; there is no /api/doctor/create)
+curl -s -X POST http://localhost/api/doctor -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer <token>" \
+  -d '{"name":"Dr. Priya Sharma","phone":"9876500001","department":"CARD","pin":"4821"}'
+```
 
 ### HIS Admin Login (`/his`)
 Enter the **admin's name** + the **`ADMIN_PASSCODE`** you set in `.env` (the name is recorded in the audit log; the passcode is a shared credential — per-user admin accounts/SSO is a later decision).
@@ -740,11 +842,13 @@ Railway auto-deploys on git push if connected to GitHub. To force a rebuild:
 git commit --allow-empty -m "trigger redeploy" && git push
 
 # Option 2: Deploy from local directory (no git push needed)
-cd opd-preconsult
+# Run from the directory containing railway.toml:
 railway up --service pratham --detach
 ```
 
-### Troubleshooting
+### Troubleshooting (Railway-specific)
+
+For Docker Compose issues (DB password, TLS warnings, 502s) see [Troubleshooting](#troubleshooting) above.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
