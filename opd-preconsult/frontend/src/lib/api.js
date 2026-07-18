@@ -70,6 +70,7 @@ export const api = {
   createQuestion: (data) => apiFetch('/api/admin/questions', { method: 'POST', body: JSON.stringify(data) }),
   updateQuestion: (id, data) => apiFetch(`/api/admin/questions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteQuestion: (id) => apiFetch(`/api/admin/questions/${id}`, { method: 'DELETE' }),
+  reorderQuestions: (items) => apiFetch('/api/admin/questions/reorder', { method: 'POST', body: JSON.stringify({ items }) }),
 
   // Vitals
   submitVitals: (sessionId, data) => apiFetch(`/api/vitals/${sessionId}`, { method: 'POST', body: JSON.stringify(data) }),

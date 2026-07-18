@@ -1,0 +1,12 @@
+-- Per-answer triage: lets a single question raise urgency on MORE THAN ONE
+-- answer (e.g. breathlessness "at rest" = AMBER and "lying flat" = RED), which
+-- the single triage_flag/triage_answer pair could not express.
+--
+-- Shape:  { "<answer_value>": "RED" | "AMBER", ... }
+--
+-- Backward compatible: the legacy triage_flag/triage_answer columns stay and are
+-- still honoured for un-edited seed questions. The engine (utils/triage.js
+-- flagForAnswer) prefers answer_triage and falls back to the legacy pair. The
+-- HIS editor writes answer_triage and clears the legacy pair when a question is
+-- saved, so an edited question has a single source of truth.
+ALTER TABLE questionnaire_nodes ADD COLUMN IF NOT EXISTS answer_triage JSONB;

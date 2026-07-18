@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const twilio = require('twilio');
 const pool = require('../models/db');
+const { flagForAnswer } = require('../utils/triage');
 
 const router = Router();
 
@@ -198,18 +199,17 @@ async function answerQuestion(phone, text, conv) {
     [conv.session_id, nextQ.id, answerRaw]
   );
 
-  // Check triage
-  if (nextQ.triage_flag && nextQ.triage_answer) {
-    if (answerRaw.toLowerCase() === nextQ.triage_answer.toLowerCase()) {
-      await pool.query(
-        `UPDATE sessions SET triage_level = CASE
-          WHEN triage_level = 'RED' THEN 'RED'
-          WHEN $1 = 'RED' THEN 'RED'
-          WHEN triage_level = 'AMBER' THEN 'AMBER'
-          ELSE $1 END, updated_at = NOW() WHERE id = $2`,
-        [nextQ.triage_flag, conv.session_id]
-      );
-    }
+  // Check triage (per-answer map with legacy single-answer fallback)
+  const wFlag = flagForAnswer(nextQ, answerRaw);
+  if (wFlag) {
+    await pool.query(
+      `UPDATE sessions SET triage_level = CASE
+        WHEN triage_level = 'RED' THEN 'RED'
+        WHEN $1 = 'RED' THEN 'RED'
+        WHEN triage_level = 'AMBER' THEN 'AMBER'
+        ELSE $1 END, updated_at = NOW() WHERE id = $2`,
+      [wFlag, conv.session_id]
+    );
   }
 
   // Update session state

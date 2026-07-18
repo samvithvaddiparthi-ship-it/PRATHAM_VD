@@ -298,39 +298,104 @@ router.get('/questions/:department', async (req, res) => {
   }
 });
 
+// ---- Questionnaire editor helpers (Phase 1 intuitive editor) ----
+// The clinician never types an id; it's slugged from the question text.
+function slugifyId(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'q';
+}
+const VALID_TRIAGE_FLAGS = ['RED', 'AMBER'];
+// The discrete answer values a question can produce (Yes/No implicit for BOOLEAN).
+function answerValues(q_type, options_json) {
+  if (q_type === 'BOOLEAN') return ['yes', 'no'];
+  if ((q_type === 'SINGLE_SELECT' || q_type === 'MULTI_SELECT') && Array.isArray(options_json)) {
+    return options_json.map(o => (o && o.value != null ? String(o.value) : '')).filter(Boolean);
+  }
+  return [];
+}
+// Validate the triage config: every flag must be known and every trigger answer
+// must be a real option — this closes the silent value-mismatch bug the old
+// free-text had. Covers both the per-answer map (answer_triage) and the legacy
+// single triage_flag/triage_answer pair.
+function triageError({ triage_flag, triage_answer, answer_triage, q_type, options_json }) {
+  const vals = answerValues(q_type, options_json);
+  if (triage_flag) {
+    if (!VALID_TRIAGE_FLAGS.includes(triage_flag)) return `Invalid urgency "${triage_flag}"`;
+    if (!triage_answer) return 'An urgency flag needs the answer that triggers it';
+    if (vals.length && !vals.includes(String(triage_answer))) {
+      return `Urgency answer "${triage_answer}" is not one of this question's options`;
+    }
+  }
+  if (answer_triage && typeof answer_triage === 'object' && !Array.isArray(answer_triage)) {
+    for (const [ans, flag] of Object.entries(answer_triage)) {
+      if (!VALID_TRIAGE_FLAGS.includes(flag)) return `Invalid urgency "${flag}" for answer "${ans}"`;
+      if (vals.length && !vals.includes(String(ans))) {
+        return `Urgency answer "${ans}" is not one of this question's options`;
+      }
+    }
+  }
+  return null;
+}
+
 // Create question
 router.post('/questions', ...adminOnly, async (req, res) => {
   try {
     const { id, department, text_en, text_hi, text_te, q_type, options_json, required,
-            triage_flag, triage_answer, next_default, next_rules, sort_order, is_base } = req.body;
+            triage_flag, triage_answer, answer_triage, next_default, next_rules, sort_order, is_base } = req.body;
+
+    if (!department || !text_en) return res.status(400).json({ error: 'Department and English text are required' });
+    const tErr = triageError({ triage_flag, triage_answer, answer_triage, q_type, options_json });
+    if (tErr) return res.status(400).json({ error: tErr });
+
+    // Auto-generate a stable id from the text, guaranteeing uniqueness.
+    let finalId = (id && String(id).trim()) || `q_${String(department).toLowerCase()}_${slugifyId(text_en)}`;
+    const taken = new Set((await pool.query('SELECT id FROM questionnaire_nodes')).rows.map(r => r.id));
+    if (taken.has(finalId)) {
+      let n = 2;
+      while (taken.has(`${finalId}_${n}`)) n++;
+      finalId = `${finalId}_${n}`;
+    }
 
     const result = await pool.query(
-      `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, next_default, next_rules, sort_order, is_base)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [id, department, text_en, text_hi, text_te, q_type, options_json ? JSON.stringify(options_json) : null,
-       required !== false, triage_flag || null, triage_answer || null, next_default || null,
+      `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, answer_triage, next_default, next_rules, sort_order, is_base)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [finalId, String(department).toUpperCase(), text_en, text_hi || null, text_te || null, q_type,
+       options_json ? JSON.stringify(options_json) : null,
+       required !== false, triage_flag || null, triage_answer || null,
+       answer_triage ? JSON.stringify(answer_triage) : null, next_default || null,
        next_rules ? JSON.stringify(next_rules) : null, sort_order || 0, is_base === true]
     );
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('create question error:', err);
     sendServerError(res, err);
   }
 });
+
+// Columns the editor may update — anything else in the body is ignored.
+const EDITABLE_COLS = new Set(['department', 'text_en', 'text_hi', 'text_te', 'q_type',
+  'options_json', 'required', 'triage_flag', 'triage_answer', 'answer_triage', 'next_default',
+  'next_rules', 'sort_order', 'is_base', 'is_active', 'fhir_mapping']);
 
 // Update question
 router.put('/questions/:id', ...adminOnly, async (req, res) => {
   try {
     const fields = req.body;
+    const tErr = triageError({
+      triage_flag: fields.triage_flag, triage_answer: fields.triage_answer,
+      answer_triage: fields.answer_triage, q_type: fields.q_type, options_json: fields.options_json,
+    });
+    if (tErr) return res.status(400).json({ error: tErr });
+
+    const JSON_COLS = new Set(['options_json', 'next_rules', 'answer_triage']);
     const sets = [];
     const vals = [];
     let i = 1;
     for (const [k, v] of Object.entries(fields)) {
-      if (k === 'id') continue;
+      if (k === 'id' || !EDITABLE_COLS.has(k)) continue;
       sets.push(`${k} = $${i}`);
-      vals.push(k.includes('json') || k === 'next_rules' ? JSON.stringify(v) : v);
+      vals.push(JSON_COLS.has(k) ? (v == null ? null : JSON.stringify(v)) : v);
       i++;
     }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     vals.push(req.params.id);
     const result = await pool.query(
       `UPDATE questionnaire_nodes SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
@@ -350,6 +415,27 @@ router.delete('/questions/:id', ...adminOnly, async (req, res) => {
     res.json({ deleted: true });
   } catch (err) {
     sendServerError(res, err);
+  }
+});
+
+// Bulk sort-order update — powers the ↑/↓ reorder of base intake questions.
+router.post('/questions/reorder', ...adminOnly, async (req, res) => {
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  if (!items.length) return res.status(400).json({ error: 'No items to reorder' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const it of items) {
+      await client.query('UPDATE questionnaire_nodes SET sort_order = $1 WHERE id = $2',
+        [parseInt(it.sort_order) || 0, it.id]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendServerError(res, err);
+  } finally {
+    client.release();
   }
 });
 

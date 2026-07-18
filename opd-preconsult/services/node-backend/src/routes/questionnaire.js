@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const pool = require('../models/db');
 const { authMiddleware, requireSessionOwnership } = require('../middleware/auth');
+const { flagForAnswer } = require('../utils/triage');
 
 const router = Router();
 
@@ -177,21 +178,20 @@ router.post('/answer', authMiddleware, async (req, res) => {
     let triage_flag = null;
     if (nodeResult.rows.length) {
       const node = nodeResult.rows[0];
-      if (node.triage_flag && node.triage_answer) {
-        const answerVal = (answer_structured?.value || answer_raw || '').toString().toLowerCase();
-        if (answerVal === node.triage_answer.toLowerCase()) {
-          triage_flag = node.triage_flag;
-          // Update session triage if escalating
-          await pool.query(
-            `UPDATE sessions SET triage_level = CASE
-              WHEN triage_level = 'RED' THEN 'RED'
-              WHEN $1 = 'RED' THEN 'RED'
-              WHEN triage_level = 'AMBER' THEN 'AMBER'
-              ELSE $1 END,
-            updated_at = NOW() WHERE id = $2`,
-            [triage_flag, session_id]
-          );
-        }
+      const answerVal = (answer_structured?.value || answer_raw || '').toString();
+      const flag = flagForAnswer(node, answerVal);
+      if (flag) {
+        triage_flag = flag;
+        // Escalate session triage — monotonic, never downgrades.
+        await pool.query(
+          `UPDATE sessions SET triage_level = CASE
+            WHEN triage_level = 'RED' THEN 'RED'
+            WHEN $1 = 'RED' THEN 'RED'
+            WHEN triage_level = 'AMBER' THEN 'AMBER'
+            ELSE $1 END,
+          updated_at = NOW() WHERE id = $2`,
+          [triage_flag, session_id]
+        );
       }
     }
 

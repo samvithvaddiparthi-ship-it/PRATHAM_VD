@@ -1220,356 +1220,558 @@ function EditDoctorModal({ doctor, depts = [], onClose, onSaved }) {
 const EMPTY_Q = {
   id: '', department: 'CARD', text_en: '', text_hi: '', text_te: '',
   q_type: 'BOOLEAN', options_json: null, required: true,
-  triage_flag: '', triage_answer: '', next_default: '', next_rules: [],
-  sort_order: 0,
+  triage_flag: '', triage_answer: '', answer_triage: {}, next_default: '', next_rules: [],
+  sort_order: 0, is_base: false,
 };
 
-const Q_TYPES = ['BOOLEAN', 'SINGLE_SELECT', 'MULTI_SELECT', 'FREE_TEXT', 'NUMERIC', 'TERMINAL'];
+// Friendly answer-type labels — a clinician picks "Yes / No", not "BOOLEAN".
+const Q_TYPE_LABELS = {
+  BOOLEAN: 'Yes / No', SINGLE_SELECT: 'Pick one', MULTI_SELECT: 'Pick several',
+  FREE_TEXT: 'Free text', NUMERIC: 'Number',
+};
+const Q_TYPE_ORDER = ['BOOLEAN', 'SINGLE_SELECT', 'MULTI_SELECT', 'FREE_TEXT', 'NUMERIC'];
+const qIsSelect = t => t === 'SINGLE_SELECT' || t === 'MULTI_SELECT';
+// Questions whose answers are discrete single choices can branch + flag per answer.
+const qHasBranch = t => t === 'BOOLEAN' || t === 'SINGLE_SELECT';
+
+function qSlugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'q';
+}
+function qShort(s, n = 52) {
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+// The answer options a question exposes (Yes/No is implicit for BOOLEAN).
+function qAnswerOptions(q) {
+  if (q.q_type === 'BOOLEAN') return [{ value: 'yes', label_en: 'Yes' }, { value: 'no', label_en: 'No' }];
+  if (qIsSelect(q.q_type)) return q.options_json || [];
+  return [];
+}
+// Per-answer urgency map { answerValue: 'RED'|'AMBER' }. Prefers the new
+// answer_triage column; falls back to the legacy single triage_flag/answer pair.
+function qUrgencyMap(q) {
+  const m = q.answer_triage;
+  if (m && typeof m === 'object' && !Array.isArray(m)) return m;
+  if (q.triage_flag && q.triage_answer) return { [q.triage_answer]: q.triage_flag };
+  return {};
+}
+function qTopUrgency(q) {
+  const vals = Object.values(qUrgencyMap(q));
+  return vals.includes('RED') ? 'RED' : vals.includes('AMBER') ? 'AMBER' : '';
+}
+// Client-side mirror of the engine's resolveNext (routes/questionnaire.js) — used
+// only by the read-only "Preview flow" simulator.
+function qResolveNext(node, answerVal) {
+  for (const r of (node.next_rules || [])) {
+    if (String(r.if_answer) === String(answerVal)) return (r.go_to == null || r.go_to === '') ? null : r.go_to;
+  }
+  return node.next_default || null;
+}
+function qEscalate(a, b) {
+  if (a === 'RED' || b === 'RED') return 'RED';
+  if (a === 'AMBER' || b === 'AMBER') return 'AMBER';
+  return '';
+}
+
+// Live "flow health" over the department DAG — makes the branching visible so a
+// nurse can spot dead-ends, unreachable questions, loops or missing targets.
+function qComputeHealth(questions) {
+  const dag = questions.filter(q => !q.is_base && q.q_type !== 'TERMINAL');
+  const ids = new Set(questions.map(q => q.id));
+  const issues = {};
+  const add = (id, level, msg) => { (issues[id] = issues[id] || []).push({ level, msg }); };
+  const nextsOf = q => [q.next_default, ...(q.next_rules || []).map(r => r.go_to)].filter(v => v != null && v !== '');
+
+  for (const q of dag) {
+    for (const t of nextsOf(q)) if (!ids.has(t)) add(q.id, 'error', 'goes to a question that no longer exists');
+    if (qIsSelect(q.q_type) && (q.options_json || []).length < 2) add(q.id, 'warn', 'has fewer than 2 answers');
+    if ((q.options_json || []).some(o => !o.label_en)) add(q.id, 'warn', 'has an answer with no English label');
+    for (const ans of Object.keys(qUrgencyMap(q))) {
+      if (!qAnswerOptions(q).some(o => o.value === ans)) { add(q.id, 'warn', 'urgency is set on a missing answer'); break; }
+    }
+  }
+  if (dag.length) {
+    const byId = Object.fromEntries(dag.map(q => [q.id, q]));
+    const entry = [...dag].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0];
+    const seen = new Set();
+    const stack = [entry.id];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (seen.has(cur) || !byId[cur]) continue;
+      seen.add(cur);
+      nextsOf(byId[cur]).forEach(n => stack.push(n));
+    }
+    dag.forEach(q => { if (!seen.has(q.id)) add(q.id, 'warn', 'is never reached from the start'); });
+    const color = {};
+    let cyclic = false;
+    (function dfs(id) {
+      if (!byId[id]) return;
+      color[id] = 1;
+      for (const n of nextsOf(byId[id])) {
+        if (color[n] === 1) cyclic = true;
+        else if (!color[n]) dfs(n);
+      }
+      color[id] = 2;
+    })(entry.id);
+    if (cyclic) add(entry.id, 'warn', 'the flow can loop back on itself');
+    if (![...seen].some(id => nextsOf(byId[id]).length === 0)) add(entry.id, 'warn', 'no path reaches the end (vitals)');
+  }
+  return issues;
+}
+
+// ---- shared style tokens (prefixed to avoid clashes elsewhere in this file) ----
+const qLbl = { fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', display: 'block', marginBottom: 3 };
+const qPanel = { background: '#F8F9FA', borderRadius: 8, padding: 12 };
+const qErr = { color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' };
+const qOk = { color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' };
+const qMiniBtn = { background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' };
+const qSectionLabel = { fontSize: 'calc(10px * var(--fs))', fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', margin: '4px 2px 6px' };
+const qBadge = (bg, color) => ({ fontSize: 'calc(10px * var(--fs))', background: bg, color, padding: '2px 6px', borderRadius: 4, fontWeight: 600, whiteSpace: 'nowrap' });
+const qChip = active => ({ padding: '5px 12px', borderRadius: 16, border: active ? '1.5px solid var(--secondary)' : '1px solid #D0D0D0', background: active ? '#EBF5FB' : '#fff', color: active ? 'var(--secondary)' : 'var(--text)', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', fontWeight: active ? 600 : 400 });
+const qArrowBtn = disabled => ({ background: '#fff', border: '1px solid #D0D0D0', borderRadius: 4, width: 22, height: 22, lineHeight: '18px', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.35 : 1, fontSize: 'calc(12px * var(--fs))' });
+
+// Module-level components (stable identity → inputs never lose focus on re-render).
+function QEditorHeader({ title, onClose }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>{title}</h3>
+      <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
+    </div>
+  );
+}
+function QTextFields({ editing, setEditing }) {
+  return (
+    <>
+      <div>
+        <label style={qLbl}>Question (English) *</label>
+        <input className="input" required value={editing.text_en} placeholder="e.g. Do you have chest pain?"
+          onChange={e => setEditing(prev => ({ ...prev, text_en: e.target.value }))} />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label style={qLbl}>Hindi</label>
+          <input className="input" value={editing.text_hi || ''} onChange={e => setEditing(prev => ({ ...prev, text_hi: e.target.value }))} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={qLbl}>Telugu</label>
+          <input className="input" value={editing.text_te || ''} onChange={e => setEditing(prev => ({ ...prev, text_te: e.target.value }))} />
+        </div>
+      </div>
+    </>
+  );
+}
+// A "go to" picker that lists other questions by their TEXT, never their id.
+// mode 'default' → next_default (blank = end); mode 'branch' → a per-answer rule.
+function QTargetPicker({ mode, value, targets, onChange }) {
+  return (
+    <select className="input" style={{ minHeight: 34, fontSize: 'calc(12px * var(--fs))', width: '100%' }}
+      value={value} onChange={e => onChange(e.target.value)}>
+      {mode === 'branch' && <option value="__DEFAULT__">— continue to default —</option>}
+      {mode === 'default' && <option value="">▶ End intake (go to vitals)</option>}
+      {targets.map(t => <option key={t.id} value={t.id}>{qShort(t.text_en || t.id)}</option>)}
+      {mode === 'branch' && <option value="__END__">▶ End intake here</option>}
+    </select>
+  );
+}
+function QRow({ q, selected, issues, onClick, reorder }) {
+  const branchCount = (q.next_rules || []).length;
+  const topUrg = qTopUrgency(q);
+  return (
+    <div onClick={onClick} style={{
+      background: selected ? '#EBF5FB' : (q.is_base ? '#FAF8FD' : '#fff'),
+      border: selected ? '2px solid var(--secondary)' : '1px solid #E0E0E0',
+      borderLeft: q.is_base ? '3px solid #9B7FC4' : (selected ? '2px solid var(--secondary)' : '1px solid #E0E0E0'),
+      borderRadius: 10, padding: 10, marginBottom: 6, cursor: 'pointer',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, flex: 1, lineHeight: 1.3 }}>{q.text_en || q.id}</span>
+        {reorder && <span style={{ display: 'flex', gap: 2 }} onClick={e => e.stopPropagation()}>{reorder}</span>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, flexWrap: 'wrap' }}>
+        <span style={qBadge('#F0F0F0', 'var(--text)')}>{Q_TYPE_LABELS[q.q_type] || q.q_type}</span>
+        {q.is_base && <span style={qBadge('#7C5BA6', '#fff')}>BASE</span>}
+        {topUrg && <span style={qBadge(topUrg === 'RED' ? 'var(--red)' : 'var(--amber)', topUrg === 'RED' ? '#fff' : 'var(--amber-on)')}>{topUrg === 'RED' ? '🔴' : '🟡'} {topUrg}</span>}
+        {branchCount > 0 && <span style={qBadge('#E8F0FE', 'var(--secondary)')}>{branchCount} branch{branchCount === 1 ? '' : 'es'}</span>}
+      </div>
+      {issues.map((iss, k) => (
+        <p key={k} style={{ fontSize: 'calc(10px * var(--fs))', marginTop: 3, color: iss.level === 'error' ? 'var(--red)' : 'var(--amber-on)' }}>
+          {iss.level === 'error' ? '⛔' : '⚠'} {iss.msg}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 function QuestionsManager({ depts = [] }) {
   const [dept, setDept] = useState('CARD');
   const [questions, setQuestions] = useState([]);
-  const [editing, setEditing] = useState(null); // null = list view, object = form
+  const [editing, setEditing] = useState(null); // null = nothing selected
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [preview, setPreview] = useState(null); // null = off; else { currentId, path, triage }
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
   useEffect(() => { loadQuestions(); }, [dept]);
+  useEffect(() => {
+    const active = depts.filter(d => d.is_active);
+    if (active.length && !active.some(d => d.code === dept)) setDept(active[0].code);
+  }, [depts]);
 
   async function loadQuestions() {
-    // TERMINAL nodes are vestigial DAG sinks, not real questions — the patient's
-    // "done" is the /patient/done page. Hide them from the editor list.
-    try { setQuestions((await api.getQuestions(dept)).filter(q => q.q_type !== 'TERMINAL')); } catch {}
+    // TERMINAL nodes are vestigial DAG sinks (the real "done" is the patient page).
+    try { setQuestions((await api.getQuestions(dept)).filter(q => q.q_type !== 'TERMINAL')); }
+    catch { setQuestions([]); }
   }
+
+  const isNew = editing && !questions.find(q => q.id === editing.id);
+  const health = qComputeHealth(questions);
+  const totalIssues = Object.values(health).reduce((n, arr) => n + arr.length, 0);
+  const baseQs = questions.filter(q => q.is_base);
+  const dagQs = questions.filter(q => !q.is_base);
+  const targetQuestions = dagQs.filter(q => q.q_type !== 'TERMINAL' && q.id !== editing?.id);
 
   function startNew() {
-    setEditing({ ...EMPTY_Q, department: dept, sort_order: questions.length + 1 });
-    setError(''); setSuccess('');
+    const maxSort = questions.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
+    setEditing({ ...EMPTY_Q, department: dept, sort_order: maxSort + 1 });
+    setPreview(null); setShowAdvanced(false); setError(''); setSuccess('');
+  }
+  function startEdit(q) {
+    setPreview(null);
+    setEditing({ ...EMPTY_Q, ...q, triage_flag: q.triage_flag || '', triage_answer: q.triage_answer || '',
+      answer_triage: { ...qUrgencyMap(q) },
+      next_default: q.next_default || '', next_rules: q.next_rules || [], options_json: q.options_json || null });
+    setShowAdvanced(false); setError(''); setSuccess('');
   }
 
-  function startEdit(q) {
-    setEditing({
-      ...q,
-      triage_flag: q.triage_flag || '',
-      triage_answer: q.triage_answer || '',
-      next_default: q.next_default || '',
-      next_rules: q.next_rules || [],
-      options_json: q.options_json || null,
+  // per-answer branch (writes editing.next_rules) and urgency (writes triage_*)
+  function branchValueFor(ans) {
+    const rule = (editing.next_rules || []).find(r => r.if_answer === ans);
+    if (!rule) return '__DEFAULT__';
+    return (rule.go_to == null || rule.go_to === '') ? '__END__' : rule.go_to;
+  }
+  function setBranchFor(ans, picked) {
+    setEditing(prev => {
+      const rules = (prev.next_rules || []).filter(r => r.if_answer !== ans);
+      if (picked === '__END__') rules.push({ if_answer: ans, go_to: null });
+      else if (picked !== '__DEFAULT__') rules.push({ if_answer: ans, go_to: picked });
+      return { ...prev, next_rules: rules };
     });
-    setError(''); setSuccess('');
+  }
+  function urgencyFor(ans) { return (editing.answer_triage || {})[ans] || ''; }
+  function setUrgencyFor(ans, flag) {
+    setEditing(prev => {
+      const map = { ...(prev.answer_triage || {}) };
+      if (flag) map[ans] = flag; else delete map[ans];
+      return { ...prev, answer_triage: map };
+    });
+  }
+
+  // answer-label editing (SELECT types)
+  function addOption() {
+    setEditing(prev => ({ ...prev, options_json: [...(prev.options_json || []), { value: '', label_en: '', label_hi: '', label_te: '' }] }));
+  }
+  function removeOption(idx) {
+    setEditing(prev => {
+      const opt = (prev.options_json || [])[idx];
+      const map = { ...(prev.answer_triage || {}) };
+      if (opt) delete map[opt.value];
+      return {
+        ...prev,
+        options_json: (prev.options_json || []).filter((_, i) => i !== idx),
+        next_rules: (prev.next_rules || []).filter(r => r.if_answer !== opt?.value),
+        answer_triage: map,
+      };
+    });
+  }
+  function updateOption(idx, field, val) {
+    setEditing(prev => {
+      const opts = [...(prev.options_json || [])];
+      const o = { ...opts[idx], [field]: val };
+      if (field === 'label_en' && !opts[idx].value) o.value = qSlugify(val); // auto machine-value while blank
+      opts[idx] = o;
+      return { ...prev, options_json: opts };
+    });
+  }
+
+  async function moveBase(idx, dir) {
+    const j = idx + dir;
+    if (j < 0 || j >= baseQs.length) return;
+    const a = baseQs[idx], b = baseQs[j];
+    try {
+      await api.reorderQuestions([{ id: a.id, sort_order: b.sort_order }, { id: b.id, sort_order: a.sort_order }]);
+      loadQuestions();
+    } catch (err) { toast('Reorder failed: ' + err.message, 'error'); }
+  }
+
+  // ---- read-only "Preview flow" simulator (walks the department DAG) ----
+  function startPreview() {
+    const entry = [...dagQs].filter(q => q.q_type !== 'TERMINAL')
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0];
+    setEditing(null);
+    setPreview({ currentId: entry ? entry.id : null, path: [], triage: '' });
+  }
+  function previewAnswer(node, opt) {
+    const flag = qUrgencyMap(node)[opt.value] || '';
+    const nextId = qResolveNext(node, opt.value);
+    setPreview(prev => ({
+      currentId: nextId,
+      path: [...prev.path, { q: node.text_en, a: opt.label_en, flag }],
+      triage: qEscalate(prev.triage, flag),
+    }));
   }
 
   async function handleSave(e) {
     e.preventDefault();
     setError(''); setSuccess('');
-    if (!editing.id || !editing.text_en) { setError('ID and English text required'); return; }
-
+    if (!editing.text_en) { setError('Question text (English) is required'); return; }
     setSaving(true);
     try {
-      const data = {
-        ...editing,
-        triage_flag: editing.triage_flag || null,
-        triage_answer: editing.triage_answer || null,
+      const sel = qIsSelect(editing.q_type);
+      const canTriage = editing.q_type === 'BOOLEAN' || editing.q_type === 'SINGLE_SELECT';
+      const triageMap = canTriage
+        ? Object.fromEntries(Object.entries(editing.answer_triage || {}).filter(([, f]) => f))
+        : {};
+      const payload = {
+        id: editing.id || undefined,
+        department: editing.department || dept,
+        text_en: editing.text_en, text_hi: editing.text_hi || null, text_te: editing.text_te || null,
+        q_type: editing.q_type,
+        options_json: sel && editing.options_json?.length ? editing.options_json : null,
+        required: editing.required !== false,
+        triage_flag: null, triage_answer: null,
+        answer_triage: Object.keys(triageMap).length ? triageMap : null,
         next_default: editing.next_default || null,
         next_rules: editing.next_rules?.length ? editing.next_rules : null,
-        options_json: editing.options_json?.length ? editing.options_json : null,
+        sort_order: editing.sort_order || 0, is_base: editing.is_base === true,
       };
-
-      const existing = questions.find(q => q.id === editing.id);
-      if (existing) {
-        await api.updateQuestion(editing.id, data);
-        setSuccess('Question updated');
+      if (isNew) {
+        const created = await api.createQuestion(payload);
+        setSuccess('Question added');
+        await loadQuestions();
+        if (created) setEditing({ ...EMPTY_Q, ...created, next_rules: created.next_rules || [] });
       } else {
-        await api.createQuestion(data);
-        setSuccess('Question created');
+        await api.updateQuestion(editing.id, payload);
+        setSuccess('Saved');
+        loadQuestions();
       }
-      loadQuestions();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setSaving(false); }
   }
 
   async function handleDelete(id) {
     if (!(await confirm({
-      title: `Delete question "${id}"?`,
-      message: 'This may break the questionnaire (DAG) flow if other questions depend on it.',
-      confirmLabel: 'Delete',
-      danger: true,
+      title: 'Delete this question?',
+      message: 'Any branches pointing to it will need re-pointing. This cannot be undone.',
+      confirmLabel: 'Delete', danger: true,
     }))) return;
-    try {
-      await api.deleteQuestion(id);
-      loadQuestions();
-      if (editing?.id === id) setEditing(null);
-    } catch (err) {
-      toast('Failed: ' + err.message, 'error');
-    }
+    try { await api.deleteQuestion(id); if (editing?.id === id) setEditing(null); loadQuestions(); }
+    catch (err) { toast('Failed: ' + err.message, 'error'); }
   }
 
-  // Options editor helpers
-  function setOptions(opts) {
-    setEditing(prev => ({ ...prev, options_json: opts }));
-  }
-  function addOption() {
-    setOptions([...(editing.options_json || []), { value: '', label_en: '', label_hi: '', label_te: '' }]);
-  }
-  function removeOption(idx) {
-    setOptions((editing.options_json || []).filter((_, i) => i !== idx));
-  }
-  function updateOption(idx, field, val) {
-    const opts = [...(editing.options_json || [])];
-    opts[idx] = { ...opts[idx], [field]: val };
-    setOptions(opts);
-  }
-
-  // Next rules editor helpers
-  function addRule() {
-    setEditing(prev => ({ ...prev, next_rules: [...(prev.next_rules || []), { if_answer: '', go_to: '' }] }));
-  }
-  function removeRule(idx) {
-    setEditing(prev => ({ ...prev, next_rules: (prev.next_rules || []).filter((_, i) => i !== idx) }));
-  }
-  function updateRule(idx, field, val) {
-    setEditing(prev => {
-      const rules = [...(prev.next_rules || [])];
-      rules[idx] = { ...rules[idx], [field]: val };
-      return { ...prev, next_rules: rules };
-    });
+  function renderBaseEditor() {
+    return (
+      <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <QEditorHeader title="Shared intake question" onClose={() => setEditing(null)} />
+        <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', background: '#FAF8FD', border: '1px solid #E7DFF3', borderRadius: 8, padding: '8px 10px' }}>
+          This is one of the fixed intake questions asked in every department. You can reword it and its translations; order is set with ↑ ↓ in the list. These run one after another — no branching or urgency here.
+        </div>
+        <QTextFields editing={editing} setEditing={setEditing} />
+        {error && <p style={qErr}>{error}</p>}
+        {success && <p style={qOk}>{success}</p>}
+        <div><button className="btn btn-primary" type="submit" disabled={saving} style={{ width: 'auto', padding: '0 20px' }}>{saving ? 'Saving…' : 'Save wording'}</button></div>
+      </form>
+    );
   }
 
-  const allIds = questions.map(q => q.id);
+  function renderDagEditor() {
+    const sel = qIsSelect(editing.q_type);
+    const showAnswers = sel || editing.q_type === 'BOOLEAN';
+    const showBranch = qHasBranch(editing.q_type);
+    const answers = qAnswerOptions(editing);
+    return (
+      <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <QEditorHeader title={isNew ? 'New question' : 'Edit question'} onClose={() => setEditing(null)} />
+        <QTextFields editing={editing} setEditing={setEditing} />
 
-  return (
-    <div style={{ display: 'flex', gap: 16 }}>
-      {dialog}
-      {toastView}
-      {/* Left: question list */}
-      <div style={{ width: 380, flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-          <select className="input" style={{ width: 160 }} value={dept} onChange={e => setDept(e.target.value)}>
-            {depts.filter(d => d.is_active).map(d => (
-              <option key={d.code} value={d.code}>{d.name}</option>
+        <div>
+          <label style={qLbl}>How does the patient answer?</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {Q_TYPE_ORDER.map(t => (
+              <button type="button" key={t} onClick={() => setEditing(prev => ({ ...prev, q_type: t }))} style={qChip(editing.q_type === t)}>{Q_TYPE_LABELS[t]}</button>
             ))}
-          </select>
-          <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 16px' }}
-            onClick={startNew}>+ Add Question</button>
+          </div>
         </div>
 
-        <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 8 }}>
-          {questions.length} questions (sorted by flow order) ·
-          <span style={{ color: '#7C5BA6', fontWeight: 600 }}> BASE</span> = shared intake, then department flow
-        </p>
-
-        {/* Independent scroll for the question list — the dept selector and count
-            above stay put while only this list scrolls. */}
-        <div style={{ maxHeight: 'calc(100vh - 240px)', overflowY: 'auto', paddingRight: 6 }}>
-          {questions.map((q, idx) => {
-            const prev = questions[idx - 1];
-            const dagStart = !q.is_base && (idx === 0 || prev?.is_base);
-            return (
-            <div key={q.id}>
-            {dagStart && (
-              <p style={{ fontSize: 'calc(10px * var(--fs))', fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-light)', textTransform: 'uppercase', margin: '10px 2px 4px' }}>
-                — Department questions —
-              </p>
-            )}
-            <div onClick={() => startEdit(q)}
-              style={{
-                background: editing?.id === q.id ? '#EBF5FB' : (q.is_base ? '#FAF8FD' : '#fff'),
-                border: editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0',
-                borderLeft: q.is_base ? '3px solid #9B7FC4' : (editing?.id === q.id ? '2px solid var(--secondary)' : '1px solid #E0E0E0'),
-                borderRadius: 10, padding: 12, marginBottom: 6, cursor: 'pointer',
-              }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', minWidth: 24 }}>{q.sort_order}</span>
-                <span style={{ fontSize: 'calc(13px * var(--fs))', fontWeight: 600, flex: 1 }}>{q.id}</span>
-                {q.is_base && (
-                  <span style={{ fontSize: 'calc(10px * var(--fs))', background: '#7C5BA6', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>BASE</span>
-                )}
-                <span style={{ fontSize: 'calc(10px * var(--fs))', background: '#F0F0F0', padding: '2px 6px', borderRadius: 4 }}>{q.q_type}</span>
-                {q.triage_flag && (
-                  // Amber is a light swatch: white on it is 1.93:1. It always pairs
-                  // with the dark --amber-on, never with white. Red keeps white.
-                  <span style={{ fontSize: 'calc(10px * var(--fs))', background: q.triage_flag === 'RED' ? 'var(--red)' : 'var(--amber)', color: q.triage_flag === 'RED' ? '#fff' : 'var(--amber-on)', padding: '2px 6px', borderRadius: 4 }}>{q.triage_flag}</span>
+        {showAnswers && (
+          <div style={qPanel}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 700 }}>When the patient answers…</label>
+              {sel && <button type="button" onClick={addOption} style={qMiniBtn}>+ Add answer</button>}
+            </div>
+            {answers.length === 0 && <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Add at least one answer.</p>}
+            {answers.map((opt, i) => (
+              <div key={i} style={{ borderTop: i ? '1px solid #ECECEC' : 'none', paddingTop: i ? 8 : 0, marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {sel ? (
+                    <>
+                      <input className="input" style={{ flex: '1 1 130px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_en} placeholder="Answer (English)" onChange={e => updateOption(i, 'label_en', e.target.value)} />
+                      <input className="input" style={{ flex: '1 1 80px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_hi || ''} placeholder="Hindi" onChange={e => updateOption(i, 'label_hi', e.target.value)} />
+                      <input className="input" style={{ flex: '1 1 80px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_te || ''} placeholder="Telugu" onChange={e => updateOption(i, 'label_te', e.target.value)} />
+                      <button type="button" onClick={() => removeOption(i)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
+                    </>
+                  ) : (
+                    <span style={{ fontWeight: 600, fontSize: 'calc(13px * var(--fs))', minWidth: 44 }}>{opt.label_en}</span>
+                  )}
+                </div>
+                {showBranch && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>urgency</span>
+                    <select className="input" style={{ width: 128, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={urgencyFor(opt.value)} onChange={e => setUrgencyFor(opt.value, e.target.value)}>
+                      <option value="">— none —</option>
+                      <option value="AMBER">🟡 Amber</option>
+                      <option value="RED">🔴 Red</option>
+                    </select>
+                    <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>→ then ask</span>
+                    <div style={{ flex: '1 1 170px' }}>
+                      <QTargetPicker mode="branch" value={branchValueFor(opt.value)} targets={targetQuestions} onChange={v => setBranchFor(opt.value, v)} />
+                    </div>
+                  </div>
                 )}
               </div>
-              <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginTop: 4, lineHeight: 1.3 }}>{q.text_en}</p>
-              {q.next_default && <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--secondary)', marginTop: 2 }}>next: {q.next_default}</p>}
-            </div>
-            </div>
-            );
-          })}
+            ))}
+            {showBranch && <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)', marginTop: 2 }}>Each answer can carry its own urgency; the most urgent one triggered during intake wins.</p>}
+          </div>
+        )}
+
+        <div>
+          <label style={qLbl}>{showBranch ? 'If no branch above matches, go to' : 'After this question, go to'}</label>
+          <QTargetPicker mode="default" value={editing.next_default || ''} targets={targetQuestions} onChange={v => setEditing(prev => ({ ...prev, next_default: v }))} />
         </div>
-      </div>
 
-      {/* Right: editor form */}
-      <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        {!editing ? (
-          <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click "+ Add Question"</p>
-        ) : (
-          <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>
-                {questions.find(q => q.id === editing.id) ? 'Edit Question' : 'New Question'}
-              </h3>
-              <button type="button" onClick={() => setEditing(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
-            </div>
-
-            {/* ID + Department */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question ID *</label>
-                <input className="input" required value={editing.id} placeholder="q_my_question"
-                  onChange={e => setEditing({ ...editing, id: e.target.value })}
-                  disabled={!!questions.find(q => q.id === editing.id)} />
-              </div>
-              <div style={{ width: 120 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Sort Order</label>
-                <input className="input" type="number" value={editing.sort_order}
-                  onChange={e => setEditing({ ...editing, sort_order: parseInt(e.target.value) || 0 })} />
-              </div>
-            </div>
-
-            {/* Text fields */}
-            <div>
-              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question text (English) *</label>
-              <input className="input" required value={editing.text_en}
-                onChange={e => setEditing({ ...editing, text_en: e.target.value })} />
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Hindi</label>
-                <input className="input" value={editing.text_hi || ''}
-                  onChange={e => setEditing({ ...editing, text_hi: e.target.value })} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Telugu</label>
-                <input className="input" value={editing.text_te || ''}
-                  onChange={e => setEditing({ ...editing, text_te: e.target.value })} />
-              </div>
-            </div>
-
-            {/* Type */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Question Type *</label>
-                <select className="input" value={editing.q_type}
-                  onChange={e => setEditing({ ...editing, q_type: e.target.value })}>
-                  {Q_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+        <div>
+          <button type="button" onClick={() => setShowAdvanced(s => !s)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', padding: 0 }}>{showAdvanced ? '▾' : '▸'} Advanced</button>
+          {showAdvanced && (
+            <div style={{ ...qPanel, marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 200px' }}>
+                <label style={qLbl}>Question ID (auto-generated)</label>
+                <input className="input" value={editing.id} disabled={!isNew} placeholder="(made from the text on save)" onChange={e => setEditing(prev => ({ ...prev, id: e.target.value }))} />
               </div>
               <div style={{ width: 100 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Required</label>
-                <select className="input" value={editing.required ? 'true' : 'false'}
-                  onChange={e => setEditing({ ...editing, required: e.target.value === 'true' })}>
-                  <option value="true">Yes</option>
-                  <option value="false">No</option>
+                <label style={qLbl}>Order</label>
+                <input className="input" type="number" value={editing.sort_order} onChange={e => setEditing(prev => ({ ...prev, sort_order: parseInt(e.target.value) || 0 }))} />
+              </div>
+              <div style={{ width: 120 }}>
+                <label style={qLbl}>Required</label>
+                <select className="input" value={editing.required ? 'true' : 'false'} onChange={e => setEditing(prev => ({ ...prev, required: e.target.value === 'true' }))}>
+                  <option value="true">Yes</option><option value="false">No</option>
                 </select>
               </div>
             </div>
+          )}
+        </div>
 
-            {/* Options (for SELECT types) */}
-            {(editing.q_type === 'SINGLE_SELECT' || editing.q_type === 'MULTI_SELECT') && (
-              <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Options</label>
-                  <button type="button" onClick={addOption}
-                    style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' }}>
-                    + Add
-                  </button>
-                </div>
-                {(editing.options_json || []).map((opt, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.value}
-                      onChange={e => updateOption(i, 'value', e.target.value)} placeholder="value" />
-                    <input className="input" style={{ flex: 2, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_en}
-                      onChange={e => updateOption(i, 'label_en', e.target.value)} placeholder="English label" />
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_hi || ''}
-                      onChange={e => updateOption(i, 'label_hi', e.target.value)} placeholder="Hindi" />
-                    <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={opt.label_te || ''}
-                      onChange={e => updateOption(i, 'label_te', e.target.value)} placeholder="Telugu" />
-                    <button type="button" onClick={() => removeOption(i)}
-                      style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
-                  </div>
-                ))}
+        {error && <p style={qErr}>{error}</p>}
+        {success && <p style={qOk}>{success}</p>}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>{saving ? 'Saving…' : 'Save question'}</button>
+          {!isNew && <button type="button" className="btn btn-outline" onClick={() => handleDelete(editing.id)} style={{ borderColor: 'var(--red)', color: 'var(--red)', width: 'auto', padding: '0 16px' }}>Delete</button>}
+        </div>
+      </form>
+    );
+  }
+
+  function renderPreview() {
+    const node = preview.currentId ? questions.find(q => q.id === preview.currentId && !q.is_base) : null;
+    const opts = node ? qAnswerOptions(node) : [];
+    const urg = f => f && <span style={qBadge(f === 'RED' ? 'var(--red)' : 'var(--amber)', f === 'RED' ? '#fff' : 'var(--amber-on)')}>{f === 'RED' ? '🔴' : '🟡'} {f}</span>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Preview flow — {depts.find(d => d.code === dept)?.name || dept}</h3>
+          <button type="button" onClick={startPreview} style={qMiniBtn}>Restart</button>
+          <button type="button" onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
+        </div>
+        <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          Running urgency: {preview.triage ? urg(preview.triage) : <span style={{ color: 'var(--green)' }}>none yet</span>}
+        </div>
+        {preview.path.length > 0 && (
+          <div style={qPanel}>
+            {preview.path.map((s, i) => (
+              <div key={i} style={{ fontSize: 'calc(12px * var(--fs))', marginBottom: 4, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-light)' }}>{i + 1}.</span> {s.q} → <strong>{s.a}</strong> {s.flag ? urg(s.flag) : null}
               </div>
-            )}
-
-            {/* Triage */}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Triage Flag (if answer triggers)</label>
-                <select className="input" value={editing.triage_flag || ''}
-                  onChange={e => setEditing({ ...editing, triage_flag: e.target.value })}>
-                  <option value="">None</option>
-                  <option value="RED">RED</option>
-                  <option value="AMBER">AMBER</option>
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Trigger answer value</label>
-                <input className="input" value={editing.triage_answer || ''}
-                  onChange={e => setEditing({ ...editing, triage_answer: e.target.value })} placeholder="e.g. yes" />
-              </div>
-            </div>
-
-            {/* Navigation */}
-            <div>
-              <label style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Default next question</label>
-              <select className="input" value={editing.next_default || ''}
-                onChange={e => setEditing({ ...editing, next_default: e.target.value })}>
-                <option value="">None (terminal)</option>
-                {allIds.filter(id => id !== editing.id).map(id => <option key={id} value={id}>{id}</option>)}
-              </select>
-            </div>
-
-            {/* Conditional next rules */}
-            <div style={{ background: '#F8F9FA', borderRadius: 8, padding: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <label style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Branching Rules</label>
-                <button type="button" onClick={addRule}
-                  style={{ background: 'var(--secondary)', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 'calc(11px * var(--fs))', cursor: 'pointer' }}>
-                  + Add Rule
+            ))}
+          </div>
+        )}
+        {!node ? (
+          <div style={{ padding: 16, borderRadius: 8, background: '#EAF7EF', color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>
+            ✓ End of department questions — the patient continues to Vitals.
+            {preview.triage && <div style={{ marginTop: 6, color: 'var(--text)' }}>Final urgency from this path: {urg(preview.triage)}</div>}
+          </div>
+        ) : (
+          <div>
+            <p style={{ fontSize: 'calc(15px * var(--fs))', fontWeight: 600, marginBottom: 10 }}>{node.text_en}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {opts.length > 0 ? opts.map((o, i) => (
+                <button key={i} type="button" onClick={() => previewAnswer(node, o)}
+                  style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 8, border: '1px solid #D0D0D0', background: '#fff', cursor: 'pointer', fontSize: 'calc(13px * var(--fs))', display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {o.label_en || o.value} {qUrgencyMap(node)[o.value] ? urg(qUrgencyMap(node)[o.value]) : null}
                 </button>
-              </div>
-              <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)', marginBottom: 6 }}>If answer equals X, go to question Y (overrides default next)</p>
-              {(editing.next_rules || []).map((rule, i) => (
-                <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
-                  <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>If answer =</span>
-                  <input className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={rule.if_answer}
-                    onChange={e => updateRule(i, 'if_answer', e.target.value)} placeholder="yes" />
-                  <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>go to</span>
-                  <select className="input" style={{ flex: 1, minHeight: 32, fontSize: 'calc(12px * var(--fs))' }} value={rule.go_to}
-                    onChange={e => updateRule(i, 'go_to', e.target.value)}>
-                    <option value="">--</option>
-                    {allIds.filter(id => id !== editing.id).map(id => <option key={id} value={id}>{id}</option>)}
-                  </select>
-                  <button type="button" onClick={() => removeRule(i)}
-                    style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 'calc(16px * var(--fs))' }}>✕</button>
-                </div>
-              ))}
-            </div>
-
-            {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
-            {success && <p style={{ color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>{success}</p>}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-primary" type="submit" disabled={saving} style={{ flex: 1 }}>
-                {saving ? 'Saving...' : 'Save Question'}
-              </button>
-              {questions.find(q => q.id === editing.id) && (
-                <button type="button" className="btn btn-outline" onClick={() => handleDelete(editing.id)}
-                  style={{ borderColor: 'var(--red)', color: 'var(--red)', width: 'auto', padding: '0 16px' }}>
-                  Delete
+              )) : (
+                <button type="button" onClick={() => previewAnswer(node, { value: '__any__', label_en: '(any answer)' })}
+                  style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 8, border: '1px solid #D0D0D0', background: '#fff', cursor: 'pointer', fontSize: 'calc(13px * var(--fs))' }}>
+                  Continue →
                 </button>
               )}
             </div>
-          </form>
+          </div>
         )}
+        <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Base intake questions run first (in order); this previews the department’s branching path only.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 16 }}>
+      {dialog}{toastView}
+      <div style={{ width: 400, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+          <select className="input" style={{ width: 170 }} value={dept} onChange={e => setDept(e.target.value)}>
+            {depts.filter(d => d.is_active).map(d => <option key={d.code} value={d.code}>{d.name}</option>)}
+          </select>
+          <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 14px' }} onClick={startNew}>+ Add question</button>
+          <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startPreview} disabled={!dagQs.length} title="Walk the branching as a patient would">▶ Preview</button>
+        </div>
+
+        <div style={{ fontSize: 'calc(12px * var(--fs))', marginBottom: 8, padding: '6px 10px', borderRadius: 8,
+          background: totalIssues ? '#FDF3E2' : '#EAF7EF', color: totalIssues ? 'var(--amber-on)' : 'var(--green)' }}>
+          {totalIssues ? `⚠ Flow check: ${totalIssues} thing${totalIssues === 1 ? '' : 's'} to review below` : '✓ Flow check: no issues'}
+        </div>
+
+        <div style={{ maxHeight: 'calc(100vh - 250px)', overflowY: 'auto', paddingRight: 6 }}>
+          {baseQs.length > 0 && <p style={qSectionLabel}>Shared intake · reorder with ↑ ↓</p>}
+          {baseQs.map((q, i) => (
+            <QRow key={q.id} q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)}
+              reorder={<>
+                <button type="button" title="Move up" disabled={i === 0} onClick={e => { e.stopPropagation(); moveBase(i, -1); }} style={qArrowBtn(i === 0)}>↑</button>
+                <button type="button" title="Move down" disabled={i === baseQs.length - 1} onClick={e => { e.stopPropagation(); moveBase(i, 1); }} style={qArrowBtn(i === baseQs.length - 1)}>↓</button>
+              </>} />
+          ))}
+          {dagQs.length > 0 && <p style={{ ...qSectionLabel, marginTop: 12 }}>Department questions · branching</p>}
+          {dagQs.map(q => (
+            <QRow key={q.id} q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)} />
+          ))}
+          {questions.length === 0 && <p style={{ color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', padding: 8 }}>No questions yet. Click “+ Add question”.</p>}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        {preview ? renderPreview()
+          : !editing ? <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click “+ Add question”.</p>
+          : editing.is_base ? renderBaseEditor() : renderDagEditor()}
       </div>
     </div>
   );
