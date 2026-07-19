@@ -1410,12 +1410,25 @@ function QRow({ q, selected, issues, onClick, reorder }) {
   );
 }
 
-// ---- read-only Flow Map: a layered node→node diagram of the department DAG ----
+// ---- read-only Flow Map: a top-down flow diagram of the department branching ----
 // Dependency-free (pure SVG + positioned divs). Uses the SAME edge model as the
 // engine: per-answer next_rules override next_default; a null/blank target = end
-// (→ Vitals). Nodes are placed in columns by longest-path depth from the entry
-// question (cycle-guarded by an iteration cap), so arrows generally read L→R.
-const QFM = { NW: 184, NH: 58, GX: 66, GY: 20, PAD: 16 };
+// (→ Vitals). The flow reads top→bottom: the main path runs straight down a spine
+// and answer-branches fork off into side lanes, so a rejoining detour reads as a
+// fork+merge rather than an inline step. Rows = longest-path depth from the entry
+// (cycle-guarded by an iteration cap); lanes pack branches to the right and reuse.
+const QFM = { NW: 188, NH: 72, GX: 30, GY: 30, PAD: 18 };
+
+// True when the engine can NEVER fall through to next_default: a Yes/No or
+// single-select question where every answer already has its own branch rule.
+// Drawing that default edge would imply a path the patient can't actually take.
+function qAllAnswersBranched(q) {
+  if (!qHasBranch(q.q_type)) return false;
+  const opts = qAnswerOptions(q);
+  if (!opts.length) return false;
+  const covered = new Set((q.next_rules || []).map(r => String(r.if_answer)));
+  return opts.every(o => covered.has(String(o.value)));
+}
 function qFlowEdges(q) {
   const list = [];
   for (const r of (q.next_rules || [])) {
@@ -1423,8 +1436,10 @@ function qFlowEdges(q) {
     const to = (r.go_to == null || r.go_to === '') ? null : r.go_to;
     list.push({ to, kind: 'branch', label: opt?.label_en || String(r.if_answer), urg: qUrgencyMap(q)[r.if_answer] || '' });
   }
-  const dflt = (q.next_default == null || q.next_default === '') ? null : q.next_default;
-  list.push({ to: dflt, kind: 'default', label: '', urg: '' });
+  if (!qAllAnswersBranched(q)) {
+    const dflt = (q.next_default == null || q.next_default === '') ? null : q.next_default;
+    list.push({ to: dflt, kind: 'default', label: '', urg: '' });
+  }
   return list;
 }
 function qFlowLayout(questions) {
@@ -1433,31 +1448,70 @@ function qFlowLayout(questions) {
   if (!nodes.length) return null;
   const byId = Object.fromEntries(nodes.map(q => [q.id, q]));
   const entry = [...nodes].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0];
-  const level = {}; nodes.forEach(q => level[q.id] = 0);
+
+  // row = longest-path depth from the entry question (vertical position).
+  const row = {}; nodes.forEach(q => row[q.id] = 0);
   for (let it = 0; it <= nodes.length; it++) {
     let changed = false;
     for (const q of nodes) for (const e of qFlowEdges(q)) {
-      if (e.to && byId[e.to] && level[e.to] < level[q.id] + 1) { level[e.to] = level[q.id] + 1; changed = true; }
+      if (e.to && byId[e.to] && row[e.to] < row[q.id] + 1) { row[e.to] = row[q.id] + 1; changed = true; }
     }
     if (!changed) break;
   }
-  const reached = new Set(); const stack = [entry.id];
-  while (stack.length) {
-    const c = stack.pop();
+  const reached = new Set(); const rstack = [entry.id];
+  while (rstack.length) {
+    const c = rstack.pop();
     if (reached.has(c) || !byId[c]) continue;
     reached.add(c);
-    qFlowEdges(byId[c]).forEach(e => e.to && stack.push(e.to));
+    qFlowEdges(byId[c]).forEach(e => e.to && rstack.push(e.to));
   }
-  const cols = {};
-  nodes.forEach(q => { (cols[level[q.id]] = cols[level[q.id]] || []).push(q); });
-  Object.values(cols).forEach(arr => arr.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)));
-  const maxLevel = Math.max(...nodes.map(q => level[q.id]));
-  const maxRows = Math.max(...Object.values(cols).map(a => a.length));
+
+  // lane = horizontal column. The main path stays in lane 0; each branch that
+  // spawns a detour gets the shallowest free lane to the right (reused once its
+  // rows are clear). The "main" successor is the branch reaching deepest.
+  const primarySucc = q => {
+    const outs = qFlowEdges(q).filter(e => e.to && byId[e.to]);
+    if (!outs.length) return null;
+    return outs.slice().sort((a, b) => {
+      if (row[b.to] !== row[a.to]) return row[b.to] - row[a.to];
+      if ((a.kind === 'default') !== (b.kind === 'default')) return a.kind === 'default' ? -1 : 1;
+      return (byId[a.to].sort_order || 0) - (byId[b.to].sort_order || 0);
+    })[0].to;
+  };
+  const laneOf = {};
+  const laneMaxRow = { 0: Infinity }; // lane 0 = spine, never reused for a detour
+  const claimLane = minRow => {
+    let best = null;
+    for (const l of Object.keys(laneMaxRow)) {
+      const li = Number(l);
+      if (li >= 1 && laneMaxRow[li] < minRow && (best === null || li < best)) best = li;
+    }
+    if (best !== null) return best;
+    return Math.max(0, ...Object.keys(laneMaxRow).map(Number)) + 1;
+  };
+  const assignChain = (startId, lane) => {
+    const detours = [];
+    let id = startId, maxR = -1;
+    while (id && byId[id] && laneOf[id] === undefined) {
+      laneOf[id] = lane; maxR = Math.max(maxR, row[id]);
+      const prim = primarySucc(byId[id]);
+      for (const e of qFlowEdges(byId[id])) {
+        if (e.to && byId[e.to] && e.to !== prim && laneOf[e.to] === undefined) detours.push(e.to);
+      }
+      id = prim;
+    }
+    if (lane >= 1) laneMaxRow[lane] = Math.max(laneMaxRow[lane] ?? -1, maxR);
+    for (const d of detours) if (laneOf[d] === undefined) assignChain(d, claimLane(row[d]));
+  };
+  assignChain(entry.id, 0);
+  nodes.forEach(q => { if (laneOf[q.id] === undefined) assignChain(q.id, claimLane(row[q.id])); });
+
+  const maxLane = Math.max(0, ...Object.values(laneOf));
+  const maxRow = Math.max(...nodes.map(q => row[q.id]));
   const pos = {};
-  Object.entries(cols).forEach(([lv, arr]) => arr.forEach((q, i) => {
-    pos[q.id] = { x: PAD + Number(lv) * (NW + GX), y: PAD + i * (NH + GY) };
-  }));
-  const endPos = { x: PAD + (maxLevel + 1) * (NW + GX), y: PAD + ((maxRows - 1) / 2) * (NH + GY) };
+  nodes.forEach(q => { pos[q.id] = { x: PAD + laneOf[q.id] * (NW + GX), y: PAD + row[q.id] * (NH + GY) }; });
+  const endPos = { x: PAD, y: PAD + (maxRow + 1) * (NH + GY) }; // under the spine
+
   const edges = [];
   nodes.forEach(q => {
     const s = pos[q.id];
@@ -1466,50 +1520,63 @@ function qFlowLayout(questions) {
       const t = e.to ? pos[e.to] : endPos;
       edges.push({
         from: q.id, ...e,
-        sx: s.x + NW, sy: s.y + NH / 2,
-        tx: t.x, ty: t.y + NH / 2,
+        sx: s.x + NW / 2, sy: s.y + NH,   // bottom-centre of source
+        tx: t.x + NW / 2, ty: t.y,        // top-centre of target
       });
     });
   });
-  const width = endPos.x + NW + PAD;
-  const height = PAD * 2 + maxRows * (NH + GY);
+  const width = PAD * 2 + (maxLane + 1) * NW + maxLane * GX;
+  const height = endPos.y + NH + PAD;
   return { nodes: nodes.map(q => ({ q, ...pos[q.id], reached: reached.has(q.id) })), edges, endPos, width, height };
+}
+// A small "node graph" glyph (one node forking to two) — a real affordance for the
+// flow map, in place of the poorly-rendering 🗺 emoji. Inherits the button's colour.
+function QGraphIcon({ size = 15 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M8 6 L15.5 11.2 M8 18 L15.5 12.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <circle cx="6" cy="6" r="2.7" fill="currentColor" />
+      <circle cx="18" cy="12" r="2.7" fill="currentColor" />
+      <circle cx="6" cy="18" r="2.7" fill="currentColor" />
+    </svg>
+  );
 }
 function QFlowMap({ questions, deptName, health, onPick, onClose }) {
   const layout = qFlowLayout(questions);
   const { NW, NH } = QFM;
-  const edgeColor = e => e.kind === 'default' ? '#B9C0CC'
-    : e.urg === 'RED' ? 'var(--red)' : e.urg === 'AMBER' ? 'var(--amber-on)' : 'var(--secondary)';
+  const edgeColor = e => e.kind === 'default' ? '#AAB2C0'
+    : e.urg === 'RED' ? 'var(--red)' : e.urg === 'AMBER' ? 'var(--amber-text)' : 'var(--secondary)';
+  // Vertical S-curve: leave the source downward, arrive at the target from above.
   const path = e => {
-    const dx = Math.max(28, Math.abs(e.tx - e.sx) / 2);
-    return `M ${e.sx} ${e.sy} C ${e.sx + dx} ${e.sy} ${e.tx - dx} ${e.ty} ${e.tx} ${e.ty}`;
+    const dy = Math.max(18, Math.abs(e.ty - e.sy) / 2);
+    return `M ${e.sx} ${e.sy} C ${e.sx} ${e.sy + dy} ${e.tx} ${e.ty - dy} ${e.tx} ${e.ty}`;
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Flow map — {deptName}</h3>
         <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span><svg width="26" height="8" style={{ verticalAlign: 'middle' }}><line x1="0" y1="4" x2="26" y2="4" stroke="#B9C0CC" strokeWidth="2" /></svg> default</span>
+          <span><svg width="26" height="8" style={{ verticalAlign: 'middle' }}><line x1="0" y1="4" x2="26" y2="4" stroke="#AAB2C0" strokeWidth="2" strokeDasharray="5 4" /></svg> default</span>
           <span><svg width="26" height="8" style={{ verticalAlign: 'middle' }}><line x1="0" y1="4" x2="26" y2="4" stroke="var(--secondary)" strokeWidth="2" /></svg> answer branch</span>
           <span style={{ color: 'var(--red)' }}>● red</span>
-          <span style={{ color: 'var(--amber-on)' }}>● amber urgency</span>
+          <span style={{ color: 'var(--amber-text)' }}><span style={{ color: 'var(--amber)' }}>●</span> amber urgency</span>
         </span>
         <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
       </div>
       {!layout ? (
         <p style={{ color: 'var(--text-light)', fontSize: 'calc(13px * var(--fs))', padding: 8 }}>No department questions to map yet.</p>
       ) : (
-        <div style={{ maxHeight: 'calc(100vh - 320px)', overflow: 'auto', border: '1px solid #ECECEC', borderRadius: 10, background: '#FCFCFD' }}>
-          <div style={{ position: 'relative', width: layout.width, height: layout.height }}>
+        <div style={{ maxHeight: 'calc(100vh - 300px)', overflow: 'auto', border: '1px solid #ECECEC', borderRadius: 10, background: 'linear-gradient(#FCFCFD, #F7F8FB)' }}>
+          <div style={{ position: 'relative', width: layout.width, height: layout.height, margin: '0 auto' }}>
             <svg width={layout.width} height={layout.height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
               <defs>
-                <marker id="qfm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <marker id="qfm-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
                 </marker>
               </defs>
               {layout.edges.map((e, i) => (
                 <path key={i} d={path(e)} fill="none" stroke={edgeColor(e)}
-                  strokeWidth={e.kind === 'default' ? 1.5 : 2}
+                  strokeWidth={e.kind === 'default' ? 1.5 : 2.25}
                   strokeDasharray={e.kind === 'default' ? '5 4' : undefined}
                   markerEnd="url(#qfm-arrow)" />
               ))}
@@ -1517,24 +1584,29 @@ function QFlowMap({ questions, deptName, health, onPick, onClose }) {
             {layout.edges.filter(e => e.kind === 'branch' && e.label).map((e, i) => (
               <div key={i} style={{
                 position: 'absolute', left: (e.sx + e.tx) / 2, top: (e.sy + e.ty) / 2,
-                transform: 'translate(-50%, -50%)', pointerEvents: 'none',
-                fontSize: 'calc(10px * var(--fs))', fontWeight: 600, color: edgeColor(e),
-                background: 'rgba(255,255,255,0.92)', border: '1px solid #E3E6EC', borderRadius: 4, padding: '0 4px', whiteSpace: 'nowrap',
-              }}>{qShort(e.label, 14)}</div>
+                transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1,
+                fontSize: 'calc(10px * var(--fs))', fontWeight: 700, color: edgeColor(e),
+                background: 'rgba(255,255,255,0.95)', border: `1px solid ${edgeColor(e)}33`, borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}>{qShort(e.label, 16)}</div>
             ))}
             {layout.nodes.map(({ q, x, y, reached }) => {
               const urg = qTopUrgency(q);
               const branchCount = (q.next_rules || []).length;
               const bad = (health[q.id] || []).some(iss => iss.level === 'error');
+              const accent = urg === 'RED' ? 'var(--red)' : urg === 'AMBER' ? 'var(--amber)' : 'var(--secondary)';
               return (
                 <div key={q.id} onClick={() => onPick(q)} title={q.text_en} style={{
-                  position: 'absolute', left: x, top: y, width: NW, height: NH, cursor: 'pointer',
-                  background: '#fff', borderRadius: 9, padding: '7px 9px', overflow: 'hidden',
-                  border: bad ? '1.5px solid var(--red)' : reached ? '1px solid #D5D9E0' : '1.5px dashed #C7A94F',
-                  opacity: reached ? 1 : 0.6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-                  display: 'flex', flexDirection: 'column', gap: 3,
+                  position: 'absolute', left: x, top: y, width: NW, height: NH, cursor: 'pointer', zIndex: 2,
+                  background: '#fff', borderRadius: 9, padding: '8px 10px', overflow: 'hidden',
+                  border: bad ? '1.5px solid var(--red)' : reached ? '1px solid #DCE0E7' : '1.5px dashed #C7A94F',
+                  borderLeft: `4px solid ${bad ? 'var(--red)' : reached ? accent : '#C7A94F'}`,
+                  opacity: reached ? 1 : 0.62, boxShadow: '0 1px 4px rgba(20,40,80,0.07)',
+                  display: 'flex', flexDirection: 'column', gap: 5,
                 }}>
-                  <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden' }}>{qShort(q.text_en || q.id, 46)}</span>
+                  <span style={{
+                    fontSize: 'calc(11.5px * var(--fs))', fontWeight: 600, lineHeight: 1.25, color: 'var(--text)',
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                  }}>{q.text_en || q.id}</span>
                   <span style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={qBadge('#F0F0F0', 'var(--text)')}>{Q_TYPE_LABELS[q.q_type] || q.q_type}</span>
                     {urg && <span style={qBadge(urg === 'RED' ? 'var(--red)' : 'var(--amber)', urg === 'RED' ? '#fff' : 'var(--amber-on)')}>{urg === 'RED' ? '🔴' : '🟡'}</span>}
@@ -1546,10 +1618,10 @@ function QFlowMap({ questions, deptName, health, onPick, onClose }) {
             })}
             <div style={{
               position: 'absolute', left: layout.endPos.x, top: layout.endPos.y, width: NW, height: NH,
-              background: '#EAF7EF', border: '1px solid #BFE6CD', borderRadius: 9, padding: '7px 9px',
-              display: 'flex', flexDirection: 'column', justifyContent: 'center',
+              background: '#EAF7EF', border: '1px solid #BFE6CD', borderLeft: '4px solid var(--green)', borderRadius: 9, padding: '8px 10px',
+              display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2, zIndex: 2,
             }}>
-              <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>✓ End → Vitals</span>
+              <span style={{ fontSize: 'calc(11.5px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>✓ End → Vitals</span>
               <span style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>patient continues to vitals</span>
             </div>
           </div>
@@ -1897,13 +1969,15 @@ function QuestionsManager({ depts = [] }) {
     <div style={{ display: 'flex', gap: 16 }}>
       {dialog}{toastView}
       <div style={{ width: 400, flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
-          <select className="input" style={{ width: 170 }} value={dept} onChange={e => setDept(e.target.value)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+          <select className="input" style={{ width: '100%' }} value={dept} onChange={e => setDept(e.target.value)}>
             {depts.filter(d => d.is_active).map(d => <option key={d.code} value={d.code}>{d.name}</option>)}
           </select>
-          <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 14px' }} onClick={startNew}>+ Add question</button>
-          <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startPreview} disabled={!dagQs.length} title="Walk the branching as a patient would">▶ Preview</button>
-          <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={() => { setEditing(null); setPreview(null); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram">🗺 Map</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 14px' }} onClick={startNew}>+ Add question</button>
+            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startPreview} disabled={!dagQs.length} title="Walk the branching as a patient would">▶ Preview</button>
+            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setEditing(null); setPreview(null); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram"><QGraphIcon /> Map</button>
+          </div>
         </div>
 
         <div style={{ fontSize: 'calc(12px * var(--fs))', marginBottom: 8, padding: '6px 10px', borderRadius: 8,
