@@ -1642,6 +1642,9 @@ function QuestionsManager({ depts = [] }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [preview, setPreview] = useState(null); // null = off; else { currentId, path, triage }
   const [showMap, setShowMap] = useState(false); // read-only flow-map view
+  const [showBulk, setShowBulk] = useState(false); // "add several" paste-a-list view
+  const [bulkText, setBulkText] = useState('');
+  const [bulkType, setBulkType] = useState('FREE_TEXT');
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
@@ -1667,14 +1670,25 @@ function QuestionsManager({ depts = [] }) {
   function startNew() {
     const maxSort = questions.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
     setEditing({ ...EMPTY_Q, department: dept, sort_order: maxSort + 1 });
-    setPreview(null); setShowMap(false); setShowAdvanced(false); setError(''); setSuccess('');
+    setPreview(null); setShowMap(false); setShowBulk(false); setShowAdvanced(false); setError(''); setSuccess('');
   }
   function startEdit(q) {
-    setPreview(null); setShowMap(false);
+    setPreview(null); setShowMap(false); setShowBulk(false);
     setEditing({ ...EMPTY_Q, ...q, triage_flag: q.triage_flag || '', triage_answer: q.triage_answer || '',
       answer_triage: { ...qUrgencyMap(q) },
       next_default: q.next_default || '', next_rules: q.next_rules || [], options_json: q.options_json || null });
     setShowAdvanced(false); setError(''); setSuccess('');
+  }
+  // The department question that currently ends the flow with no routing set — the
+  // natural place to append the next question so a plain list auto-chains in order.
+  // Returns null if the last question already branches or points somewhere (we never
+  // clobber deliberate routing).
+  function openChainEnd() {
+    const top = [...dagQs].filter(q => q.q_type !== 'TERMINAL')
+      .sort((a, b) => (b.sort_order || 0) - (a.sort_order || 0))[0];
+    if (!top) return null;
+    const isOpen = !top.next_default && !(top.next_rules && top.next_rules.length);
+    return isOpen ? top : null;
   }
 
   // per-answer branch (writes editing.next_rules) and urgency (writes triage_*)
@@ -1741,8 +1755,41 @@ function QuestionsManager({ depts = [] }) {
   function startPreview() {
     const entry = [...dagQs].filter(q => q.q_type !== 'TERMINAL')
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0];
-    setEditing(null); setShowMap(false);
+    setEditing(null); setShowMap(false); setShowBulk(false);
     setPreview({ currentId: entry ? entry.id : null, path: [], triage: '' });
+  }
+  // "Add several" — paste one question per line; create them all pre-chained in
+  // order, and continue the existing flow into the first of the batch. Engine and
+  // API are untouched; this just scripts the same create/link calls a human would.
+  function startBulk() {
+    setEditing(null); setPreview(null); setShowMap(false);
+    setBulkText(''); setBulkType('FREE_TEXT'); setError(''); setSuccess(''); setShowBulk(true);
+  }
+  async function handleBulkCreate() {
+    const lines = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!lines.length) { setError('Type at least one question, one per line.'); return; }
+    setError(''); setSuccess(''); setSaving(true);
+    try {
+      const maxSort = questions.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
+      const prevEnd = openChainEnd();
+      // Create bottom-up so each question already knows the id of the one after it.
+      let nextId = null;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const created = await api.createQuestion({
+          department: dept, text_en: lines[i], text_hi: null, text_te: null,
+          q_type: bulkType, options_json: null, required: true,
+          triage_flag: null, triage_answer: null, answer_triage: null,
+          next_default: nextId, next_rules: null,
+          sort_order: maxSort + 1 + i, is_base: false,
+        });
+        nextId = created.id;
+      }
+      if (prevEnd && nextId) await api.updateQuestion(prevEnd.id, { next_default: nextId });
+      setShowBulk(false);
+      await loadQuestions();
+      toast(`Added ${lines.length} question${lines.length === 1 ? '' : 's'}${prevEnd ? `, continuing after “${qShort(prevEnd.text_en, 24)}”` : ''}.`, 'success');
+    } catch (err) { setError(err.message); }
+    finally { setSaving(false); }
   }
   function previewAnswer(node, opt) {
     const flag = qUrgencyMap(node)[opt.value] || '';
@@ -1780,7 +1827,19 @@ function QuestionsManager({ depts = [] }) {
       };
       if (isNew) {
         const created = await api.createQuestion(payload);
-        setSuccess('Question added');
+        // Auto-chain: if this is a plain department question appended at the end,
+        // continue the flow into it from whatever currently ends the flow — so
+        // building a list needs no manual "continue to" wiring. Deliberate routing
+        // (a branch or an explicit default on the last question) is never touched.
+        let linkedAfter = '';
+        if (created && !payload.is_base) {
+          const maxSort = dagQs.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
+          const prevEnd = openChainEnd();
+          if (prevEnd && prevEnd.id !== created.id && (payload.sort_order || 0) >= maxSort) {
+            try { await api.updateQuestion(prevEnd.id, { next_default: created.id }); linkedAfter = prevEnd.text_en; } catch { /* leave unlinked; flow-check flags it */ }
+          }
+        }
+        setSuccess(linkedAfter ? `Question added — continues after “${qShort(linkedAfter, 24)}”` : 'Question added');
         await loadQuestions();
         if (created) setEditing({ ...EMPTY_Q, ...created, next_rules: created.next_rules || [] });
       } else {
@@ -1914,6 +1973,47 @@ function QuestionsManager({ depts = [] }) {
     );
   }
 
+  function renderBulkAdd() {
+    const lines = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
+    const prevEnd = openChainEnd();
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Add several questions</h3>
+          <button type="button" onClick={() => setShowBulk(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
+        </div>
+        <p style={{ fontSize: 'calc(12.5px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.5 }}>
+          Type one question per line. They’re created in order and automatically chained
+          — each one continues to the next{prevEnd ? <>, starting right after “<strong>{qShort(prevEnd.text_en, 34)}</strong>”</> : ' (the first becomes the department’s starting question)'}.
+          Add branching (Yes → go here) afterwards on any question that needs it.
+        </p>
+        <div style={{ width: 200 }}>
+          <label style={qLbl}>Answer type for all</label>
+          <select className="input" value={bulkType} onChange={e => setBulkType(e.target.value)}>
+            <option value="FREE_TEXT">Free text</option>
+            <option value="BOOLEAN">Yes / No</option>
+            <option value="NUMERIC">Number</option>
+          </select>
+        </div>
+        <div>
+          <label style={qLbl}>Questions (one per line)</label>
+          <textarea className="input" rows={9} value={bulkText} onChange={e => setBulkText(e.target.value)}
+            placeholder={"Do you have a fever?\nHow many days have you had it?\nAre you taking any medication for it?"}
+            style={{ resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
+        </div>
+        {error && <p style={qErr}>{error}</p>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button type="button" className="btn btn-primary" style={{ width: 'auto', padding: '0 16px', minHeight: 38 }}
+            disabled={saving || !lines.length} onClick={handleBulkCreate}>
+            {saving ? 'Adding…' : `Add ${lines.length || ''} question${lines.length === 1 ? '' : 's'}`.trim()}
+          </button>
+          <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', minHeight: 38 }} onClick={() => setShowBulk(false)}>Cancel</button>
+          <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>You can edit each one’s wording, type and branches after.</span>
+        </div>
+      </div>
+    );
+  }
+
   function renderPreview() {
     const node = preview.currentId ? questions.find(q => q.id === preview.currentId && !q.is_base) : null;
     const opts = node ? qAnswerOptions(node) : [];
@@ -1975,8 +2075,9 @@ function QuestionsManager({ depts = [] }) {
           </select>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 14px' }} onClick={startNew}>+ Add question</button>
+            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startBulk} title="Paste a list of questions and add them all at once, already chained in order">+ Add several</button>
             <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startPreview} disabled={!dagQs.length} title="Walk the branching as a patient would">▶ Preview</button>
-            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setEditing(null); setPreview(null); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram"><QGraphIcon /> Map</button>
+            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setEditing(null); setPreview(null); setShowBulk(false); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram"><QGraphIcon /> Map</button>
           </div>
         </div>
 
@@ -2004,6 +2105,7 @@ function QuestionsManager({ depts = [] }) {
 
       <div style={{ flex: 1, minWidth: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
         {showMap ? <QFlowMap questions={questions} deptName={depts.find(d => d.code === dept)?.name || dept} health={health} onPick={startEdit} onClose={() => setShowMap(false)} />
+          : showBulk ? renderBulkAdd()
           : preview ? renderPreview()
           : !editing ? <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click “+ Add question”.</p>
           : editing.is_base ? renderBaseEditor() : renderDagEditor()}
