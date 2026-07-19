@@ -188,6 +188,12 @@ async def _generate_report_impl(req: ReportRequest):
         "lab_values_from_documents": all_doc_labs,
         "allergies_from_documents": all_doc_allergies,
     }
+    # Structure the patient's free-text/spoken medications answer (Bhashini NMT +
+    # LLM extraction) so their greeting and full sentence never surface as meds in
+    # the report or the doctor's medication list — only the actual medicines do.
+    session_json["medications_from_patient"] = _extract_patient_meds(
+        _base_answer(session_json["answers"], "medications") or ""
+    )
 
     # Generate report. HYBRID: the LLM writes ONLY the interpretive sections
     # (Quick Summary, Chief Complaint & History, Past Medical History, Lab Results).
@@ -370,12 +376,95 @@ def _base_answer(answers, role):
     return bare if bare and str(bare).strip() else None
 
 
+# Devanagari / Telugu Unicode blocks — detect the script of the patient's own
+# free-text so we translate it before extracting (Bhashini NMT needs a source lang).
+def _script_lang(text: str) -> str:
+    for ch in text or "":
+        o = ord(ch)
+        if 0x0900 <= o <= 0x097F:
+            return "hi"
+        if 0x0C00 <= o <= 0x0C7F:
+            return "te"
+    return "en"
+
+
+def _parse_med_json(out: str) -> list:
+    """Best-effort parse of the extractor's JSON array (tolerate code fences/prose)."""
+    s = (out or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s).rstrip("`").strip()
+    m = re.search(r"\[.*\]", s, re.DOTALL)
+    if m:
+        s = m.group(0)
+    try:
+        data = json.loads(s)
+    except Exception:
+        return []
+    return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+
+
+def _extract_patient_meds(text: str) -> dict:
+    """Turn the patient's free-text/spoken 'what medicines are you taking' answer
+    into a structured list, so their greeting and rambling sentence never leak into
+    the report or the doctor's medication list as if they were medicines.
+
+    Pipeline: Bhashini NMT (the same 'Show translation' path the patient app uses)
+    to English, then an LLM extraction that keeps only real medicines. Returns
+    {"items": [{"name","dose","generic"}], "parsed": bool, "raw": str, "english": str}.
+    'parsed' is False when the AI is unavailable or found nothing — the caller then
+    shows the raw text once as a labelled, unverified note (never as clean meds)."""
+    raw = (text or "").strip()
+    if not raw or raw.lower() in ("none", "nil", "no", "n/a", "-"):
+        return {"items": [], "parsed": True, "raw": "", "english": ""}
+
+    # 1) Translate to English via Bhashini NMT (deterministic, on-shore) when the
+    #    answer is in an Indian script. Best-effort — fall back to the raw text.
+    english = raw
+    lang = _script_lang(raw)
+    if lang in ("hi", "te"):
+        try:
+            from ..bhashini import asr
+            if asr.have_keys():
+                english = asr.translate(raw, lang, "en") or raw
+        except Exception:
+            logger.warning("patient-med translation failed; using raw text", exc_info=True)
+    english_out = english if english != raw else ""
+
+    # 2) LLM-extract structured medicines from the (now English) text.
+    from ..llm_client import has_llm, complete as llm_complete
+    if not has_llm():
+        return {"items": [], "parsed": False, "raw": raw, "english": english_out}
+    try:
+        prompt = (PROMPT_DIR / "extract_patient_meds.txt").read_text()
+        items = _parse_med_json(llm_complete(prompt, english, max_tokens=512))
+    except Exception:
+        logger.warning("patient-med extraction failed", exc_info=True)
+        return {"items": [], "parsed": False, "raw": raw, "english": english_out}
+    if not items:
+        return {"items": [], "parsed": False, "raw": raw, "english": english_out}
+
+    from ..drug_data import normalize_drug_name
+    cleaned = []
+    for m in items:
+        name = str(m.get("name", "")).strip()
+        if not name:
+            continue
+        generic = ""
+        try:
+            g = normalize_drug_name(name)
+            if g and g.lower() != name.lower():
+                generic = g
+        except Exception:
+            pass
+        cleaned.append({"name": name, "dose": str(m.get("dose", "") or "").strip(), "generic": generic})
+    return {"items": cleaned, "parsed": bool(cleaned), "raw": raw, "english": english_out}
+
+
 def _render_medications(session_json) -> str:
-    """## Current/Prior Medications — grouped by source prescription (OCR), plus
-    any patient-reported meds not already in the documents. 'None' if empty."""
-    answers = session_json.get("answers", {})
+    """## Current/Prior Medications — grouped by source prescription (OCR), plus the
+    patient's own reported meds (structured by _extract_patient_meds so greetings and
+    filler are dropped). 'None' if empty."""
     doc_meds = session_json.get("medications_from_documents", [])
-    patient_meds = _base_answer(answers, "medications") or ""
     lines = ["## Current/Prior Medications"]
     if doc_meds:
         groups = {}
@@ -387,7 +476,8 @@ def _render_medications(session_json) -> str:
             if src_date:
                 header += f" dated {src_date}"
             header += ":**"
-            lines.append(header)
+            lines.append("")          # blank line so the bold header renders as its
+            lines.append(header)      # own block, not a continuation of the last bullet
             for m in meds:
                 line = f"- {m['name']}"
                 if m.get('dose'):         line += f" {m['dose']}"
@@ -395,18 +485,31 @@ def _render_medications(session_json) -> str:
                 if m.get('duration'):     line += f", for {m['duration']}"
                 if m.get('instructions'): line += f" ({m['instructions']})"
                 lines.append(line)
-    if patient_meds and patient_meds.lower() not in ('none', 'nil', 'no', ''):
-        doc_names = " ".join(m.get('name', '').lower() for m in doc_meds)
-        reported = [tok.strip() for tok in re.split(r'[,;\n]', patient_meds) if tok.strip()]
-        new_terms = [tok for tok in reported if tok.lower() not in doc_names]
-        if new_terms:
-            # Label the source so the doctor can tell these apart from the
-            # OCR-extracted prescription meds above: these were typed by the patient
-            # at intake (self-reported, not read off an uploaded document).
-            lines.append("**Reported by patient (typed at intake):**")
-            for term in new_terms:
-                lines.append(f"- {term}")
-    elif not doc_meds:
+
+    doc_names = " ".join(m.get('name', '').lower() for m in doc_meds)
+    pm = session_json.get("medications_from_patient") or {"items": [], "parsed": True, "raw": "", "english": ""}
+    new_items = [it for it in pm.get("items", [])
+                 if it.get("name", "").lower() not in doc_names
+                 and not (it.get("generic") and it["generic"].lower() in doc_names)]
+    if new_items:
+        # Labelled so the doctor can tell these from the OCR'd prescription meds
+        # above: self-reported by the patient at intake, not read off a document.
+        lines.append("")
+        lines.append("**Reported by patient (spoken/typed at intake):**")
+        for it in new_items:
+            line = f"- {it['name']}"
+            if it.get("dose"):    line += f" {it['dose']}"
+            if it.get("generic"): line += f" ({it['generic']})"
+            lines.append(line)
+    elif pm.get("raw") and not pm.get("parsed"):
+        # Couldn't parse it into medicines (AI unavailable, or nothing recognised) —
+        # show it once, clearly flagged for the doctor to read, never as clean meds.
+        note = pm.get("english") or pm.get("raw")
+        lines.append("")
+        lines.append("**Reported by patient (unverified — please review):**")
+        lines.append(f"- {note}")
+
+    if len(lines) == 1:               # heading only — nothing from documents or patient
         lines.append("None")
     return "\n".join(lines)
 
