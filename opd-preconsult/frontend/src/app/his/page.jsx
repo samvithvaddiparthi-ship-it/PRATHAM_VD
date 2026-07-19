@@ -1048,6 +1048,7 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
   const [form, setForm] = useState({ name: '', department: depts.find(d => d.is_active)?.code || 'CARD', phone: '', pin: '', registration_no: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showPin, setShowPin] = useState(false);
   const titleId = useId();
   const panelRef = useDialogA11y(onClose);
 
@@ -1106,9 +1107,16 @@ function AddDoctorModal({ depts = [], onClose, onAdded }) {
           </div>
           <div>
             <label style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>PIN (4-6 digits) *</label>
-            <input className="input" type="password" inputMode="numeric" maxLength={6} required value={form.pin}
-              onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
-              placeholder="••••" style={{ letterSpacing: 4 }} />
+            <div style={{ position: 'relative' }}>
+              <input className="input" type={showPin ? 'text' : 'password'} inputMode="numeric" maxLength={6} required value={form.pin}
+                onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '') })}
+                placeholder="••••" style={{ letterSpacing: showPin ? 2 : 4, paddingRight: 58 }} />
+              <button type="button" onClick={() => setShowPin(s => !s)}
+                aria-label={showPin ? 'Hide PIN' : 'Show PIN'} aria-pressed={showPin}
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', fontWeight: 600, padding: 4 }}>
+                {showPin ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           {error && <p style={{ color: 'var(--red)', fontSize: 'calc(13px * var(--fs))' }}>{error}</p>}
