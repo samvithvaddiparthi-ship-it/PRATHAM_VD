@@ -35,13 +35,28 @@ def _get_client():
     # Supabase uses its project region). Empty = let the SDK decide (local MinIO).
     region = (os.getenv("MINIO_REGION", "") or "").strip() or None
 
+    import certifi
+    import urllib3
     from minio import Minio
+
+    # Bounded timeouts + limited retries so a slow or unreachable object store fails
+    # (non-fatally) instead of hanging a request thread — important now that the store
+    # can be a remote S3 (Cloudflare R2 / Supabase) over the internet, where minio's
+    # default no-timeout client would block indefinitely on a network blip.
+    http_client = urllib3.PoolManager(
+        timeout=urllib3.Timeout(connect=10, read=30),
+        maxsize=10,
+        cert_reqs="CERT_REQUIRED",
+        ca_certs=certifi.where(),
+        retries=urllib3.Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504]),
+    )
     client = Minio(
         f"{endpoint}:{port}",
         access_key=access_key,
         secret_key=secret_key,
         secure=use_ssl,
         region=region,
+        http_client=http_client,
     )
 
     # Auto-create the bucket if missing. Hosted S3 may forbid bucket create/head via
