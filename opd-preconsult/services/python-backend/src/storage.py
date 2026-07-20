@@ -23,25 +23,39 @@ def _get_client():
         return _client, _bucket
 
     endpoint = os.getenv("MINIO_ENDPOINT", "minio")
-    port = int(os.getenv("MINIO_PORT", "9000"))
+    # TLS is off for the local docker MinIO and ON for a hosted S3 (Cloudflare R2,
+    # Supabase Storage, …). The port default follows the scheme: 443 over TLS, 9000
+    # for local MinIO. Local behaviour is unchanged when MINIO_USE_SSL is unset.
+    use_ssl = (os.getenv("MINIO_USE_SSL", "") or "").strip().lower() in ("1", "true", "yes")
+    port = int(os.getenv("MINIO_PORT", "443" if use_ssl else "9000"))
     access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
     secret_key = os.getenv("MINIO_SECRET_KEY", "changeme_in_production")
     bucket = os.getenv("MINIO_BUCKET", "opd-documents")
+    # Some hosted S3 need an explicit region for request signing (R2 wants "auto";
+    # Supabase uses its project region). Empty = let the SDK decide (local MinIO).
+    region = (os.getenv("MINIO_REGION", "") or "").strip() or None
 
     from minio import Minio
     client = Minio(
         f"{endpoint}:{port}",
         access_key=access_key,
         secret_key=secret_key,
-        secure=False,  # no HTTPS locally
+        secure=use_ssl,
+        region=region,
     )
 
-    # Auto-create bucket if it doesn't exist
-    if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
-        logger.info("storage created bucket: %s", bucket)
-    else:
-        logger.info("storage bucket ready: %s", bucket)
+    # Auto-create the bucket if missing. Hosted S3 may forbid bucket create/head via
+    # the S3 API (or the bucket is pre-created in the provider console), so a failure
+    # here is non-fatal — assume the bucket exists; a real problem surfaces
+    # (non-fatally) on the first upload.
+    try:
+        if not client.bucket_exists(bucket):
+            client.make_bucket(bucket)
+            logger.info("storage created bucket: %s", bucket)
+        else:
+            logger.info("storage bucket ready: %s", bucket)
+    except Exception:
+        logger.warning("storage bucket check/create skipped (non-fatal) — assuming '%s' exists", bucket, exc_info=True)
 
     _maybe_enable_encryption(client, bucket)
 
