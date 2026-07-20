@@ -172,6 +172,9 @@ export default function Documents() {
                 {/* Extraction details — only when OCR is on. When off there's no
                     extraction to show/confirm; the raw file just goes to the doctor. */}
                 {ocrEnabled !== false && (<>
+                {/* Scrollable review area — a long prescription or lab report can be
+                    scrolled through here instead of being clipped/hidden. */}
+                <div style={{ maxHeight: 240, overflowY: 'auto', paddingRight: 4, marginBottom: 8 }}>
                 {/* Warn when AI extraction was unavailable and we fell back to basic text scan */}
                 {doc.structured?.extraction_source === 'regex_fallback' && (
                   <div style={{ background: '#FFF4E5', border: '1px solid #FFB74D', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
@@ -218,12 +221,14 @@ export default function Documents() {
                   </div>
                 )}
 
-                {/* Raw text preview (collapsed) */}
-                {!doc.structured?.medications?.length && !doc.structured?.lab_values?.length && !doc.structured?.allergies?.length && (
-                  <p style={{ fontSize: 12, color: 'var(--text-light)', whiteSpace: 'pre-wrap', maxHeight: 80, overflow: 'hidden' }}>
-                    {doc.raw_text?.substring(0, 200)}...
+                {/* Raw text preview — full text (scrolls inside the review area above,
+                    no longer clipped to ~200 chars). */}
+                {!doc.structured?.medications?.length && !doc.structured?.lab_values?.length && !doc.structured?.allergies?.length && doc.raw_text && (
+                  <p style={{ fontSize: 12, color: 'var(--text-light)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    {doc.raw_text}
                   </p>
                 )}
+                </div>
 
                 {/* Confirm / Reject buttons */}
                 {!doc.confirmed && (

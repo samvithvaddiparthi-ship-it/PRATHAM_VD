@@ -336,7 +336,8 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
           {ocrResult && ocrResult.structured?.medications?.length > 0 && (
             <div style={{ background: '#D5F5E3', borderRadius: 8, padding: 10, fontSize: 12 }}>
               <strong>{t('extracted_medications', lang)}</strong>
-              <table style={{ width: '100%', marginTop: 6, fontSize: 12, borderCollapse: 'collapse' }}>
+              <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 6 }}>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #A9DFBF' }}>
                     <th style={{ textAlign: 'left', padding: '4px 6px' }}>{t('col_drug', lang)}</th>
@@ -354,6 +355,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
 
