@@ -5,6 +5,7 @@ import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
 import TriageBadge from '../../components/TriageBadge';
 import RxDocument from '../../components/RxDocument';
+import QRCode from 'qrcode';
 import ReactMarkdown from 'react-markdown';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/Toast';
@@ -3340,6 +3341,180 @@ function SettingsManager() {
           color: on ? 'var(--green)' : 'var(--text-light)' }}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: on ? 'var(--green)' : '#B0B8C1' }} />
           {on ? 'Enabled — uploads are read by AI/OCR' : 'Disabled — uploads shown to doctor as-is, no AI extraction'}
+        </div>
+      </div>
+
+      {/* Patient check-in QR / poster generator */}
+      <CheckinQRPanel />
+    </div>
+  );
+}
+
+// ── Check-in QR / poster generator ────────────────────────────────────────────
+// Generates the single-hospital check-in QR (the plain app URL with ?h=<id>) and
+// wraps it in a printable poster. The QR is rendered CLIENT-SIDE from the `qrcode`
+// package (no CDN) and the exported poster is fully SELF-CONTAINED — the QR is
+// embedded as a data URI and every style is inline — so it renders on a kiosk or
+// waiting-room screen with NO internet and never calls out to a firewalled LAN.
+function CheckinQRPanel() {
+  const { toast, toastView } = useToast();
+  const [hospitalName, setHospitalName] = useState('Pratham OPD');
+  const [hospitalId, setHospitalId] = useState('demo_hospital_01');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [qr, setQr] = useState('');       // QR as a PNG data URL
+  const [err, setErr] = useState('');
+
+  // Default the base URL to wherever HIS is being served, so the poster points at
+  // this same deployment by default (no typing the domain). Editable for the case
+  // where the kiosk should point at a different host / LAN IP.
+  useEffect(() => {
+    if (typeof window !== 'undefined') setBaseUrl(window.location.origin);
+  }, []);
+
+  const cleanBase = (baseUrl || '').trim().replace(/\/+$/, '');
+  const hid = (hospitalId || 'demo_hospital_01').trim();
+  const checkinUrl = cleanBase ? `${cleanBase}/?h=${encodeURIComponent(hid)}` : '';
+
+  // Regenerate the QR whenever the target URL changes.
+  useEffect(() => {
+    if (!checkinUrl) { setQr(''); return; }
+    let alive = true;
+    QRCode.toDataURL(checkinUrl, { errorCorrectionLevel: 'M', margin: 2, width: 320, color: { dark: '#1B4F72', light: '#ffffff' } })
+      .then(url => { if (alive) { setQr(url); setErr(''); } })
+      .catch(() => { if (alive) { setQr(''); setErr('Could not generate the QR code.'); } });
+    return () => { alive = false; };
+  }, [checkinUrl]);
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // The self-contained poster document. `autoPrint` triggers the browser print
+  // dialog once loaded (used by "Print / Save as PDF"); the downloadable kiosk
+  // file omits it so it just displays.
+  function buildPosterHtml({ autoPrint = false } = {}) {
+    if (!qr) return '';
+    return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${esc(hospitalName)} — Check-in QR</title>
+<style>
+  :root { --primary:#1B4F72; --secondary:#2E86AB; --text-light:#7F8C8D; }
+  * { box-sizing:border-box; margin:0; }
+  html,body { height:100%; }
+  body { font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:#f4f6f8; color:#1a2b3c;
+    display:flex; align-items:center; justify-content:center; padding:24px; }
+  .poster { width:100%; max-width:620px; background:#fff; border-radius:16px; box-shadow:0 4px 24px rgba(0,0,0,.08);
+    padding:40px 32px; text-align:center; }
+  .brand { font-size:15px; letter-spacing:2px; color:var(--secondary); font-weight:700; text-transform:uppercase; }
+  h1 { font-size:30px; color:var(--primary); margin:6px 0 2px; }
+  .sub { font-size:17px; color:var(--text-light); margin:0 0 24px; }
+  .qr { display:inline-flex; padding:16px; background:#fff; border:3px solid var(--primary); border-radius:16px; }
+  .qr img { display:block; width:300px; height:300px; }
+  .steps { margin:26px auto 0; max-width:420px; text-align:left; }
+  .step { display:flex; gap:12px; align-items:flex-start; margin:10px 0; }
+  .n { flex:0 0 26px; height:26px; border-radius:50%; background:var(--primary); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; }
+  .txt { font-size:15px; line-height:1.4; } .txt small { color:var(--text-light); }
+  .hospital { margin-top:22px; font-size:13px; color:var(--text-light); }
+  .disclaimer { margin-top:14px; font-size:11px; color:var(--text-light); font-style:italic; }
+  @media print { body { background:#fff; padding:0; } .poster { box-shadow:none; max-width:100%; } }
+</style></head>
+<body>
+  <div class="poster">
+    <div class="brand">Pratham · AI Pre-Consultation</div>
+    <h1>${esc(hospitalName)}</h1>
+    <p class="sub">स्कैन करें · Scan · స్కాన్ చేయండి</p>
+    <div class="qr"><img src="${qr}" alt="Check-in QR code" /></div>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div class="txt">Scan this QR with your phone camera<br><small>अपने फ़ोन कैमरे से स्कैन करें · మీ ఫోన్ కెమెరాతో స్కాన్ చేయండి</small></div></div>
+      <div class="step"><div class="n">2</div><div class="txt">Choose your language &amp; department<br><small>अपनी भाषा और विभाग चुनें · మీ భాష, విభాగాన్ని ఎంచుకోండి</small></div></div>
+      <div class="step"><div class="n">3</div><div class="txt">Get your token &amp; fill in a few details<br><small>टोकन लें और कुछ जानकारी भरें · టోకెన్ పొంది వివరాలు నింపండి</small></div></div>
+    </div>
+    <div class="hospital">Hospital ID: ${esc(hid)}</div>
+    <div class="disclaimer">Investigational — not for clinical use.</div>
+  </div>
+  ${autoPrint ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},150);});<\/script>' : ''}
+</body></html>`;
+  }
+
+  function printPoster() {
+    const html = buildPosterHtml({ autoPrint: true });
+    if (!html) return;
+    const w = window.open('', '_blank');
+    if (!w) { toast('Pop-up blocked — allow pop-ups for this site, then try again.', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function downloadHtml() {
+    const html = buildPosterHtml();
+    if (!html) return;
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `checkin-qr-${hid}.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    toast('Kiosk HTML downloaded — open it on the screen; it works offline.', 'success');
+  }
+
+  function downloadPng() {
+    if (!qr) return;
+    const a = document.createElement('a');
+    a.href = qr; a.download = `checkin-qr-${hid}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  const label = { fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 3, display: 'block' };
+
+  return (
+    <div style={{ background: 'var(--card-bg)', border: '1px solid #E2E8F0', borderRadius: 12, padding: 20, marginTop: 16 }}>
+      {toastView}
+      <h3 style={{ margin: '0 0 6px', fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)' }}>Patient check-in QR / poster</h3>
+      <p style={{ margin: '0 0 16px', fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.5 }}>
+        The QR carries your check-in link (<code>{'/?h=<hospital id>'}</code>). Print it as a
+        waiting-room poster, or download a self-contained HTML page for a kiosk / display — that
+        page embeds the QR and works with no internet.
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <label style={label}>Hospital name (shown on the poster)</label>
+          <input className="input" value={hospitalName} onChange={e => setHospitalName(e.target.value)} style={{ height: 38 }} />
+        </div>
+        <div>
+          <label style={label}>Hospital ID</label>
+          <input className="input" value={hospitalId} onChange={e => setHospitalId(e.target.value)} style={{ height: 38 }} />
+        </div>
+        <div>
+          <label style={label}>App base URL</label>
+          <input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://your-domain" style={{ height: 38 }} />
+        </div>
+      </div>
+
+      {checkinUrl && (
+        <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--secondary)', wordBreak: 'break-all',
+          background: '#F4F8FB', borderRadius: 6, padding: '8px 10px', margin: '0 0 16px', fontFamily: 'ui-monospace, monospace' }}>
+          {checkinUrl}
+        </p>
+      )}
+
+      {/* Live poster preview */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+        <div style={{ flex: '0 0 auto', textAlign: 'center', border: '1px solid #E2E8F0', borderRadius: 12, padding: 16, background: '#fff' }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, color: 'var(--secondary)', fontWeight: 700, textTransform: 'uppercase' }}>Pratham · AI Pre-Consultation</div>
+          <div style={{ fontSize: 20, color: 'var(--primary)', fontWeight: 700, margin: '4px 0 2px' }}>{hospitalName || 'Hospital name'}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 12 }}>स्कैन करें · Scan · స్కాన్ చేయండి</div>
+          {qr
+            ? <img src={qr} alt="Check-in QR preview" style={{ width: 200, height: 200, border: '3px solid var(--primary)', borderRadius: 12, padding: 8, background: '#fff' }} />
+            : <div style={{ width: 200, height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-light)', fontSize: 12, border: '1px dashed #C4CDD5', borderRadius: 12 }}>{err || 'Enter a base URL…'}</div>}
+          <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 10 }}>Hospital ID: {hid}</div>
+        </div>
+
+        <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: 10, minWidth: 180 }}>
+          <button className="btn btn-primary" disabled={!qr} onClick={printPoster}>🖨️ Print / Save as PDF</button>
+          <button className="btn btn-outline" disabled={!qr} onClick={downloadHtml}>💾 Download kiosk HTML (works offline)</button>
+          <button className="btn btn-outline" disabled={!qr} onClick={downloadPng}>🖼️ Download QR image (PNG)</button>
+          {err && <p style={{ color: 'var(--red)', fontSize: 'calc(12px * var(--fs))', margin: 0 }}>{err}</p>}
         </div>
       </div>
     </div>
