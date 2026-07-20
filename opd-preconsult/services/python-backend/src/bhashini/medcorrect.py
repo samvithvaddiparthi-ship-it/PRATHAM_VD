@@ -1,21 +1,16 @@
 """
-Stage 2 — medical-domain correction and confidence scoring.
-
-FULLY DETERMINISTIC: no model is involved at any point. A patient's own spoken
-words are only ever altered by rules that a clinician can read and audit.
+Stage 2 — medical-domain correction, validation and confidence scoring.
 
 Pipeline:
-  2a. Lexicon pass: apply known confusion swaps + normalise English medical-term
-      casing, using the per-language medical lexicon (Hindi and Telugu) plus the
-      shared drug/lab vocabulary. Cheap and explainable.
-  2b. De-stutter: collapse repeated grammatical function words only; clinical
-      content is never collapsed.
-  2c. Name matching: snap a mis-heard token to the registered patient name, but
-      only directly after a name-introduction cue.
-  Confidence is derived (Bhashini gives none) from the edits made.
-
-Numbers, doses and measurements are verified unchanged afterwards and flagged
-for human checking if they moved.
+  2a. Lexicon pass (deterministic): apply known confusion swaps + normalise
+      English medical-term casing. Cheap, explainable, no model needed.
+  2b. LLM validation: a constrained medical post-editor reviews the text and
+      returns ONLY word-level fixes for medically-implausible mis-recognitions,
+      flagging anything it's unsure about (never guessing confidently).
+  2c. Merge + guardrail: the LLM's corrected text is accepted only if it is a
+      word-level edit of the input (no paraphrasing/reordering) — otherwise we
+      keep the lexicon text and surface the model's notes as "uncertain".
+  Confidence is derived (Bhashini gives none) from the edits + LLM signal.
 
 Every result is appended to logs/transcripts.jsonl for error analysis, and
 /stats aggregates the most common from->to fixes so the lexicon can grow.
@@ -27,6 +22,7 @@ import difflib
 from pathlib import Path
 from datetime import datetime, timezone
 
+from . import _llm as llm
 from .lexicon import (EN_TERMS, DRUGS, LAB_TESTS, DOSAGE_CODES, UNITS,
                              terms_for, confusion_map_for)
 
@@ -69,6 +65,9 @@ def _lexicon(lang):
         "multi": {k: v for k, v in fuzzy.items() if " " in k},
         "drug_names": drug_names,
         "canon": set(terms) | set(DRUGS) | set(LAB_TESTS),
+        # LLM allow-list: this language's terms + shared drugs/labs + English terms.
+        "vocab": sorted(set(list(terms) + list(DRUGS) + list(LAB_TESTS)
+                            + [v for v in EN_TERMS.values()])),
     }
     _LEX_CACHE[lang] = lex
     return lex
@@ -132,7 +131,7 @@ def _to_native(latin: str, lang: str) -> str:
         return latin
 
 # Numbers / doses / measurements / lab values — detected so they can be (a)
-# (a) recognised as protected values and (b) verified unchanged afterwards.
+# marked PROTECTED for the LLM and (b) verified unchanged afterwards.
 _UNIT_ALT = "|".join(re.escape(u) for u in sorted(UNITS, key=len, reverse=True))
 NUM_RE = re.compile(r"\d[\d.,/:\-]*\s?(?:%s)?" % _UNIT_ALT, re.IGNORECASE)
 DIGITS_RE = re.compile(r"\d[\d.,/:\-]*")
@@ -370,15 +369,112 @@ def verify_numbers(raw: str, corrected: str, uncertain: list):
     return uncertain
 
 
-def _score(changes, uncertain):
+# ── 2b. LLM validation ───────────────────────────────────────────────────────
+
+LANG_NAME = {"hi": "Hindi", "te": "Telugu", "en": "English"}
+
+SYSTEM_PROMPT = """You are a medical ASR post-editor for an Indian OPD (outpatient clinic). \
+The input is a RAW speech-to-text transcript of a patient speaking in __LANG__, often mixed with English medical terms. \
+Your ONLY job is to fix words that the recogniser clearly got wrong into something medically implausible.
+
+HARD RULES:
+- Preserve the patient's exact wording, word order, grammar and colloquial style.
+- Do NOT translate, paraphrase, summarise, expand, reorder, or add/remove information.
+- Only substitute a word when a medically more-plausible NEAR-HOMOPHONE exists in context \
+(in Hindi e.g. "खून की चर्चा" -> "खून की जाँच"; in Telugu e.g. "రక్త పోటు" -> "రక్తపోటు").
+- Keep code-switched English medical terms; only normalise casing (ecg->ECG, bp->BP). Never translate them to __LANG__ or vice-versa.
+- When fixing a medical, anatomical or drug word, PREFER a term from `medical_vocabulary` (provided). Do not invent medical terms outside it unless the correct word is obvious.
+- NEVER change any token listed in `protected_values` (numbers, doses, measurements, lab values, Rx frequency codes like BD/OD/TDS) — copy them EXACTLY. If a value sounds wrong, do not fix it; add it to "uncertain" instead.
+- If you are NOT confident a word is wrong, KEEP the original and list it under "uncertain" with alternatives. Never guess confidently.
+- If nothing needs changing, return the text unchanged with an empty changes list.
+
+Return STRICT JSON ONLY, no prose, with this schema:
+{"corrected": "<full corrected transcript>",
+ "confidence": <0..1 overall>,
+ "changes": [{"from": "<orig word/phrase>", "to": "<fixed>", "reason": "<why>", "confidence": <0..1>}],
+ "uncertain": [{"span": "<word/phrase>", "alternatives": ["<alt1>", "<alt2>"], "reason": "<why unsure>"}]}"""
+
+
+def _system_prompt(lang: str) -> str:
+    return SYSTEM_PROMPT.replace("__LANG__", LANG_NAME.get(lang, lang))
+
+
+def _build_user(text: str, lang: str, hints, protected):
+    hint_str = json.dumps(hints, ensure_ascii=False) if hints else "[]"
+    vocab = _lexicon(lang)["vocab"]
+    return (f"language: {LANG_NAME.get(lang, lang)}\n"
+            f"raw_transcript: {json.dumps(text, ensure_ascii=False)}\n"
+            f"lexicon_candidates_already_applied: {hint_str}\n"
+            f"protected_values: {json.dumps(protected, ensure_ascii=False)}\n"
+            f"medical_vocabulary: {json.dumps(vocab, ensure_ascii=False)}\n"
+            f"Return the JSON now.")
+
+
+def _parse_json(s: str):
+    s = s.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s).rstrip("`").strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"\{.*\}", s, re.S)
+        if m:
+            return json.loads(m.group(0))
+        raise
+
+
+def llm_validate(text: str, lang: str, hints, protected):
+    if not llm.have_llm():
+        return None
+    raw = llm.complete_json(_system_prompt(lang), _build_user(text, lang, hints, protected), max_tokens=1024)
+    return _parse_json(raw)
+
+
+# ── 2c. merge with anti-paraphrase guardrail ─────────────────────────────────
+
+def _tokens(s: str):
+    return re.findall(r"\S+", s)
+
+
+def _is_word_level_edit(before: str, after: str) -> bool:
+    """Accept the LLM edit only if it's word substitutions — not a rewrite.
+    Reject if it changes token count by >2 or reorders heavily."""
+    b, a = _tokens(before), _tokens(after)
+    if abs(len(a) - len(b)) > 2:
+        return False
+    sm = difflib.SequenceMatcher(a=b, b=a)
+    # 'replace' ops are word swaps (allowed); large delete/insert blocks are not.
+    changed = sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in sm.get_opcodes()
+                  if tag != "equal")
+    return changed <= max(3, len(b) // 4)  # at most ~25% of tokens touched
+
+
+def _diff_changes(before: str, after: str):
+    """Word-level from->to list between two strings."""
+    b, a = _tokens(before), _tokens(after)
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=b, b=a).get_opcodes():
+        if tag == "replace":
+            out.append({"from": " ".join(b[i1:i2]), "to": " ".join(a[j1:j2]),
+                        "reason": "medical-domain correction", "confidence": 0.8})
+    return out
+
+
+def _score(changes, uncertain, llm_conf, llm_used):
     """REVIEW confidence for the CORRECTION stage — NOT a transcription-accuracy
     guarantee. Bhashini provides no acoustic word-confidence, so we cannot
     measure how right the raw ASR is; this only reflects how safe the correction
     pass was. Therefore it is capped below 100% and is lowered when:
-      (a) any single edit was a low-confidence guess (the weakest edit drags the
+      (a) the medical LLM could not validate the transcript (unavailable),
+      (b) any single edit was a low-confidence guess (the weakest edit drags the
           whole result down — one shaky correction means a human should look),
-      (b) spans were explicitly flagged uncertain."""
-    base = 0.80
+      (c) spans were explicitly flagged uncertain."""
+    if llm_used and isinstance(llm_conf, (int, float)):
+        base = 0.72 + 0.23 * float(llm_conf)   # LLM medically validated it
+    elif llm_used:
+        base = 0.88
+    else:
+        base = 0.80                            # LLM unavailable -> NOT validated
     if changes:
         weakest = min(ch.get("confidence", 0.8) for ch in changes)
         base -= (1.0 - weakest) * 0.30
@@ -402,14 +498,41 @@ def correct(raw: str, lang: str, patient_name: str = "") -> dict:
     text, repeat_changes = collapse_repeats(text, lang)
     text, name_changes = apply_name(text, patient_name, lang)
     lex_changes += repeat_changes + name_changes
+    protected = protected_values(raw)
+    if patient_name.strip():
+        # the registered name is now canonical — keep the LLM from altering it
+        protected = sorted(set(protected) | {patient_name.strip()})
+
+    llm_out, llm_conf, uncertain = None, None, []
+    used_llm = False
+    try:
+        llm_out = llm_validate(text, lang, lex_changes, protected)
+    except Exception as e:
+        print(f"[medcorrect] LLM step failed ({type(e).__name__}: {e}); "
+              f"using lexicon-only result", flush=True)
+
     corrected = text
-    uncertain = []
+    llm_changes = []
+    if llm_out and isinstance(llm_out, dict):
+        cand = (llm_out.get("corrected") or "").strip()
+        uncertain = llm_out.get("uncertain") or []
+        llm_conf = llm_out.get("confidence")
+        if cand and cand != text and _is_word_level_edit(text, cand):
+            corrected = cand
+            llm_changes = _diff_changes(text, cand)
+            used_llm = True
+        elif cand and cand != text:
+            # Looked like a rewrite — reject it, flag the difference instead.
+            uncertain = uncertain + [{
+                "span": text, "alternatives": [cand],
+                "reason": "model suggested a larger rewrite; kept original to avoid paraphrasing"
+            }]
 
     # Numbers/doses/measurements are never silently changed — flag if they did.
     uncertain = verify_numbers(raw, corrected, uncertain)
 
-    changes = lex_changes
-    confidence = _score(changes, uncertain)
+    changes = lex_changes + llm_changes
+    confidence = _score(changes, uncertain, llm_conf, used_llm)
     ms = int((time.perf_counter() - t0) * 1000)
 
     result = {
@@ -419,6 +542,9 @@ def correct(raw: str, lang: str, patient_name: str = "") -> dict:
         "changes": changes,
         "uncertain": uncertain,
         "stage2_ms": ms,
+        "llm_used": used_llm,
+        "llm_provider": llm.last_provider() if used_llm else None,
+        "llm_model": llm.last_model() if used_llm else None,
     }
     _log(lang, result)
     return result
@@ -431,7 +557,7 @@ def _log(lang: str, result: dict):
         rec = {"ts": datetime.now(timezone.utc).isoformat(), "lang": lang,
                "raw": result["raw"], "corrected": result["corrected"],
                "confidence": result["confidence"], "changes": result["changes"],
-               "uncertain": result["uncertain"]}
+               "uncertain": result["uncertain"], "llm_used": result["llm_used"]}
         with LOG_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
