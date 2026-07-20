@@ -37,6 +37,7 @@ router.get('/summary', authMiddleware, requireRole('admin'), async (req, res) =>
       avgTimesResult,
       byHourResult,
       followupResult,
+      accuracyResult,
     ] = await Promise.all([
       // Overall throughput + live queue load + avg arrival→seen wait
       pool.query(`
@@ -103,6 +104,16 @@ router.get('/summary', authMiddleware, requireRole('admin'), async (req, res) =>
 
       // Follow-up stats (optional table)
       pool.query(`SELECT status, COUNT(*) as count FROM scheduled_followups WHERE created_at >= ${since} GROUP BY status`).catch(() => ({ rows: [] })),
+
+      // AI report-accuracy signal — from the doctor's Accurate/Inaccurate review and
+      // whether they had to edit the summary. Turns the feedback we already collect
+      // into a rate. Only reports reviewed by a doctor count toward the rate.
+      pool.query(`SELECT
+          COUNT(*) FILTER (WHERE doctor_feedback = 'accurate')      AS accurate,
+          COUNT(*) FILTER (WHERE doctor_feedback = 'inaccurate')    AS inaccurate,
+          COUNT(*) FILTER (WHERE doctor_correction IS NOT NULL)     AS edited,
+          COUNT(*) FILTER (WHERE doctor_feedback IS NOT NULL)       AS reviewed
+        FROM session_reports WHERE created_at >= ${since}`).catch(() => ({ rows: [] })),
     ]);
 
     const tp = throughputResult.rows[0] || {};
@@ -139,6 +150,14 @@ router.get('/summary', authMiddleware, requireRole('admin'), async (req, res) =>
       avg_total_minutes: num(avgTimesResult.rows[0]?.avg_total_minutes),
       completed_count: parseInt(avgTimesResult.rows[0]?.completed_count || 0),
       followups: followupResult.rows.map(r => ({ status: r.status, count: parseInt(r.count) })),
+      ai_accuracy: (() => {
+        const a = accuracyResult.rows[0] || {};
+        const accurate = parseInt(a.accurate || 0);
+        const inaccurate = parseInt(a.inaccurate || 0);
+        const edited = parseInt(a.edited || 0);
+        const reviewed = parseInt(a.reviewed || 0);
+        return { accurate, inaccurate, edited, reviewed, rate: reviewed ? Math.round((accurate / reviewed) * 100) : null };
+      })(),
     });
   } catch (err) {
     console.error('analytics error:', err);

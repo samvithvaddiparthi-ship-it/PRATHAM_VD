@@ -201,6 +201,12 @@ function DoctorDashboard({ doctor }) {
   const [editText, setEditText] = useState('');            // working copy of the report markdown
   const [savingEdit, setSavingEdit] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false); // toggle AI original vs doctor-edited
+  // "Flag to HIS" — raise a systemic ticket (a questionnaire/prompt problem), distinct
+  // from the per-patient Accurate/Inaccurate feedback.
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [flagCategory, setFlagCategory] = useState('');
+  const [flagNote, setFlagNote] = useState('');
+  const [flagSaving, setFlagSaving] = useState(false);
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);       // kebab (⋯) menu
@@ -347,6 +353,22 @@ function DoctorDashboard({ doctor }) {
     api.getVitals(s.id).then(setVitals).catch(() => setVitals(null));
     // Reset the report-correction editor for the new patient.
     setEditing(false); setEditText(''); setShowOriginal(false);
+    // Reset the "flag to HIS" panel for the new patient.
+    setFlagOpen(false); setFlagCategory(''); setFlagNote('');
+  }
+
+  async function submitFlag() {
+    if (!selected || !flagCategory) return;
+    setFlagSaving(true);
+    try {
+      await api.createTicket({ session_id: selected.id, category: flagCategory, note: flagNote });
+      setFlagOpen(false); setFlagCategory(''); setFlagNote('');
+      toast('Flagged to HIS — the admin team will review it.', 'success');
+    } catch (err) {
+      toast('Could not raise the ticket: ' + err.message, 'error');
+    } finally {
+      setFlagSaving(false);
+    }
   }
 
   async function saveReportEdit() {
@@ -1260,6 +1282,42 @@ function DoctorDashboard({ doctor }) {
                                 onClick={() => { setEditText(report?.doctor_correction || report?.report_md || ''); setShowOriginal(false); setEditing(true); }}>Incorrect History — Edit</button>
                             </div>
                           </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Flag to HIS — a systemic questionnaire/prompt issue, distinct
+                        from the per-patient Accurate/Inaccurate feedback above. */}
+                    {!editing && (
+                      <div style={{ marginTop: 14, borderTop: '1px solid #EEF2F6', paddingTop: 12 }}>
+                        {!flagOpen ? (
+                          <button onClick={() => setFlagOpen(true)}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                            ⚑ Flag a questionnaire/AI issue to HIS
+                          </button>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <p style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600 }}>Flag to HIS
+                              <span style={{ fontWeight: 400, color: 'var(--text-light)' }}> — for a systemic issue (a missing question, a wrong extraction…), not just this patient.</span></p>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {[['missing_question', 'Missing question'], ['wrong_extraction', 'Wrong extraction'], ['prompt_issue', 'Summary/prompt issue'], ['triage_concern', 'Triage concern'], ['other', 'Other']].map(([val, label]) => (
+                                <button key={val} type="button" onClick={() => setFlagCategory(val)}
+                                  style={{ padding: '5px 10px', borderRadius: 14, fontSize: 'calc(11px * var(--fs))', cursor: 'pointer',
+                                    border: flagCategory === val ? '1px solid var(--primary)' : '1px solid #D0D0D0',
+                                    background: flagCategory === val ? 'var(--primary)' : '#fff',
+                                    color: flagCategory === val ? '#fff' : 'var(--text)' }}>{label}</button>
+                              ))}
+                            </div>
+                            <textarea className="input" rows={2} value={flagNote} onChange={e => setFlagNote(e.target.value)}
+                              placeholder="Optional: what's wrong and what HIS should fix"
+                              style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: 'calc(12px * var(--fs))' }} />
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button className="btn btn-primary" style={{ width: 'auto', padding: '0 14px', minHeight: 34 }}
+                                disabled={!flagCategory || flagSaving} onClick={submitFlag}>{flagSaving ? 'Sending…' : 'Send to HIS'}</button>
+                              <button className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 34 }}
+                                onClick={() => { setFlagOpen(false); setFlagCategory(''); setFlagNote(''); }}>Cancel</button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     )}

@@ -137,6 +137,8 @@ function AdminLogin({ onSuccess }) {
 
 function HISDashboard() {
   const [tab, setTab] = useState('sessions');
+  // When a ticket points at a department, jump to Questionnaires pre-selected there.
+  const [questionsDept, setQuestionsDept] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [depts, setDepts] = useState([]);
@@ -297,7 +299,7 @@ function HISDashboard() {
         {[
           ['sessions', 'Patients'], ['analytics', 'Analytics'], ['departments', 'Departments'],
           ['doctors', 'Doctors'], ['questions', 'Questionnaires'], ['protocols', 'Protocols'],
-          ['formulary', 'Drug Formulary'], ['rxtemplate', 'Rx Template'],
+          ['tickets', 'Tickets'], ['formulary', 'Drug Formulary'], ['rxtemplate', 'Rx Template'],
         ].map(([id, label]) => (
           <button key={id}
             className={`btn ${tab === id ? 'btn-primary' : 'btn-outline'}`}
@@ -315,7 +317,9 @@ function HISDashboard() {
       ) : tab === 'doctors' ? (
         <DoctorInfo doctors={doctors} depts={depts} onChange={loadDoctors} />
       ) : tab === 'questions' ? (
-        <QuestionsManager key={refreshKey} depts={depts} />
+        <QuestionsManager key={refreshKey} depts={depts} initialDept={questionsDept} />
+      ) : tab === 'tickets' ? (
+        <TicketsManager onOpenQuestionnaire={(d) => { setQuestionsDept(d || null); setTab('questions'); }} />
       ) : tab === 'departments' ? (
         <DepartmentsManager depts={depts} onChange={loadDepts} />
       ) : tab === 'protocols' ? (
@@ -1632,8 +1636,9 @@ function QFlowMap({ questions, deptName, health, onPick, onClose }) {
   );
 }
 
-function QuestionsManager({ depts = [] }) {
-  const [dept, setDept] = useState('CARD');
+function QuestionsManager({ depts = [], initialDept = null }) {
+  // initialDept lets a ticket deep-link jump straight to the right department.
+  const [dept, setDept] = useState(initialDept || 'CARD');
   const [questions, setQuestions] = useState([]);
   const [editing, setEditing] = useState(null); // null = nothing selected
   const [saving, setSaving] = useState(false);
@@ -2158,6 +2163,138 @@ function QuestionsManager({ depts = [] }) {
           : !editing ? <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click “+ Add question”.</p>
           : editing.is_base ? renderBaseEditor() : renderDagEditor()}
       </div>
+    </div>
+  );
+}
+
+
+// Doctor-raised tickets about the AI summaries / questionnaires. The doctor flags a
+// systemic issue from their dashboard; HIS reviews here, and can jump straight to the
+// relevant department's questionnaire (which now stages edits as a draft to publish).
+const TICKET_CATEGORY_LABELS = {
+  missing_question: 'Missing question',
+  wrong_extraction: 'Wrong extraction',
+  prompt_issue: 'Summary/prompt issue',
+  triage_concern: 'Triage concern',
+  other: 'Other',
+};
+function fmtTicketDate(d) {
+  if (!d) return '';
+  try { return new Date(d).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+  catch { return ''; }
+}
+
+function TicketsManager({ onOpenQuestionnaire }) {
+  const [tickets, setTickets] = useState([]);
+  const [filter, setFilter] = useState('open'); // open | triaged | resolved | all
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [resolvingId, setResolvingId] = useState(null);
+  const [resolveNote, setResolveNote] = useState('');
+  const { toast, toastView } = useToast();
+
+  useEffect(() => { loadTickets(); /* eslint-disable-next-line */ }, [filter]);
+
+  async function loadTickets() {
+    setLoading(true);
+    try {
+      const resp = await api.getTickets(filter === 'all' ? '' : filter);
+      setTickets(Array.isArray(resp?.data) ? resp.data : []);
+    } catch { setTickets([]); }
+    finally { setLoading(false); }
+  }
+
+  async function setStatus(id, status, resolution) {
+    setBusyId(id);
+    try {
+      await api.updateTicket(id, { status, ...(resolution !== undefined ? { resolution } : {}) });
+      setResolvingId(null); setResolveNote('');
+      await loadTickets();
+      toast(status === 'resolved' ? 'Ticket resolved.' : 'Ticket updated.', 'success');
+    } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+    finally { setBusyId(null); }
+  }
+
+  const statusColor = { open: 'var(--red)', triaged: 'var(--amber-on)', resolved: 'var(--green)' };
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      {toastView}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <h2 style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', marginRight: 8 }}>Tickets from doctors</h2>
+        {[['open', 'Open'], ['triaged', 'Triaged'], ['resolved', 'Resolved'], ['all', 'All']].map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)}
+            className={`btn ${filter === id ? 'btn-primary' : 'btn-outline'}`}
+            style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}>{label}</button>
+        ))}
+        <button onClick={loadTickets} className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))', marginLeft: 'auto' }}>Refresh</button>
+      </div>
+
+      <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
+        Doctors raise these from a patient's report when something is a systemic questionnaire/AI problem (not just one patient).
+      </p>
+
+      {loading ? (
+        <p style={{ color: 'var(--text-light)' }}>Loading…</p>
+      ) : tickets.length === 0 ? (
+        <div style={{ padding: 16, borderRadius: 10, background: '#EAF7EF', color: 'var(--green)', fontSize: 'calc(13px * var(--fs))' }}>
+          ✓ No {filter === 'all' ? '' : filter} tickets.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {tickets.map(t => (
+            <div key={t.id} style={{ background: '#fff', borderRadius: 12, padding: 14, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', borderLeft: `4px solid ${statusColor[t.status] || 'var(--text-light)'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, fontSize: 'calc(13px * var(--fs))' }}>{TICKET_CATEGORY_LABELS[t.category] || t.category}</span>
+                {t.department && <span style={{ fontSize: 'calc(11px * var(--fs))', background: '#EEF2F6', borderRadius: 4, padding: '2px 8px' }}>{t.department}</span>}
+                <span style={{ fontSize: 'calc(11px * var(--fs))', textTransform: 'uppercase', fontWeight: 700, color: statusColor[t.status] || 'var(--text-light)' }}>{t.status}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{fmtTicketDate(t.created_at)}</span>
+              </div>
+              <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: t.note ? 6 : 0 }}>
+                {t.patient_name ? `Patient: ${t.patient_name} · ` : ''}Raised by {t.raised_by_name || 'a doctor'}
+              </div>
+              {t.note && <p style={{ fontSize: 'calc(13px * var(--fs))', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{t.note}</p>}
+              {t.status === 'resolved' && (t.resolution || t.resolved_by) && (
+                <div style={{ fontSize: 'calc(12px * var(--fs))', background: '#EAF7EF', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+                  <strong>Resolved{t.resolved_by ? ` by ${t.resolved_by}` : ''}:</strong> {t.resolution || '—'}
+                </div>
+              )}
+
+              {resolvingId === t.id ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <textarea className="input" rows={2} value={resolveNote} onChange={e => setResolveNote(e.target.value)}
+                    placeholder="What was done (optional)" style={{ resize: 'vertical', fontFamily: 'inherit', fontSize: 'calc(12px * var(--fs))' }} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-primary" style={{ width: 'auto', padding: '0 14px', minHeight: 32 }} disabled={busyId === t.id}
+                      onClick={() => setStatus(t.id, 'resolved', resolveNote)}>Confirm resolve</button>
+                    <button className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32 }}
+                      onClick={() => { setResolvingId(null); setResolveNote(''); }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {t.department && (
+                    <button className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}
+                      onClick={() => onOpenQuestionnaire && onOpenQuestionnaire(t.department)}>Open questionnaire →</button>
+                  )}
+                  {t.status === 'open' && (
+                    <button className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}
+                      disabled={busyId === t.id} onClick={() => setStatus(t.id, 'triaged')}>Mark triaged</button>
+                  )}
+                  {t.status !== 'resolved' && (
+                    <button className="btn btn-primary" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}
+                      disabled={busyId === t.id} onClick={() => { setResolvingId(t.id); setResolveNote(''); }}>Resolve</button>
+                  )}
+                  {t.status === 'resolved' && (
+                    <button className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}
+                      disabled={busyId === t.id} onClick={() => setStatus(t.id, 'open')}>Reopen</button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3046,6 +3183,31 @@ function AnalyticsDashboard() {
           })()}
         </div>
       </div>
+
+      {data.ai_accuracy && (
+        <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <h3 style={{ fontSize: 'calc(15px * var(--fs))', color: 'var(--primary)', marginBottom: 4 }}>AI summary accuracy</h3>
+          <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
+            From doctors' Accurate/Inaccurate review of the AI report (this period). Only reviewed reports count toward the rate.
+          </p>
+          {data.ai_accuracy.reviewed > 0 ? (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
+              <div style={{ background: '#EAF7EF', borderRadius: 8, padding: '10px 18px', textAlign: 'center', minWidth: 110 }}>
+                <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>Accepted rate</p>
+                <p style={{ fontSize: 'calc(26px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>{data.ai_accuracy.rate}%</p>
+              </div>
+              {[['Reviewed', data.ai_accuracy.reviewed], ['Accurate', data.ai_accuracy.accurate], ['Inaccurate', data.ai_accuracy.inaccurate], ['Edited', data.ai_accuracy.edited]].map(([label, val]) => (
+                <div key={label} style={{ background: '#F8F9FA', borderRadius: 8, padding: '10px 18px', textAlign: 'center', minWidth: 90 }}>
+                  <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>{label}</p>
+                  <p style={{ fontSize: 'calc(20px * var(--fs))', fontWeight: 600 }}>{val}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>No reports reviewed by a doctor in this period yet.</p>
+          )}
+        </div>
+      )}
 
       {data.followups?.length > 0 && (
         <div style={{ background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
