@@ -201,6 +201,14 @@ function DoctorDashboard({ doctor }) {
   const [editText, setEditText] = useState('');            // working copy of the report markdown
   const [savingEdit, setSavingEdit] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false); // toggle AI original vs doctor-edited
+  // Report translation (Bhashini NMT — same engine the patient form uses). The
+  // report carries the patient's OWN words verbatim (chief complaint, medicines,
+  // allergies), so when they answered in Hindi/Telugu those lines reach the doctor
+  // in that script. This translates ONLY those spans; English is never re-touched.
+  const [translated, setTranslated] = useState('');        // translated view, '' = none yet
+  const [showTranslated, setShowTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [translateErr, setTranslateErr] = useState('');
   // "Flag to HIS" — raise a systemic ticket (a questionnaire/prompt problem), distinct
   // from the per-patient Accurate/Inaccurate feedback.
   const [flagOpen, setFlagOpen] = useState(false);
@@ -353,8 +361,54 @@ function DoctorDashboard({ doctor }) {
     api.getVitals(s.id).then(setVitals).catch(() => setVitals(null));
     // Reset the report-correction editor for the new patient.
     setEditing(false); setEditText(''); setShowOriginal(false);
+    // Drop any translation held for the previous patient.
+    setTranslated(''); setShowTranslated(false); setTranslateErr('');
     // Reset the "flag to HIS" panel for the new patient.
     setFlagOpen(false); setFlagCategory(''); setFlagNote('');
+  }
+
+  // ── Report translation ──────────────────────────────────────────────────────
+  // Indic spans only. A run must START and END on a Devanagari/Telugu character;
+  // separators are permitted only BETWEEN them, and never a line break. So
+  // "Chief complaint: पेट में 2 दिन से दर्द" sends just the Hindi phrase, and
+  // "పారాసిటమాల్ ... - 2 tablets" keeps its dose. Trailing punctuation, bullets and
+  // markdown structure (##, -, |) are therefore never swallowed, and the English
+  // half of a mixed line is returned byte-identical.
+  const INDIC_RUN = /[ऀ-ॿఀ-౿](?:[ऀ-ॿఀ-౿0-9 \t,.\-–—:;()'"/%]*[ऀ-ॿఀ-౿])?/g;
+  const hasIndic = (s) => /[ऀ-ॿఀ-౿]/.test(s || '');
+  const runLang = (s) => (/[ఀ-౿]/.test(s) ? 'te' : 'hi');
+
+  const shownReport = report ? ((report.doctor_correction && !showOriginal) ? report.doctor_correction : report.report_md) : '';
+
+  async function translateReport() {
+    if (showTranslated) { setShowTranslated(false); return; }
+    if (translated) { setShowTranslated(true); return; }      // already fetched
+    setTranslating(true); setTranslateErr('');
+    try {
+      const src = shownReport || '';
+      // Unique spans only — the same phrase (e.g. a repeated symptom) costs one call.
+      const spans = Array.from(new Set((src.match(INDIC_RUN) || []).filter(Boolean)));
+      if (!spans.length) { setTranslating(false); return; }
+      const pairs = await Promise.all(spans.map(async (sp) => {
+        try {
+          const r = await api.translateText(sp, runLang(sp));
+          return [sp, (r && r.english) ? r.english : sp];     // fall back to original
+        } catch { return [sp, sp]; }
+      }));
+      const map = new Map(pairs);
+      let anyChanged = false;
+      const out = src.replace(INDIC_RUN, (m) => {
+        const en = map.get(m);
+        if (en && en !== m) anyChanged = true;
+        return en || m;
+      });
+      if (!anyChanged) { setTranslateErr('Translation unavailable right now.'); }
+      else { setTranslated(out); setShowTranslated(true); }
+    } catch {
+      setTranslateErr('Translation unavailable right now.');
+    } finally {
+      setTranslating(false);
+    }
   }
 
   async function submitFlag() {
@@ -379,6 +433,8 @@ function DoctorDashboard({ doctor }) {
       setReport(await api.getReport(selected.id));   // now carries the edited body
       setEditing(false);
       setShowOriginal(false);
+      // The report body changed — any cached translation is now stale.
+      setTranslated(''); setShowTranslated(false); setTranslateErr('');
       setFeedbackGiven({ id: selected.id, val: 'inaccurate' });
     } catch {
       toast('Could not save the edited report — please try again', 'error');
@@ -1201,17 +1257,36 @@ function DoctorDashboard({ doctor }) {
                     {report.doctor_correction && !showOriginal && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'calc(12px * var(--fs))', fontWeight: 600, color: 'var(--amber-on-tint)', background: '#FEF9E7', border: '1px solid #F7DC6F', borderRadius: 6, padding: '3px 9px' }}>✎ Edited by doctor</span>
-                        <button onClick={() => setShowOriginal(true)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>View original (AI)</button>
+                        <button onClick={() => { setShowOriginal(true); setTranslated(''); setShowTranslated(false); }} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>View original (AI)</button>
                       </div>
                     )}
                     {report.doctor_correction && showOriginal && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600, color: 'var(--text-light)' }}>Original AI report</span>
-                        <button onClick={() => setShowOriginal(false)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>Back to edited</button>
+                        <button onClick={() => { setShowOriginal(false); setTranslated(''); setShowTranslated(false); }} style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline' }}>Back to edited</button>
+                      </div>
+                    )}
+                    {/* Translation — only offered when the report actually contains
+                        Hindi/Telugu text (i.e. the patient answered in that language).
+                        A fully-English report never shows this control. */}
+                    {hasIndic(shownReport) && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                        <button type="button" onClick={translateReport} disabled={translating}
+                          style={{ background: 'none', border: 'none', color: 'var(--secondary)', fontSize: 'calc(12px * var(--fs))', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                          {translating ? 'Translating…' : showTranslated ? 'Show original (patient’s words)' : '🌐 Translate to English'}
+                        </button>
+                        {showTranslated && (
+                          <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>
+                            Machine translation of the patient's own words — English text is unchanged. Not saved to the record.
+                          </span>
+                        )}
+                        {translateErr && (
+                          <span role="alert" style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--red)' }}>{translateErr}</span>
+                        )}
                       </div>
                     )}
                     <div style={{ lineHeight: 1.8, fontSize: 'calc(15px * var(--fs))' }}>
-                      <ReactMarkdown>{(report.doctor_correction && !showOriginal) ? report.doctor_correction : report.report_md}</ReactMarkdown>
+                      <ReactMarkdown>{(showTranslated && translated) ? translated : shownReport}</ReactMarkdown>
                     </div>
 
                     {/* Vitals not recorded → let the doctor/nurse add them (re-triages + regenerates). */}
