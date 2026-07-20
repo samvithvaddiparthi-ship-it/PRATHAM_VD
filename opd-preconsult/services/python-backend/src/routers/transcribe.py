@@ -3,15 +3,15 @@ Bhashini transcription for the patient app — mirrors the standalone lab.
 
   Stage 1 — Bhashini ASR (hosted). The raw output is NOT surfaced to the UI.
   Stage 2 — medical-domain correction (curated drug/lab lexicon, de-stutter,
-            context-gated patient-name matching). Deterministic by default;
-            the LLM validation layer is opt-in (BHASHINI_STAGE2_LLM).
+            context-gated patient-name matching). FULLY DETERMINISTIC — no model
+            takes any part in altering the patient's words.
 
 The transcript is shown in the SPOKEN language only (Hindi stays Hindi, Telugu
 stays Telugu) — no translation. The clip is stored as WAV for doctor playback.
 
 POST /api/transcribe   multipart: file, lang (REQUIRED), patient_name?,
                        session_id?, question_id?, duration_ms? -> { text, ... }
-GET  /api/transcribe/health -> { bhashini, llm }
+GET  /api/transcribe/health -> { bhashini }
 """
 import logging
 from typing import Optional
@@ -20,7 +20,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from ..db import execute
 from .. import storage
 from ..auth import require_auth, enforce_ownership
-from ..bhashini import asr, medcorrect, _llm
+from ..bhashini import asr, medcorrect
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ STAGE2_LANGS = ("en", "hi", "te")
 
 @router.get("/health")
 async def health():
-    return {"bhashini": asr.have_keys(), "llm": _llm.have_llm()}
+    return {"bhashini": asr.have_keys()}
 
 
 @router.post("/translate", dependencies=[Depends(require_auth)])
@@ -83,13 +83,11 @@ async def transcribe(
 
     # ── Stage 2: medical correction in the chosen language ──
     text = raw
-    llm_used = False
     changes = []
     if raw.strip():
         try:
             c = medcorrect.correct(raw, lang, patient_name=patient_name)
             text = c.get("corrected") or raw
-            llm_used = bool(c.get("llm_used"))
             changes = c.get("changes") or []
         except Exception:
             logger.warning("transcribe Stage-2 correction failed", exc_info=True)
@@ -117,7 +115,5 @@ async def transcribe(
         "text": text,                  # corrected transcript in the chosen language
         "lang": lang,                  # the language the patient chose to speak in
         "bhashini_ok": bhashini_ok,    # Stage-1 produced a transcript
-        "llm_used": llm_used,
-        "llm_enabled": _llm.have_llm(),
         "changes": changes,
     }
