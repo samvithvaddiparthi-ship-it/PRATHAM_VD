@@ -172,13 +172,11 @@ UNITS = ["mg", "ml", "mcg", "g", "kg", "mmhg", "mmol/l", "mg/dl", "bpm",
          "%", "iu", "units", "/min", "cm", "mm", "ng/ml", "u/l"]
 
 
-# Applied verbatim before the LLM step. Keep ONLY swaps you're confident about in
-# a medical context (these never need the model's judgement).
+# Applied verbatim before the LLM step. ORTHOGRAPHY ONLY — normalising how a word is
+# written, never guessing which word was meant. Recogniser mishearings are the LLM's
+# job: a hand-listed mishearing only ever fixes the one case someone happened to test.
 CONFUSION_MAP_HI = {
-    "खून की चर्चा": "खून की जाँच",
-    "खून की जांच": "खून की जाँच",
-    "जांच": "जाँच",
-    "सिने में दर्द": "सीने में दर्द",
+    "जांच": "जाँच",   # anusvara written for the chandrabindu
 }
 
 # English medical terms: normalise casing/spelling only — NEVER translate.
@@ -230,8 +228,7 @@ TERMS_TE = {
 
 # High-confidence exact Telugu phrase normalisations.
 CONFUSION_MAP_TE = {
-    "రక్త పోటు": "రక్తపోటు",
-    "చక్కర వ్యాధి": "మధుమేహం",
+    "రక్త పోటు": "రక్తపోటు",   # compound split across a space
 }
 
 # Telugu-script aliases for the most common drugs (patients usually say the

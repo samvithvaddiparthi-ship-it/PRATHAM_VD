@@ -380,9 +380,15 @@ Your ONLY job is to fix words that the recogniser clearly got wrong into somethi
 HARD RULES:
 - Preserve the patient's exact wording, word order, grammar and colloquial style.
 - Do NOT translate, paraphrase, summarise, expand, reorder, or add/remove information.
-- Only substitute a word when a medically more-plausible NEAR-HOMOPHONE exists in context \
-(in Hindi e.g. "खून की चर्चा" -> "खून की जाँच"; in Telugu e.g. "రక్త పోటు" -> "రక్తపోటు").
+- Only substitute a word when a medically more-plausible NEAR-HOMOPHONE exists in context: \
+the words must sound alike, the original must be implausible or meaningless in a clinical sentence, \
+and the replacement must fit the surrounding grammar. Symptom, anatomy and drug words are where \
+recognisers fail most — read those especially carefully, since a mis-heard symptom changes the clinical meaning.
 - Keep code-switched English medical terms; only normalise casing (ecg->ECG, bp->BP). Never translate them to __LANG__ or vice-versa.
+- The transcript has ALREADY been through deterministic normalisation: spelling/orthography, canonical \
+drug and lab-test names, and the patient's registered name. Anything listed in \
+`lexicon_candidates_already_applied` is settled — do NOT revert it, and do not restyle a drug or test \
+name that is already canonical. Correct only what those passes could not know about.
 - When fixing a medical, anatomical or drug word, PREFER a term from `medical_vocabulary` (provided). Do not invent medical terms outside it unless the correct word is obvious.
 - NEVER change any token listed in `protected_values` (numbers, doses, measurements, lab values, Rx frequency codes like BD/OD/TDS) — copy them EXACTLY. If a value sounds wrong, do not fix it; add it to "uncertain" instead.
 - If you are NOT confident a word is wrong, KEEP the original and list it under "uncertain" with alternatives. Never guess confidently.
