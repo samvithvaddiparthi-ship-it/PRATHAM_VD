@@ -63,9 +63,15 @@ be injected into a live department's intake.
 ### Outstanding production TODO
 
 Kept OUTSIDE git at `Documents/Internship-2026/PRODUCTION-TODO-pratham-opd.md`. Parked:
-DPDP retention worker, per-user admin accounts (currently one shared `ADMIN_PASSCODE`),
-error tracking (Sentry vs self-hosted GlitchTip — needs a DSN), LICENSE/SECURITY.md
+per-user admin accounts (currently one shared `ADMIN_PASSCODE`), LICENSE/SECURITY.md
 (asking mentor), Postgres TLS (only when DB moves off-box).
+- **DPDP retention worker is BUILT** (`workers/retention-worker.js`, hard-erases via
+  `utils/erase.js`); it is OFF by default and enabled by setting `RETENTION_DAYS > 0`
+  — that value is a policy decision, not code work.
+- **Error tracking — DECIDED 2026-07-20: cloud Sentry** (mentors chose cloud over
+  self-hosted GlitchTip). The Sentry SDK is scaffolded into both backends with PHI
+  scrubbing and a feature flag; it is a **no-op until `SENTRY_DSN` is set** in `.env`.
+  Set the DSN from the Sentry project to turn it on. Backend only for now (frontend later).
 - **Bhashini STT** needs `BHASHINI_INFERENCE_API_KEY` (required) + `BHASHINI_UDYAT_KEY`; the working values are in this folder's `.env` (lines 53–54, from mentor Ebith — rotate before go-live). Now documented in `.env.example`. Health check: `GET /api/transcribe/health` → `{"bhashini": true}`.
 
 ## Production intent (apply this lens)

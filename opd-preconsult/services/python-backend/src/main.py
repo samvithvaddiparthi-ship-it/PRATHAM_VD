@@ -8,11 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routers import llm, triage, report, ocr, prescription, scribe, drugs, audio, transcribe, tts
 from .llm_client import LLMUnavailable
 from .auth import require_auth
+from .observability import init_error_tracking
 from . import drug_repo
 
 logger = logging.getLogger(__name__)
 
 _IS_PROD = (os.environ.get("NODE_ENV") or "").lower() == "production"
+
+# Initialise error tracking before the app is built so startup errors are captured
+# too (no-op unless SENTRY_DSN is set). The FastAPI integration then auto-captures
+# unhandled exceptions in routes.
+init_error_tracking()
 
 app = FastAPI(title="OPD Pre-Consult Python Backend")
 

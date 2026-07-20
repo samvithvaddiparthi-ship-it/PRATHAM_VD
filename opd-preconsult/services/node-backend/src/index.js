@@ -1,3 +1,6 @@
+// Error tracking first — initialises Sentry before the rest of the app loads (no-op
+// unless SENTRY_DSN is set). See utils/errorTracking.js.
+require('./utils/errorTracking');
 const express = require('express');
 const cors = require('cors');
 const pool = require('./models/db');
