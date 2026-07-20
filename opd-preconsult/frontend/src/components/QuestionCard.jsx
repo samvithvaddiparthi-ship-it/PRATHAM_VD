@@ -14,6 +14,9 @@ const UPLOAD_CONFIG = {
 
 export default function QuestionCard({ question, lang, onAnswer, initialValue = '' }) {
   const [value, setValue] = useState(initialValue);
+  // MULTI_SELECT keeps its own set of chosen values (submitted joined). Seeded from
+  // initialValue so returning to an answered multi-select re-checks the picks.
+  const [multi, setMulti] = useState(() => (initialValue ? String(initialValue).split(', ').filter(Boolean) : []));
   const [uploading, setUploading] = useState(false);
   const [ocrResult, setOcrResult] = useState(null);
   const [inputError, setInputError] = useState('');
@@ -43,6 +46,7 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
 
   useEffect(() => {
     setValue(initialValue);
+    setMulti(initialValue ? String(initialValue).split(', ').filter(Boolean) : []);
     setInputError('');
     setTranscribing(false);
     setTranslation(''); setShowTranslation(false); setTranslating(false);
@@ -396,6 +400,38 @@ export default function QuestionCard({ question, lang, onAnswer, initialValue = 
             onChange={e => setValue(e.target.value)}
           />
           <button className="btn btn-primary" onClick={() => submit()} disabled={!value}>
+            {lang === 'hi' ? 'अगला' : lang === 'te' ? 'తదుపరి' : 'Next'}
+          </button>
+        </div>
+      )}
+
+      {type === 'MULTI_SELECT' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {options.map(opt => {
+            const sel = multi.includes(opt.value);
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                className={`btn ${sel ? 'btn-primary' : 'btn-outline'}`}
+                style={{ gap: 8, justifyContent: 'flex-start' }}
+                onClick={() => { setInputError(''); setMulti(prev => sel ? prev.filter(v => v !== opt.value) : [...prev, opt.value]); }}
+              >
+                <span aria-hidden="true">{sel ? '☑' : '☐'}</span>
+                {opt[`label_${lang}`] || opt.label_en}
+              </button>
+            );
+          })}
+          {inputError && <p style={{ color: 'var(--red)', fontSize: 13, textAlign: 'center' }}>{inputError}</p>}
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 4 }}
+            onClick={() => {
+              if (question.required && multi.length === 0) { setInputError(t('err_response_required', lang)); return; }
+              setInputError('');
+              onAnswer(multi.join(', '));
+            }}
+          >
             {lang === 'hi' ? 'अगला' : lang === 'te' ? 'తదుపరి' : 'Next'}
           </button>
         </div>
