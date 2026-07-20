@@ -194,6 +194,12 @@ async def _generate_report_impl(req: ReportRequest):
     session_json["medications_from_patient"] = _extract_patient_meds(
         _base_answer(session_json["answers"], "medications") or ""
     )
+    # Same treatment for the patient's spoken/typed allergies answer (Bhashini NMT +
+    # LLM extraction) so a Hindi/Telugu sentence with a greeting doesn't surface
+    # verbatim as the allergy list — only the actual allergens do.
+    session_json["allergies_from_patient"] = _extract_patient_allergies(
+        _base_answer(session_json["answers"], "allergies") or ""
+    )
 
     # Generate report. HYBRID: the LLM writes ONLY the interpretive sections
     # (Quick Summary, Chief Complaint & History, Past Medical History, Lab Results).
@@ -460,6 +466,63 @@ def _extract_patient_meds(text: str) -> dict:
     return {"items": cleaned, "parsed": bool(cleaned), "raw": raw, "english": english_out}
 
 
+def _parse_str_list_json(out: str) -> list:
+    """Best-effort parse of a JSON array of strings (tolerate code fences/prose)."""
+    s = (out or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s).rstrip("`").strip()
+    m = re.search(r"\[.*\]", s, re.DOTALL)
+    if m:
+        s = m.group(0)
+    try:
+        data = json.loads(s)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(x).strip() for x in data if str(x).strip()]
+
+
+def _extract_patient_allergies(text: str) -> dict:
+    """Turn the patient's free-text/spoken 'what are you allergic to' answer into a
+    structured allergen list, so their greeting and rambling sentence never surface
+    verbatim in the Allergies section of the report or the doctor's view.
+
+    Same pipeline as _extract_patient_meds: Bhashini NMT to English (when the answer
+    is in an Indian script), then an LLM extraction that keeps only real allergens.
+    Returns {"items": [<allergen str>], "parsed": bool, "raw": str, "english": str}.
+    'parsed' is False when the AI is unavailable; the caller then shows the raw text
+    once as a labelled, unverified note (never as clean, confirmed allergens)."""
+    raw = (text or "").strip()
+    if not raw or raw.lower() in ("none", "nil", "no", "n/a", "-", "no allergies", "nkda"):
+        return {"items": [], "parsed": True, "raw": "", "english": ""}
+
+    # 1) Translate to English via Bhashini NMT when the answer is in an Indian
+    #    script. Best-effort — fall back to the raw text.
+    english = raw
+    lang = _script_lang(raw)
+    if lang in ("hi", "te"):
+        try:
+            from ..bhashini import asr
+            if asr.have_keys():
+                english = asr.translate(raw, lang, "en") or raw
+        except Exception:
+            logger.warning("patient-allergy translation failed; using raw text", exc_info=True)
+    english_out = english if english != raw else ""
+
+    # 2) LLM-extract the allergen names from the (now English) text.
+    from ..llm_client import has_llm, complete as llm_complete
+    if not has_llm():
+        return {"items": [], "parsed": False, "raw": raw, "english": english_out}
+    try:
+        prompt = (PROMPT_DIR / "extract_patient_allergies.txt").read_text()
+        items = _parse_str_list_json(llm_complete(prompt, english, max_tokens=256))
+    except Exception:
+        logger.warning("patient-allergy extraction failed", exc_info=True)
+        return {"items": [], "parsed": False, "raw": raw, "english": english_out}
+    return {"items": items, "parsed": bool(items), "raw": raw, "english": english_out}
+
+
 def _render_medications(session_json) -> str:
     """## Current/Prior Medications — grouped by source prescription (OCR), plus the
     patient's own reported meds (structured by _extract_patient_meds so greetings and
@@ -515,16 +578,29 @@ def _render_medications(session_json) -> str:
 
 
 def _render_allergies(session_json) -> str:
-    """## Allergies — the patient's own answer (authoritative), verbatim. Any
-    allergies OCR-extracted from uploaded documents are listed SEPARATELY and
-    clearly labelled 'from uploaded <doc> — AI-extracted, verify', never merged
-    into the patient-stated line (they are AI-derived and must be doctor-verified).
-    Document allergies already de-duplicate against the patient-stated text."""
-    answers = session_json.get("answers", {})
-    stated = _base_answer(answers, "allergies")
-    lines = ["## Allergies", stated if stated else "Not recorded"]
+    """## Allergies — the patient's own answer, structured by _extract_patient_allergies
+    (Bhashini NMT + LLM) so a spoken Hindi/Telugu sentence with a greeting is reduced
+    to the actual allergens, never surfaced verbatim. When the AI can't parse it, the
+    raw/translated text is shown once, clearly flagged as unverified. Any allergies
+    OCR-extracted from uploaded documents are listed SEPARATELY and clearly labelled
+    'from uploaded <doc> — AI-extracted, verify', never merged into the patient-stated
+    line. Document allergies de-duplicate against the patient-stated text."""
+    pa = session_json.get("allergies_from_patient") or {"items": [], "parsed": True, "raw": "", "english": ""}
+    lines = ["## Allergies"]
+    if pa.get("items"):
+        for a in pa["items"]:
+            lines.append(f"- {a}")
+    elif pa.get("raw") and not pa.get("parsed"):
+        # Couldn't parse it into allergens (AI unavailable, or nothing recognised) —
+        # show it once, clearly flagged for the doctor to read, never as clean allergies.
+        note = pa.get("english") or pa.get("raw")
+        lines.append(f"- {note} (unverified — please review)")
+    else:
+        lines.append("Not recorded")
 
-    stated_lc = (stated or "").lower()
+    # De-dup document allergens against everything the patient stated (structured
+    # items + the raw/translated text, so a match is caught either way).
+    stated_lc = " ".join([*(pa.get("items") or []), pa.get("raw", ""), pa.get("english", "")]).lower()
     seen = set()
     for a in session_json.get("allergies_from_documents", []):
         allergen = str(a.get("allergen", "")).strip()
