@@ -64,12 +64,32 @@ export default function HISPage() {
   const [ready, setReady] = useState(false);
   // Restore a prior admin session on refresh. The token lives in sessionStorage
   // (tab-scoped), mirroring the doctor page — without this, every reload dropped
-  // the in-memory token and forced a fresh passcode login. If the token is stale,
-  // the first API call 401s and drops back to the login screen (same as doctor).
+  // the in-memory token and forced a fresh passcode login.
+  //
+  // The restored token is VERIFIED before the dashboard is shown. A token that has
+  // simply expired (they last 24h) would otherwise leave every tab 401ing on its
+  // own — the patient list rendering "0 patients" and analytics "Failed to load",
+  // which reads as data loss rather than an expired login. Failing back to the
+  // passcode screen is both truthful and actionable.
   useEffect(() => {
+    let cancelled = false;
     const saved = sessionStorage.getItem('admin_token');
-    if (saved) { setToken(saved); setAuthed(true); }
-    setReady(true);
+    if (!saved) { setReady(true); return; }
+    setToken(saved);
+    api.getAdminSettings()
+      .then(() => { if (!cancelled) { setAuthed(true); setReady(true); } })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.status === 401 || err.status === 403) {
+          try { sessionStorage.removeItem('admin_token'); } catch {}
+          setToken(null);
+          setAuthed(false);           // straight back to the passcode form
+        } else {
+          setAuthed(true);            // transient/network issue — keep the session
+        }
+        setReady(true);
+      });
+    return () => { cancelled = true; };
   }, []);
   if (!ready) return null;   // avoid a flash of the login form before restore runs
   if (!authed) return <AdminLogin onSuccess={() => setAuthed(true)} />;
@@ -2227,7 +2247,6 @@ function TicketsManager({ onOpenQuestionnaire }) {
             className={`btn ${filter === id ? 'btn-primary' : 'btn-outline'}`}
             style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}>{label}</button>
         ))}
-        <button onClick={loadTickets} className="btn btn-outline" style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))', marginLeft: 'auto' }}>Refresh</button>
       </div>
 
       <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
