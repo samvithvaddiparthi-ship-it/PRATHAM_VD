@@ -71,6 +71,8 @@ export const api = {
   updateQuestion: (id, data) => apiFetch(`/api/admin/questions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteQuestion: (id) => apiFetch(`/api/admin/questions/${id}`, { method: 'DELETE' }),
   reorderQuestions: (items) => apiFetch('/api/admin/questions/reorder', { method: 'POST', body: JSON.stringify({ items }) }),
+  publishQuestions: (department) => apiFetch('/api/admin/questions/publish', { method: 'POST', body: JSON.stringify({ department }) }),
+  discardDraft: (department) => apiFetch('/api/admin/questions/discard', { method: 'POST', body: JSON.stringify({ department }) }),
 
   // Vitals
   submitVitals: (sessionId, data) => apiFetch(`/api/vitals/${sessionId}`, { method: 'POST', body: JSON.stringify(data) }),

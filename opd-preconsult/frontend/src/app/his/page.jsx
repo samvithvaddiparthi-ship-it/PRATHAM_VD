@@ -1645,6 +1645,8 @@ function QuestionsManager({ depts = [] }) {
   const [showBulk, setShowBulk] = useState(false); // "add several" paste-a-list view
   const [bulkText, setBulkText] = useState('');
   const [bulkType, setBulkType] = useState('FREE_TEXT');
+  const [hasDraft, setHasDraft] = useState(false); // department has unpublished edits
+  const [publishing, setPublishing] = useState(false);
   const { confirm, dialog } = useConfirm();
   const { toast, toastView } = useToast();
 
@@ -1656,8 +1658,36 @@ function QuestionsManager({ depts = [] }) {
 
   async function loadQuestions() {
     // TERMINAL nodes are vestigial DAG sinks (the real "done" is the patient page).
-    try { setQuestions((await api.getQuestions(dept)).filter(q => q.q_type !== 'TERMINAL')); }
-    catch { setQuestions([]); }
+    try {
+      const resp = await api.getQuestions(dept);
+      // Endpoint returns { questions, has_draft }; tolerate a bare array too.
+      const list = Array.isArray(resp) ? resp : (resp.questions || []);
+      setQuestions(list.filter(q => q.q_type !== 'TERMINAL'));
+      setHasDraft(Array.isArray(resp) ? false : !!resp.has_draft);
+    } catch { setQuestions([]); setHasDraft(false); }
+  }
+
+  async function handlePublish() {
+    if (!(await confirm({
+      title: `Publish ${depts.find(d => d.code === dept)?.name || dept} questionnaire?`,
+      message: 'Your changes go live for the next patient in this department. This replaces the currently published questions.',
+      confirmLabel: 'Publish',
+    }))) return;
+    setPublishing(true);
+    try { await api.publishQuestions(dept); await loadQuestions(); toast('Published — changes are now live.', 'success'); }
+    catch (err) { toast('Publish failed: ' + err.message, 'error'); }
+    finally { setPublishing(false); }
+  }
+  async function handleDiscard() {
+    if (!(await confirm({
+      title: 'Discard unpublished changes?',
+      message: 'Your draft edits for this department are thrown away and the editor reverts to what patients currently see. This cannot be undone.',
+      confirmLabel: 'Discard', danger: true,
+    }))) return;
+    setPublishing(true);
+    try { await api.discardDraft(dept); setEditing(null); setPreview(null); setShowMap(false); setShowBulk(false); await loadQuestions(); toast('Draft discarded.', 'success'); }
+    catch (err) { toast('Discard failed: ' + err.message, 'error'); }
+    finally { setPublishing(false); }
   }
 
   const isNew = editing && !questions.find(q => q.id === editing.id);
@@ -2080,6 +2110,24 @@ function QuestionsManager({ depts = [] }) {
             <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setEditing(null); setPreview(null); setShowBulk(false); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram"><QGraphIcon /> Map</button>
           </div>
         </div>
+
+        {hasDraft ? (
+          <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, background: '#FDF3E2', border: '1px solid #F0D9A8' }}>
+            <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--amber-on)', fontWeight: 600, marginBottom: 6 }}>
+              ● Unpublished changes — patients still see the last published version.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button className="btn btn-primary" style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 14px' }}
+                disabled={publishing} onClick={handlePublish}>{publishing ? 'Publishing…' : 'Publish'}</button>
+              <button className="btn btn-outline" style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 12px' }}
+                disabled={publishing} onClick={handleDiscard}>Discard changes</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 'calc(11px * var(--fs))', marginBottom: 8, padding: '5px 10px', borderRadius: 8, background: '#EAF7EF', color: 'var(--green)' }}>
+            ✓ Published — no unpublished changes. Edits are saved as a draft and go live when you Publish.
+          </div>
+        )}
 
         <div style={{ fontSize: 'calc(12px * var(--fs))', marginBottom: 8, padding: '6px 10px', borderRadius: 8,
           background: totalIssues ? '#FDF3E2' : '#EAF7EF', color: totalIssues ? 'var(--amber-on)' : 'var(--green)' }}>

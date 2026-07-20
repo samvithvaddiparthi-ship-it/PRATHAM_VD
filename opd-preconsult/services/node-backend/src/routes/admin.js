@@ -22,6 +22,46 @@ function clientIp(req) {
 // open — they expose department/question config, not patient PHI.
 const adminOnly = [authMiddleware, requireRole('admin')];
 
+// Draft → Publish (migration 031). The HIS editor never writes the published table
+// directly; it writes a per-department DRAFT that only goes live on Publish. The
+// patient engine (questionnaire.js / whatsapp.js) keeps reading Q_LIVE only.
+// These names are whitelisted constants — never interpolate user input as a table.
+const Q_LIVE = 'questionnaire_nodes';
+const Q_DRAFT = 'questionnaire_nodes_draft';
+
+// Is there an open (unpublished) draft for this department?
+async function hasOpenDraft(db, department) {
+  const r = await db.query('SELECT 1 FROM questionnaire_drafts WHERE department = $1', [department]);
+  return r.rows.length > 0;
+}
+
+// Copy-on-write: the first time a department is edited, snapshot its published rows
+// into the draft table and mark it dirty. The marker's PK makes this idempotent — a
+// concurrent caller hits the conflict and skips the (would-be duplicate) copy.
+async function ensureDraft(client, department) {
+  const dept = String(department).toUpperCase();
+  const marker = await client.query(
+    'INSERT INTO questionnaire_drafts (department) VALUES ($1) ON CONFLICT (department) DO NOTHING RETURNING department',
+    [dept]
+  );
+  if (marker.rows.length) {
+    await client.query(`INSERT INTO ${Q_DRAFT} SELECT * FROM ${Q_LIVE} WHERE department = $1`, [dept]);
+  }
+  return dept;
+}
+
+// Which department does a question id belong to? Prefer the draft (the working copy
+// once materialized), fall back to the published table.
+async function nodeDepartment(db, id) {
+  const r = await db.query(
+    `SELECT department FROM ${Q_DRAFT} WHERE id = $1
+     UNION ALL
+     SELECT department FROM ${Q_LIVE} WHERE id = $1
+     LIMIT 1`, [id]
+  );
+  return r.rows.length ? r.rows[0].department : null;
+}
+
 // ── Admin login ──
 // Verifies the shared admin passcode (env ADMIN_PASSCODE) and issues an
 // admin-role JWT for the HIS dashboard. POC-grade shared credential — per-user
@@ -261,6 +301,10 @@ router.delete('/departments/:code', ...adminOnly, async (req, res) => {
     if (force) {
       // Questions are configuration, regenerated from seed/HIS — safe to drop.
       await client.query('DELETE FROM questionnaire_nodes WHERE department = $1', [code]);
+      // Drop any open draft for the department too, so a re-created department with
+      // the same code does not inherit a stale draft.
+      await client.query(`DELETE FROM ${Q_DRAFT} WHERE department = $1`, [code]);
+      await client.query('DELETE FROM questionnaire_drafts WHERE department = $1', [code]);
       // Doctors are NOT deleted: the audit log and past visits reference them, and
       // doctors.department is NOT NULL so it cannot simply be cleared. Deactivating
       // keeps the record and the history while stopping the login, and an admin can
@@ -285,14 +329,18 @@ router.delete('/departments/:code', ...adminOnly, async (req, res) => {
 
 // ── Questions ──
 
-// List questions for department
+// List questions for department — from the open draft if there is one, else the
+// published set. Returns { questions, has_draft } so the editor can show the
+// "unpublished changes" state and a Publish button.
 router.get('/questions/:department', async (req, res) => {
   try {
+    const dept = req.params.department.toUpperCase();
+    const dirty = await hasOpenDraft(pool, dept);
     const result = await pool.query(
-      'SELECT * FROM questionnaire_nodes WHERE department = $1 ORDER BY sort_order',
-      [req.params.department.toUpperCase()]
+      `SELECT * FROM ${dirty ? Q_DRAFT : Q_LIVE} WHERE department = $1 ORDER BY sort_order`,
+      [dept]
     );
-    res.json(result.rows);
+    res.json({ questions: result.rows, has_draft: dirty });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -336,8 +384,9 @@ function triageError({ triage_flag, triage_answer, answer_triage, q_type, option
   return null;
 }
 
-// Create question
+// Create question (into the department's draft)
 router.post('/questions', ...adminOnly, async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id, department, text_en, text_hi, text_te, q_type, options_json, required,
             triage_flag, triage_answer, answer_triage, next_default, next_rules, sort_order, is_base } = req.body;
@@ -346,27 +395,36 @@ router.post('/questions', ...adminOnly, async (req, res) => {
     const tErr = triageError({ triage_flag, triage_answer, answer_triage, q_type, options_json });
     if (tErr) return res.status(400).json({ error: tErr });
 
-    // Auto-generate a stable id from the text, guaranteeing uniqueness.
-    let finalId = (id && String(id).trim()) || `q_${String(department).toLowerCase()}_${slugifyId(text_en)}`;
-    const taken = new Set((await pool.query('SELECT id FROM questionnaire_nodes')).rows.map(r => r.id));
+    await client.query('BEGIN');
+    const dept = await ensureDraft(client, department);
+
+    // Auto-generate a stable id from the text, unique across BOTH the published and
+    // draft tables so a later Publish can never collide on a primary key.
+    let finalId = (id && String(id).trim()) || `q_${dept.toLowerCase()}_${slugifyId(text_en)}`;
+    const taken = new Set((await client.query(
+      `SELECT id FROM ${Q_LIVE} UNION SELECT id FROM ${Q_DRAFT}`)).rows.map(r => r.id));
     if (taken.has(finalId)) {
       let n = 2;
       while (taken.has(`${finalId}_${n}`)) n++;
       finalId = `${finalId}_${n}`;
     }
 
-    const result = await pool.query(
-      `INSERT INTO questionnaire_nodes (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, answer_triage, next_default, next_rules, sort_order, is_base)
+    const result = await client.query(
+      `INSERT INTO ${Q_DRAFT} (id, department, text_en, text_hi, text_te, q_type, options_json, required, triage_flag, triage_answer, answer_triage, next_default, next_rules, sort_order, is_base)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [finalId, String(department).toUpperCase(), text_en, text_hi || null, text_te || null, q_type,
+      [finalId, dept, text_en, text_hi || null, text_te || null, q_type,
        options_json ? JSON.stringify(options_json) : null,
        required !== false, triage_flag || null, triage_answer || null,
        answer_triage ? JSON.stringify(answer_triage) : null, next_default || null,
        next_rules ? JSON.stringify(next_rules) : null, sort_order || 0, is_base === true]
     );
+    await client.query('COMMIT');
     res.json(result.rows[0]);
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     sendServerError(res, err);
+  } finally {
+    client.release();
   }
 });
 
@@ -375,8 +433,9 @@ const EDITABLE_COLS = new Set(['department', 'text_en', 'text_hi', 'text_te', 'q
   'options_json', 'required', 'triage_flag', 'triage_answer', 'answer_triage', 'next_default',
   'next_rules', 'sort_order', 'is_base', 'is_active', 'fhir_mapping']);
 
-// Update question
+// Update question (in the department's draft)
 router.put('/questions/:id', ...adminOnly, async (req, res) => {
+  const client = await pool.connect();
   try {
     const fields = req.body;
     const tErr = triageError({
@@ -396,41 +455,112 @@ router.put('/questions/:id', ...adminOnly, async (req, res) => {
       i++;
     }
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    await client.query('BEGIN');
+    const dept = await nodeDepartment(client, req.params.id);
+    if (!dept) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
+    await ensureDraft(client, dept);
+
     vals.push(req.params.id);
-    const result = await pool.query(
-      `UPDATE questionnaire_nodes SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+    const result = await client.query(
+      `UPDATE ${Q_DRAFT} SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
       vals
     );
+    await client.query('COMMIT');
     if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     sendServerError(res, err);
+  } finally {
+    client.release();
   }
 });
 
-// Delete question
+// Delete question (from the department's draft)
 router.delete('/questions/:id', ...adminOnly, async (req, res) => {
+  const client = await pool.connect();
   try {
-    await pool.query('DELETE FROM questionnaire_nodes WHERE id = $1', [req.params.id]);
+    await client.query('BEGIN');
+    const dept = await nodeDepartment(client, req.params.id);
+    if (dept) {
+      await ensureDraft(client, dept);
+      await client.query(`DELETE FROM ${Q_DRAFT} WHERE id = $1`, [req.params.id]);
+    }
+    await client.query('COMMIT');
     res.json({ deleted: true });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     sendServerError(res, err);
+  } finally {
+    client.release();
   }
 });
 
 // Bulk sort-order update — powers the ↑/↓ reorder of base intake questions.
+// Reorders happen within one department; the items carry that department's ids.
 router.post('/questions/reorder', ...adminOnly, async (req, res) => {
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   if (!items.length) return res.status(400).json({ error: 'No items to reorder' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const dept = await nodeDepartment(client, items[0].id);
+    if (!dept) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Question not found' }); }
+    await ensureDraft(client, dept);
     for (const it of items) {
-      await client.query('UPDATE questionnaire_nodes SET sort_order = $1 WHERE id = $2',
+      await client.query(`UPDATE ${Q_DRAFT} SET sort_order = $1 WHERE id = $2`,
         [parseInt(it.sort_order) || 0, it.id]);
     }
     await client.query('COMMIT');
     res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendServerError(res, err);
+  } finally {
+    client.release();
+  }
+});
+
+// Publish a department's draft → the live questionnaire the patient engine reads.
+// One transaction: replace the published rows with the draft, then clear the draft
+// and its dirty marker. Safe no-op if there is no open draft.
+router.post('/questions/publish', ...adminOnly, async (req, res) => {
+  const department = String(req.body?.department || '').toUpperCase();
+  if (!department) return res.status(400).json({ error: 'department required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const marker = await client.query('SELECT 1 FROM questionnaire_drafts WHERE department = $1', [department]);
+    if (!marker.rows.length) {
+      await client.query('ROLLBACK');
+      return res.json({ published: false, reason: 'no draft' });
+    }
+    await client.query(`DELETE FROM ${Q_LIVE} WHERE department = $1`, [department]);
+    await client.query(`INSERT INTO ${Q_LIVE} SELECT * FROM ${Q_DRAFT} WHERE department = $1`, [department]);
+    await client.query(`DELETE FROM ${Q_DRAFT} WHERE department = $1`, [department]);
+    await client.query('DELETE FROM questionnaire_drafts WHERE department = $1', [department]);
+    await client.query('COMMIT');
+    res.json({ published: true });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendServerError(res, err);
+  } finally {
+    client.release();
+  }
+});
+
+// Discard a department's unpublished draft — the editor reverts to the live set.
+router.post('/questions/discard', ...adminOnly, async (req, res) => {
+  const department = String(req.body?.department || '').toUpperCase();
+  if (!department) return res.status(400).json({ error: 'department required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM ${Q_DRAFT} WHERE department = $1`, [department]);
+    await client.query('DELETE FROM questionnaire_drafts WHERE department = $1', [department]);
+    await client.query('COMMIT');
+    res.json({ discarded: true });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     sendServerError(res, err);
