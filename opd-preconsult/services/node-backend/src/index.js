@@ -65,6 +65,7 @@ app.use('/api/prescription', require('./routes/prescription'));
 app.use('/api/followup', require('./routes/followup'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/tickets', require('./routes/tickets'));
+app.use('/api/client-error', require('./routes/clientError'));
 app.use('/his', require('./routes/mock-his'));
 
 // Seed questionnaire data on startup.

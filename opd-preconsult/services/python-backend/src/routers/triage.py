@@ -22,43 +22,17 @@ _SEVERITY = {"GREEN": 0, "AMBER": 1, "RED": 2}
 def _more_severe(a: str, b: str) -> str:
     return a if _SEVERITY.get(a, 0) >= _SEVERITY.get(b, 0) else b
 
-# Redis for publishing RED alerts to nursing station SSE
-_redis = None
-def _get_redis():
-    global _redis
-    if _redis is None:
-        redis_url = os.environ.get("REDIS_URL")
-        if redis_url:
-            try:
-                import redis
-                _redis = redis.from_url(redis_url)
-            except Exception:
-                _redis = False  # Mark as unavailable
-    return _redis if _redis else None
 
-class TriageRequest(BaseModel):
-    session_id: str
+def evaluate_rules(answers: dict, vitals: dict) -> tuple:
+    """The triage rule set, as a pure function of answers + vitals.
 
-class TriageResponse(BaseModel):
-    level: str
-    triggered_rules: list
+    Kept free of database and Redis access so the clinical rules can be tested
+    exhaustively (tests/test_triage_rules.py) — this is the safety-critical core
+    and must never depend on a live stack to verify. The endpoint below loads the
+    data, calls this, then applies the monotonic floor and persists.
 
-@router.post("/evaluate", response_model=TriageResponse)
-async def evaluate(req: TriageRequest):
-    # Load answers
-    answers_rows = query(
-        "SELECT question_id, answer_raw FROM session_answers WHERE session_id = %s",
-        (req.session_id,),
-    )
-    answers = {a["question_id"]: (a["answer_raw"] or "").lower() for a in answers_rows}
-
-    # Load vitals
-    vitals_rows = query(
-        "SELECT * FROM session_vitals WHERE session_id = %s ORDER BY recorded_at DESC LIMIT 1",
-        (req.session_id,),
-    )
-    vitals = vitals_rows[0] if vitals_rows else {}
-
+    Returns ``(level, triggered_rules)``. No side effects.
+    """
     triggered = []
     level = "GREEN"
 
@@ -102,6 +76,47 @@ async def evaluate(req: TriageRequest):
         if bp_sys and 160 <= bp_sys <= 180:
             triggered.append("bp_systolic_elevated")
             level = "AMBER"
+
+    return level, triggered
+
+# Redis for publishing RED alerts to nursing station SSE
+_redis = None
+def _get_redis():
+    global _redis
+    if _redis is None:
+        redis_url = os.environ.get("REDIS_URL")
+        if redis_url:
+            try:
+                import redis
+                _redis = redis.from_url(redis_url)
+            except Exception:
+                _redis = False  # Mark as unavailable
+    return _redis if _redis else None
+
+class TriageRequest(BaseModel):
+    session_id: str
+
+class TriageResponse(BaseModel):
+    level: str
+    triggered_rules: list
+
+@router.post("/evaluate", response_model=TriageResponse)
+async def evaluate(req: TriageRequest):
+    # Load answers
+    answers_rows = query(
+        "SELECT question_id, answer_raw FROM session_answers WHERE session_id = %s",
+        (req.session_id,),
+    )
+    answers = {a["question_id"]: (a["answer_raw"] or "").lower() for a in answers_rows}
+
+    # Load vitals
+    vitals_rows = query(
+        "SELECT * FROM session_vitals WHERE session_id = %s ORDER BY recorded_at DESC LIMIT 1",
+        (req.session_id,),
+    )
+    vitals = vitals_rows[0] if vitals_rows else {}
+
+    level, triggered = evaluate_rules(answers, vitals)
 
     # Never downgrade a level already raised by an interview safety tripwire.
     prior_rows = query("SELECT triage_level FROM sessions WHERE id = %s", (req.session_id,))

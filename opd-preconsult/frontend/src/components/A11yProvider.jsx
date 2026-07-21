@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
+import { installGlobalErrorReporting } from '../lib/errorReport';
 
 // Accessibility controls, in two flavours keyed off the route.
 //
@@ -55,6 +56,10 @@ export default function A11yProvider({ children }) {
     const d = parseFloat(localStorage.getItem('dashFontScale') || '1');
     if (d && d >= 1 && d <= 1.6) setDashScale(d);
     setAssist(localStorage.getItem('assistMode') === '1');
+    // This provider wraps the whole app and is the first client code to run, so it
+    // is where the browser-wide error listeners go. No-op unless SENTRY_DSN is set
+    // on the backend; never affects what the user sees. See lib/errorReport.js.
+    installGlobalErrorReporting();
   }, []);
 
   // Apply font multiplier + high-contrast class on the document root. Assisted
