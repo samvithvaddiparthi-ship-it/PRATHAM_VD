@@ -56,3 +56,45 @@ jobs:
             { echo 'events{}'; echo 'http{'; cat "$f"; echo '}'; } > /tmp/wrapped.conf
             sudo nginx -t -c /tmp/wrapped.conf
           done
+
+  # End-to-end: spin up the whole stack in DEV mode and drive the real routes.
+  # Unit tests prove functions; this proves the pieces still work TOGETHER (the
+  # near-lockout class of bug that a fresh-DB unit test can't see). The doctor
+  # leg self-skips where no demo doctor is seeded (e.g. the production repo), so
+  # this stays green there while still exercising the full patient path + authz.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Write a CI .env (throwaway dev secrets — never used in prod)
+        run: |
+          cat > .env <<'EOF'
+          JWT_SECRET=ci_only_jwt_secret_not_for_production_0123456789
+          ADMIN_PASSCODE=ci_admin_passcode
+          QR_SIGNING_SECRET=ci_only_qr_secret_not_for_production_0123456789
+          POSTGRES_PASSWORD=changeme_in_production
+          MINIO_ACCESS_KEY=minioadmin
+          MINIO_SECRET_KEY=changeme_in_production
+          EOF
+      - name: Build & start the stack (waits for backend healthchecks)
+        run: docker compose up -d --build --wait
+      - name: Wait for the gateway to route
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost/healthz >/dev/null 2>&1; then echo "gateway up after $i checks"; exit 0; fi
+            sleep 3
+          done
+          echo "gateway did not become ready"; docker compose logs --tail=120; exit 1
+      - name: Full-journey smoke test (patient -> doctor -> prescribe)
+        run: node scripts/smoke.js http://localhost
+      - name: Authorization integration test (IDOR + role gating)
+        run: node scripts/smoke-authz.js http://localhost
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
