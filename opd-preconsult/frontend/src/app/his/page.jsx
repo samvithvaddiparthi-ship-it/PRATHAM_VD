@@ -156,6 +156,273 @@ function AdminLogin({ onSuccess }) {
   );
 }
 
+// ── HIS navigation model ─────────────────────────────────────────────────────
+// One ordered list of groups → items. `id` matches the `tab` state used to switch
+// panels; `icon` is the emoji shown in the rail (the only visual when collapsed).
+// Settings is pinned separately at the foot of the sidebar, so it is not here.
+const HIS_NAV = [
+  { group: 'Overview', items: [
+    ['sessions', 'Patients', '👥'],
+    ['analytics', 'Analytics', '📊'],
+  ]},
+  { group: 'Clinical setup', items: [
+    ['questions', 'Questionnaires', '📝'],
+    ['protocols', 'Protocols', '🛡️'],
+    ['formulary', 'Drug Formulary', '💊'],
+  ]},
+  { group: 'Hospital setup', items: [
+    ['departments', 'Departments', '🏬'],
+    ['doctors', 'Doctors', '🩺'],
+    ['rxtemplate', 'Rx Template', '🧾'],
+  ]},
+  { group: 'Support', items: [
+    ['tickets', 'Tickets', '🎫'],
+  ]},
+];
+// Flat id → label, so the content pane can title itself from the active tab.
+const HIS_TAB_LABEL = Object.fromEntries(
+  [...HIS_NAV.flatMap(g => g.items), ['settings', 'Settings', '⚙️']].map(([id, label]) => [id, label])
+);
+
+// Sidebar geometry. The expanded width is user-draggable but clamped to
+// [SB_MIN, SB_MAX] so the hinge can never push the nav across the page; collapsed
+// snaps to a fixed icon-only rail.
+const SB_MIN = 208, SB_MAX = 320, SB_DEFAULT = 240, SB_RAIL = 68;
+
+/**
+ * Vertical, grouped HIS navigation. Replaces the old edge-to-edge horizontal tab
+ * strip, which did not scale as tabs were added. Features the user asked for:
+ *   • grouped sections with their own vertical scrollbar (only the item list
+ *     scrolls; brand + Settings stay pinned),
+ *   • a drag hinge on the right edge to resize, capped at SB_MAX so it never runs
+ *     to the far side of the page (double-click the hinge resets the width),
+ *   • collapse to an icon-only rail (labels become hover tooltips).
+ * Width + collapsed state persist per-browser so the layout survives a reload.
+ */
+function HisSidebar({ tab, setTab }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [width, setWidth] = useState(SB_DEFAULT);
+  const [dragging, setDragging] = useState(false);
+  const navRef = useRef(null);
+  const hydrated = useRef(false);
+
+  // Restore persisted state once, on mount (guarded so the persist effect below
+  // does not immediately overwrite localStorage with the default before we read).
+  useEffect(() => {
+    try {
+      const w = parseInt(localStorage.getItem('his.sb.width'), 10);
+      if (!Number.isNaN(w)) setWidth(Math.min(SB_MAX, Math.max(SB_MIN, w)));
+      if (localStorage.getItem('his.sb.collapsed') === '1') setCollapsed(true);
+    } catch {}
+    hydrated.current = true;
+  }, []);
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try {
+      localStorage.setItem('his.sb.width', String(width));
+      localStorage.setItem('his.sb.collapsed', collapsed ? '1' : '0');
+    } catch {}
+  }, [width, collapsed]);
+
+  // Resize hinge — pointer-captured drag maps cursor-X (relative to the nav's left
+  // edge) to a clamped width. Capturing the pointer keeps the drag alive even if
+  // the cursor briefly leaves the 6px strip.
+  function onHingeDown(e) {
+    if (collapsed) return;
+    e.preventDefault();
+    setDragging(true);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  }
+  function onHingeMove(e) {
+    if (!dragging || !navRef.current) return;
+    const left = navRef.current.getBoundingClientRect().left;
+    setWidth(Math.min(SB_MAX, Math.max(SB_MIN, Math.round(e.clientX - left))));
+  }
+  function onHingeUp(e) {
+    setDragging(false);
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+  }
+
+  const w = collapsed ? SB_RAIL : width;
+  const itemBase = {
+    display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+    border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+    borderRadius: 10, padding: collapsed ? '10px 0' : '9px 11px',
+    justifyContent: collapsed ? 'center' : 'flex-start',
+    fontSize: 'calc(13.5px * var(--fs))', lineHeight: 1.2, color: 'var(--text)',
+    fontFamily: 'inherit', transition: 'background 0.12s',
+  };
+
+  const renderItem = ([id, label, icon]) => {
+    const active = tab === id;
+    return (
+      <button key={id} onClick={() => setTab(id)}
+        title={collapsed ? label : undefined}
+        aria-current={active ? 'page' : undefined}
+        style={{ ...itemBase,
+          background: active ? 'var(--primary)' : 'transparent',
+          color: active ? '#fff' : 'var(--text)',
+          fontWeight: active ? 700 : 500 }}
+        onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--accent)'; }}
+        onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+        <span aria-hidden="true" style={{ fontSize: 'calc(16px * var(--fs))', width: 22, textAlign: 'center', flex: '0 0 auto' }}>{icon}</span>
+        {!collapsed && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
+      </button>
+    );
+  };
+
+  return (
+    <nav ref={navRef} aria-label="HIS sections"
+      style={{ width: w, flex: '0 0 auto', position: 'sticky', top: 0, alignSelf: 'flex-start',
+        height: '100vh', boxSizing: 'border-box',
+        background: 'var(--card-bg)', borderRight: '1px solid var(--border)',
+        display: 'flex', flexDirection: 'column',
+        transition: dragging ? 'none' : 'width 0.16s ease' }}>
+      {/* Brand + collapse toggle (pinned) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: collapsed ? '14px 0' : '14px 14px',
+        justifyContent: collapsed ? 'center' : 'space-between', borderBottom: '1px solid var(--border)', minHeight: 56, boxSizing: 'border-box' }}>
+        {!collapsed && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, color: 'var(--primary)', fontSize: 'calc(15px * var(--fs))', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            <span aria-hidden="true">🏥</span> HIS
+          </span>
+        )}
+        <button onClick={() => setCollapsed(c => !c)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32,
+            borderRadius: 8, border: '1px solid var(--border)', background: '#fff', cursor: 'pointer',
+            color: 'var(--secondary)', fontSize: 'calc(15px * var(--fs))', lineHeight: 1, flex: '0 0 auto' }}>
+          {collapsed ? '»' : '«'}
+        </button>
+      </div>
+
+      {/* Scrolling group list — the only part that scrolls */}
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: collapsed ? '8px 8px' : '8px 10px' }}>
+        {HIS_NAV.map(({ group, items }, gi) => (
+          <div key={group} style={{ marginTop: gi === 0 ? 0 : 12 }}>
+            {collapsed
+              ? (gi > 0 && <div style={{ height: 1, background: 'var(--border)', opacity: 0.6, margin: '6px 6px' }} />)
+              : <div style={{ fontSize: 'calc(10.5px * var(--fs))', fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: 'var(--text-light)', padding: '4px 11px 6px' }}>{group}</div>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {items.map(renderItem)}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Settings — pinned at the foot */}
+      <div style={{ borderTop: '1px solid var(--border)', padding: collapsed ? '8px 8px' : '8px 10px' }}>
+        {renderItem(['settings', 'Settings', '⚙️'])}
+      </div>
+
+      {/* Resize hinge — a thin grabbable strip on the right edge (hidden when collapsed) */}
+      {!collapsed && (
+        <div role="separator" aria-orientation="vertical" aria-label="Resize sidebar"
+          onPointerDown={onHingeDown} onPointerMove={onHingeMove} onPointerUp={onHingeUp}
+          onDoubleClick={() => setWidth(SB_DEFAULT)}
+          style={{ position: 'absolute', top: 0, right: -3, width: 6, height: '100%', cursor: 'col-resize',
+            touchAction: 'none', zIndex: 2 }}>
+          <div style={{ position: 'absolute', top: '50%', right: 2, transform: 'translateY(-50%)', width: 3, height: 34,
+            borderRadius: 2, background: dragging ? 'var(--secondary)' : 'var(--border)' }} />
+        </div>
+      )}
+    </nav>
+  );
+}
+
+/**
+ * Segmented control — one pill-shaped track with the active choice raised on a
+ * white chip. Replaces the scattered rows of loud btn-primary/btn-outline toggles
+ * (the analytics period picker, the tickets status filter) that read as mismatched
+ * buttons. One look for every small exclusive choice in the HIS.
+ *
+ * Inactive labels use --text (AA-safe on the light track); the active state is
+ * carried by the white chip + shadow + primary ink + weight, not by grey-ing the
+ * rest — so the whole control stays legible.
+ */
+function SegTabs({ options, value, onChange, ariaLabel }) {
+  return (
+    <div role="tablist" aria-label={ariaLabel}
+      style={{ display: 'inline-flex', background: '#EDF1F5', border: '1px solid #E1E7EE', borderRadius: 10, padding: 3, gap: 2 }}>
+      {options.map(([id, label]) => {
+        const active = value === id;
+        return (
+          <button key={id} role="tab" aria-selected={active} onClick={() => onChange(id)}
+            style={{ border: 'none', cursor: 'pointer', borderRadius: 7, padding: '6px 14px',
+              fontSize: 'calc(12.5px * var(--fs))', fontWeight: active ? 700 : 500, fontFamily: 'inherit',
+              whiteSpace: 'nowrap', lineHeight: 1.2, transition: 'background 0.12s, color 0.12s',
+              background: active ? '#fff' : 'transparent',
+              color: active ? 'var(--primary)' : 'var(--text)',
+              boxShadow: active ? '0 1px 2px rgba(0,0,0,0.14)' : 'none' }}>
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A row of KPIs bound into ONE bordered panel with hairline gridlines, so they read
+ * as a compact stat table instead of ragged floating cards. The 1px grid gap over a
+ * grey backing paints the dividers automatically — including when cells wrap — so the
+ * panel stays tabular at any width. Numbers are one consistent ink; colour appears
+ * only as a small leading dot when it carries meaning (triage, a live alert).
+ *   items: [{ label, value, sub, dot, hint }]
+ */
+function StatStrip({ items, minCol = 132 }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid #E6EBF0', borderRadius: 12, overflow: 'hidden',
+      display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${minCol}px, 1fr))` }}>
+      {items.map((it) => (
+        <div key={it.label} title={it.hint}
+          style={{ background: '#fff', padding: '13px 16px', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+            borderRight: '1px solid #EEF1F5', borderBottom: '1px solid #EEF1F5' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 'calc(15px * var(--fs))' }}>
+            {it.dot && <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', background: it.dot, flex: '0 0 auto' }} />}
+            <span style={{ fontSize: 'calc(11px * var(--fs))', fontWeight: 600, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--text-light)', lineHeight: 1.3 }}>{it.label}</span>
+          </div>
+          <span style={{ fontSize: 'calc(25px * var(--fs))', fontWeight: 700, color: 'var(--text)', lineHeight: 1.05 }}>{it.value}</span>
+          {it.sub && <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.3 }}>{it.sub}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Inline-SVG donut (no chart library). Used only where the data is genuinely a
+ * composition of one whole — the triage mix — so the ring answers "what share is
+ * severe?" at a glance. Each `segment` = { label, value, color }. Renders a light
+ * track when empty so the panel never collapses to nothing.
+ */
+function Donut({ segments, size = 168, thickness = 26 }) {
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  const r = (size - thickness) / 2;
+  const cx = size / 2;
+  const circ = 2 * Math.PI * r;
+  let acc = 0;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Triage mix donut chart">
+      {/* track */}
+      <circle cx={cx} cy={cx} r={r} fill="none" stroke="#EDF1F5" strokeWidth={thickness} />
+      <g transform={`rotate(-90 ${cx} ${cx})`}>
+        {total > 0 && segments.filter(s => s.value > 0).map((s) => {
+          const len = (s.value / total) * circ;
+          const dash = <circle key={s.label} cx={cx} cy={cx} r={r} fill="none" stroke={s.color}
+            strokeWidth={thickness} strokeDasharray={`${len} ${circ - len}`} strokeDashoffset={-acc} />;
+          acc += len;
+          return dash;
+        })}
+      </g>
+      <text x={cx} y={cx - 4} textAnchor="middle" style={{ fontSize: `calc(26px * var(--fs))`, fontWeight: 700, fill: 'var(--text)' }}>{total}</text>
+      <text x={cx} y={cx + 16} textAnchor="middle" style={{ fontSize: `calc(11px * var(--fs))`, fill: 'var(--text-light)' }}>patients</text>
+    </svg>
+  );
+}
+// Small section label above a group of tiles, matching the table section headings.
+const ANALYTICS_H = { fontSize: 'calc(13px * var(--fs))', fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--text-light)', margin: '4px 0 2px' };
+
 function HISDashboard() {
   const [tab, setTab] = useState('sessions');
   // When a ticket points at a department, jump to Questionnaires pre-selected there.
@@ -290,44 +557,26 @@ function HISDashboard() {
     : sessions;
 
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto', padding: 16, minHeight: '100vh' }}>
+    <div className="his-shell" style={{ display: 'flex', alignItems: 'flex-start', minHeight: '100vh' }}>
       {toastView}
       <style>{`@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }`}</style>
-      {/* Header — title on the left; Refresh + Settings (gear) grouped top-right. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: 'calc(20px * var(--fs))', color: 'var(--primary)' }}>🏥 HIS Dashboard</h1>
-        <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Hospital Information System</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
-          <button onClick={refreshActive} disabled={refreshing}
-            title="Refresh" aria-label="Refresh"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
-            <span style={{ display: 'inline-block', fontSize: 'calc(15px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
-            {refreshing ? 'Refreshing' : 'Refresh'}
-          </button>
-          {/* Settings — a gear (not a main tab). Highlighted ring when its panel is open. */}
-          <button onClick={() => setTab(tab === 'settings' ? 'sessions' : 'settings')}
-            title="Settings" aria-label="Settings" aria-pressed={tab === 'settings'}
-            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 18, cursor: 'pointer', fontSize: 'calc(17px * var(--fs))', lineHeight: 1,
-              border: tab === 'settings' ? '2px solid var(--primary)' : '1px solid #d5dce4',
-              background: tab === 'settings' ? '#eef3f8' : '#fff' }}>
-            ⚙️
-          </button>
+      {/* Left navigation — grouped, collapsible, resizable (replaces the old top tab strip). */}
+      <HisSidebar tab={tab} setTab={setTab} />
+
+      {/* Content column — carries its own top bar (active section title + Refresh). */}
+      <div style={{ flex: 1, minWidth: 0, padding: 16, maxWidth: 1400, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <h1 style={{ fontSize: 'calc(20px * var(--fs))', color: 'var(--primary)', margin: 0 }}>{HIS_TAB_LABEL[tab] || 'HIS Dashboard'}</h1>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* Global refresh — reloads whichever tab is active; spins briefly on click. */}
+            <button onClick={refreshActive} disabled={refreshing}
+              title="Refresh" aria-label="Refresh"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 36, padding: '0 14px', borderRadius: 18, border: '1px solid #d5dce4', background: '#fff', color: 'var(--secondary)', cursor: refreshing ? 'default' : 'pointer', fontSize: 'calc(13px * var(--fs))', fontWeight: 600, lineHeight: 1, opacity: refreshing ? 0.7 : 1 }}>
+              <span style={{ display: 'inline-block', fontSize: 'calc(15px * var(--fs))', animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>↻</span>
+              {refreshing ? 'Refreshing' : 'Refresh'}
+            </button>
+          </div>
         </div>
-      </div>
-      {/* Tab bar — equal-width segments spanning the full row edge to edge. */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {[
-          ['sessions', 'Patients'], ['analytics', 'Analytics'], ['departments', 'Departments'],
-          ['doctors', 'Doctors'], ['questions', 'Questionnaires'], ['protocols', 'Protocols'],
-          ['tickets', 'Tickets'], ['formulary', 'Drug Formulary'], ['rxtemplate', 'Rx Template'],
-        ].map(([id, label]) => (
-          <button key={id}
-            className={`btn ${tab === id ? 'btn-primary' : 'btn-outline'}`}
-            style={{ flex: '1 1 0', minWidth: 0, fontSize: 'calc(13px * var(--fs))', minHeight: 38, padding: '0 8px', whiteSpace: 'nowrap' }}
-            onClick={() => setTab(id)}>{label}</button>
-        ))}
-      </div>
 
       {tab === 'settings' ? (
         <SettingsManager key={refreshKey} />
@@ -757,6 +1006,7 @@ function HISDashboard() {
         )}
       </div>
       </>)}
+      </div>
     </div>
   );
 }
@@ -1364,11 +1614,10 @@ const qChip = active => ({ padding: '5px 12px', borderRadius: 16, border: active
 const qArrowBtn = disabled => ({ background: '#fff', border: '1px solid #D0D0D0', borderRadius: 4, width: 22, height: 22, lineHeight: '18px', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.35 : 1, fontSize: 'calc(12px * var(--fs))' });
 
 // Module-level components (stable identity → inputs never lose focus on re-render).
-function QEditorHeader({ title, onClose }) {
+function QEditorHeader({ title }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>{title}</h3>
-      <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
     </div>
   );
 }
@@ -1391,19 +1640,6 @@ function QTextFields({ editing, setEditing }) {
         </div>
       </div>
     </>
-  );
-}
-// A "go to" picker that lists other questions by their TEXT, never their id.
-// mode 'default' → next_default (blank = end); mode 'branch' → a per-answer rule.
-function QTargetPicker({ mode, value, targets, onChange }) {
-  return (
-    <select className="input" style={{ minHeight: 34, fontSize: 'calc(12px * var(--fs))', width: '100%' }}
-      value={value} onChange={e => onChange(e.target.value)}>
-      {mode === 'branch' && <option value="__DEFAULT__">— continue to default —</option>}
-      {mode === 'default' && <option value="">▶ End intake (go to vitals)</option>}
-      {targets.map(t => <option key={t.id} value={t.id}>{qShort(t.text_en || t.id)}</option>)}
-      {mode === 'branch' && <option value="__END__">▶ End intake here</option>}
-    </select>
   );
 }
 function QRow({ q, selected, issues, onClick, reorder }) {
@@ -1566,96 +1802,420 @@ function QGraphIcon({ size = 15 }) {
     </svg>
   );
 }
-function QFlowMap({ questions, deptName, health, onPick, onClose }) {
-  const layout = qFlowLayout(questions);
-  const { NW, NH } = QFM;
-  const edgeColor = e => e.kind === 'default' ? '#AAB2C0'
-    : e.urg === 'RED' ? 'var(--red)' : e.urg === 'AMBER' ? 'var(--amber-text)' : 'var(--secondary)';
-  // Vertical S-curve: leave the source downward, arrive at the target from above.
-  const path = e => {
-    const dy = Math.max(18, Math.abs(e.ty - e.sy) / 2);
-    return `M ${e.sx} ${e.sy} C ${e.sx} ${e.sy + dy} ${e.tx} ${e.ty - dy} ${e.tx} ${e.ty}`;
+// ---- Interactive Flow Editor: drag questions to arrange, drag handle→card to wire ----
+// The visual canvas is now the PRIMARY way to connect questions (the per-answer
+// dropdowns are gone from the form). It reads/writes the SAME model the engine
+// walks — next_default and next_rules ({if_answer, go_to}) — plus pos_x/pos_y for
+// where each card sits (editorial only; the engine never reads position). qFlowLayout
+// still provides a tidy starting position for any card that has never been moved.
+const QF_END = '__END__';   // sentinel target = end the flow (→ vitals)
+const QF_BASE = '__BASE__'; // sentinel source = the base chain (drag it to pick the entry)
+const QF = { NW: 200, NH: 74, HW: 100, HH: 37 }; // node box + half sizes for this editor
+const QG = { W: 158, H: 46, GAP: 20 };            // ghost (base) node sizes
+function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) {
+  const { NW, NH, HW, HH } = QF;
+  const PAD = 28;
+  const auto = qFlowLayout(questions);
+  const dag = questions.filter(q => !q.is_base && q.q_type !== 'TERMINAL');
+  const base = questions.filter(q => q.is_base).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  const byId = Object.fromEntries(dag.map(q => [q.id, q]));
+  const entryId = dag.length ? [...dag].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0].id : null;
+
+  // The fixed shared-intake questions are drawn as a read-only "ghost" chain across
+  // the top of the canvas, flowing into the department's START question — so the whole
+  // patient path is visible in one place. They occupy a top band; department nodes are
+  // pushed below it so the two never overlap.
+  const bandH = base.length ? QG.H + 66 : 0;
+  const ghostPos = base.map((b, i) => ({ q: b, x: PAD + i * (QG.W + QG.GAP), y: PAD }));
+
+  const autoPos = {};
+  (auto?.nodes || []).forEach(n => { autoPos[n.q.id] = { x: n.x + PAD, y: n.y + PAD + bandH }; });
+  const reached = new Set((auto?.nodes || []).filter(n => n.reached).map(n => n.q.id));
+
+  const homeOf = q => (q.pos_x != null && q.pos_y != null)
+    ? { x: q.pos_x, y: q.pos_y } : (autoPos[q.id] || { x: PAD, y: PAD + bandH });
+  const [pos, setPos] = useState(() => Object.fromEntries(dag.map(q => [q.id, homeOf(q)])));
+  useEffect(() => {
+    setPos(prev => {
+      const next = {}; let changed = false;
+      dag.forEach(q => {
+        const server = (q.pos_x != null && q.pos_y != null) ? { x: q.pos_x, y: q.pos_y } : null;
+        next[q.id] = server || prev[q.id] || homeOf(q);
+        if (!prev[q.id] || prev[q.id].x !== next[q.id].x || prev[q.id].y !== next[q.id].y) changed = true;
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions]);
+
+  const innerRef = useRef(null);
+  const drag = useRef(null);
+  const [connect, setConnect] = useState(null);
+  const [cond, setCond] = useState(null);
+  const [edgeMenu, setEdgeMenu] = useState(null);
+
+  const maxY = Math.max(PAD + bandH, ...dag.map(q => (pos[q.id]?.y ?? 0)));
+  const maxX = Math.max(PAD, ...dag.map(q => (pos[q.id]?.x ?? 0)));
+  const endPos = { x: PAD, y: maxY + NH + 60 };
+  const ghostRowW = base.length ? PAD + base.length * (QG.W + QG.GAP) : 0;
+  const width = Math.max(700, maxX + NW + PAD, ghostRowW);
+  const height = endPos.y + NH + PAD;
+
+  const boxOf = id => id === QF_END ? endPos : pos[id];
+  // The point on a box's border in the direction of (tx,ty) — so arrows leave and land
+  // ON the card edges (arrowheads visible), never buried in the middle of a box.
+  const border = (cx, cy, tx, ty) => {
+    const dx = tx - cx, dy = ty - cy;
+    if (!dx && !dy) return { x: cx, y: cy + HH, nx: 0, ny: 1 };
+    const s = Math.min(dx ? HW / Math.abs(dx) : Infinity, dy ? HH / Math.abs(dy) : Infinity);
+    const x = cx + dx * s, y = cy + dy * s;
+    return { x, y, nx: (x - cx) / HW, ny: (y - cy) / HH };
   };
+  const edgeColor = e => e.kind === 'default' ? '#8C97A6'
+    : e.urg === 'RED' ? 'var(--red)' : e.urg === 'AMBER' ? 'var(--amber-text)' : 'var(--secondary)';
+  // Smooth curve leaving/entering each box perpendicular to the face it exits.
+  const curveEP = (a, b) => {
+    const c = Math.max(26, Math.hypot(b.x - a.x, b.y - a.y) * 0.34);
+    const c1x = a.x + a.nx * c, c1y = a.y + a.ny * c;
+    const c2x = b.x + b.nx * c, c2y = b.y + b.ny * c;
+    return `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`;
+  };
+
+  function edgesOf(q) {
+    const out = [];
+    const s = boxOf(q.id); if (!s) return out;
+    const sc = { x: s.x + HW, y: s.y + HH };
+    const push = (toId, kind, label, urg, ruleKey) => {
+      const t = boxOf(toId); if (!t) return;
+      const tc = { x: t.x + HW, y: t.y + HH };
+      const a = border(sc.x, sc.y, tc.x, tc.y);
+      const b = border(tc.x, tc.y, sc.x, sc.y);
+      out.push({ from: q.id, ruleKey, kind, label, urg, a, b, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } });
+    };
+    for (const r of (q.next_rules || [])) {
+      const opt = qAnswerOptions(q).find(o => String(o.value) === String(r.if_answer));
+      const toId = (r.go_to == null || r.go_to === '') ? QF_END : r.go_to;
+      if (!boxOf(toId)) continue;
+      push(toId, 'branch', opt?.label_en || String(r.if_answer), qUrgencyMap(q)[r.if_answer] || '', String(r.if_answer));
+    }
+    if (!qAllAnswersBranched(q)) {
+      const toId = (q.next_default == null || q.next_default === '') ? QF_END : q.next_default;
+      if (boxOf(toId)) push(toId, 'default', '', '', '__default__');
+    }
+    return out;
+  }
+  const allEdges = dag.flatMap(edgesOf);
+
+  // Read-only connectors for the ghost intake chain: base[i] → base[i+1] across the
+  // top, then the last base question → the department START node.
+  const ghostEdges = [];
+  for (let i = 0; i < ghostPos.length - 1; i++) {
+    const a = ghostPos[i], b = ghostPos[i + 1];
+    ghostEdges.push({ a: { x: a.x + QG.W, y: a.y + QG.H / 2, nx: 1, ny: 0 }, b: { x: b.x, y: b.y + QG.H / 2, nx: -1, ny: 0 } });
+  }
+  if (ghostPos.length && entryId && pos[entryId]) {
+    const last = ghostPos[ghostPos.length - 1];
+    const t = pos[entryId];
+    ghostEdges.push({ a: { x: last.x + QG.W / 2, y: last.y + QG.H, nx: 0, ny: 1 }, b: { x: t.x + HW, y: t.y, nx: 0, ny: -1 } });
+  }
+
+  function hitNode(x, y, exclude) {
+    for (const q of dag) {
+      if (q.id === exclude) continue;
+      const p = pos[q.id]; if (!p) continue;
+      if (x >= p.x && x <= p.x + NW && y >= p.y && y <= p.y + NH) return q.id;
+    }
+    if (x >= endPos.x && x <= endPos.x + NW && y >= endPos.y && y <= endPos.y + NH) return QF_END;
+    return null;
+  }
+  const toCanvas = e => { const r = innerRef.current.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+  function onCardDown(e, q) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const c = toCanvas(e); const p = pos[q.id];
+    drag.current = { id: q.id, offX: c.x - p.x, offY: c.y - p.y, startX: c.x, startY: c.y, moved: false };
+    try { innerRef.current.setPointerCapture(e.pointerId); } catch {}
+  }
+  function onHandleDown(e, q) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const c = toCanvas(e);
+    setConnect({ from: q.id, x: c.x, y: c.y, over: null });
+    try { innerRef.current.setPointerCapture(e.pointerId); } catch {}
+  }
+  // Drag from the base chain's handle onto any department card to make it the first
+  // department question (the START node).
+  function onBaseHandleDown(e) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const c = toCanvas(e);
+    setConnect({ from: QF_BASE, x: c.x, y: c.y, over: null });
+    try { innerRef.current.setPointerCapture(e.pointerId); } catch {}
+  }
+  function onCanvasMove(e) {
+    const c = toCanvas(e);
+    if (drag.current) {
+      const d = drag.current;
+      if (!d.moved && Math.hypot(c.x - d.startX, c.y - d.startY) > 4) d.moved = true;
+      if (d.moved) setPos(prev => ({ ...prev, [d.id]: { x: Math.max(0, c.x - d.offX), y: Math.max(0, c.y - d.offY) } }));
+    } else if (connect) {
+      setConnect(cn => ({ ...cn, x: c.x, y: c.y, over: hitNode(c.x, c.y, cn.from) }));
+    }
+  }
+  function onCanvasUp(e) {
+    const c = toCanvas(e);
+    if (drag.current) {
+      const d = drag.current; drag.current = null;
+      if (!d.moved) { onPick(byId[d.id]); return; }
+      const p = pos[d.id];
+      persist(d.id, { pos_x: Math.round(p.x), pos_y: Math.round(p.y) }, { silent: true });
+    } else if (connect) {
+      const target = hitNode(c.x, c.y, connect.from);
+      const from = connect.from; setConnect(null);
+      if (from === QF_BASE) { if (target && target !== QF_END) setEntry(target); return; }
+      if (target) openCondition(from, target, e.clientX, e.clientY);
+    }
+  }
+
+  // The department question the base chain flows into. Stored as "lowest sort_order"
+  // (which is also how the engine picks the first department question), so choosing a
+  // new entry just moves that question to the front — no schema or engine change.
+  function setEntry(id) {
+    if (id === entryId) return;
+    const minSort = Math.min(0, ...dag.map(q => q.sort_order || 0));
+    persist(id, { sort_order: minSort - 1 });
+  }
+
+  function openCondition(from, to, cx, cy) {
+    const src = byId[from];
+    const opts = qAnswerOptions(src);
+    if (!qHasBranch(src.q_type) || !opts.length) { applyAny(from, to); return; }
+    setCond({ from, to, cx, cy });
+  }
+  const targetVal = to => to === QF_END ? null : to;
+  // "Any answer" — every answer goes to one place: set the catch-all and clear any
+  // per-answer branches so nothing overrides it.
+  function applyAny(from, to) { persist(from, { next_default: targetVal(to), next_rules: null }); setCond(null); }
+  function applyBranch(from, to, answerVal) {
+    const src = byId[from];
+    const rules = (src.next_rules || []).filter(r => String(r.if_answer) !== String(answerVal));
+    rules.push({ if_answer: answerVal, go_to: targetVal(to) });
+    persist(from, { next_rules: rules });
+    setCond(null);
+  }
+  function deleteEdge(from, ruleKey) {
+    const src = byId[from];
+    if (ruleKey === '__default__') persist(from, { next_default: null });
+    else persist(from, { next_rules: (src.next_rules || []).filter(r => String(r.if_answer) !== String(ruleKey)) });
+    setEdgeMenu(null);
+  }
+
+  const busy = connect || drag.current;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Flow map — {deptName}</h3>
-        <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span><svg width="26" height="8" style={{ verticalAlign: 'middle' }}><line x1="0" y1="4" x2="26" y2="4" stroke="#AAB2C0" strokeWidth="2" strokeDasharray="5 4" /></svg> default</span>
-          <span><svg width="26" height="8" style={{ verticalAlign: 'middle' }}><line x1="0" y1="4" x2="26" y2="4" stroke="var(--secondary)" strokeWidth="2" /></svg> answer branch</span>
-          <span style={{ color: 'var(--red)' }}>● red</span>
-          <span style={{ color: 'var(--amber-text)' }}><span style={{ color: 'var(--amber)' }}>●</span> amber urgency</span>
-        </span>
-        <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', margin: 0 }}>Flow &amp; connections</h3>
+        <span style={{ fontSize: 'calc(11.5px * var(--fs))', color: 'var(--text-light)' }}>{deptName}</span>
+        <span style={{ flex: 1 }} />
       </div>
-      {!layout ? (
-        <p style={{ color: 'var(--text-light)', fontSize: 'calc(13px * var(--fs))', padding: 8 }}>No department questions to map yet.</p>
+
+      <p style={{ fontSize: 'calc(11.5px * var(--fs))', color: 'var(--text-light)', margin: 0, lineHeight: 1.5, flexShrink: 0 }}>
+        <strong>Drag a card</strong> to arrange · <strong>drag the ● handle</strong> onto another card to connect (you pick the answer) · <strong>click an arrow</strong> to remove · <strong>click a card</strong> to edit its wording. A <span style={{ borderBottom: '2px dashed #8C97A6' }}>dashed</span> arrow is the default path; a solid one is a chosen answer.
+      </p>
+
+      {!dag.length ? (
+        <div style={{ flex: 1, minHeight: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-light)',
+          fontSize: 'calc(13px * var(--fs))', border: '1px dashed #D9DEE6', borderRadius: 12, background: '#FBFCFD' }}>
+          No department questions yet — add some with “+ Add question”, then wire them here.
+        </div>
       ) : (
-        <div style={{ maxHeight: 'calc(100vh - 300px)', overflow: 'auto', border: '1px solid #ECECEC', borderRadius: 10, background: 'linear-gradient(#FCFCFD, #F7F8FB)' }}>
-          <div style={{ position: 'relative', width: layout.width, height: layout.height, margin: '0 auto' }}>
-            <svg width={layout.width} height={layout.height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              <defs>
-                <marker id="qfm-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
-                </marker>
-              </defs>
-              {layout.edges.map((e, i) => (
-                <path key={i} d={path(e)} fill="none" stroke={edgeColor(e)}
-                  strokeWidth={e.kind === 'default' ? 1.5 : 2.25}
-                  strokeDasharray={e.kind === 'default' ? '5 4' : undefined}
-                  markerEnd="url(#qfm-arrow)" />
-              ))}
-            </svg>
-            {layout.edges.filter(e => e.kind === 'branch' && e.label).map((e, i) => (
-              <div key={i} style={{
-                position: 'absolute', left: (e.sx + e.tx) / 2, top: (e.sy + e.ty) / 2,
-                transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1,
-                fontSize: 'calc(10px * var(--fs))', fontWeight: 700, color: edgeColor(e),
-                background: 'rgba(255,255,255,0.95)', border: `1px solid ${edgeColor(e)}33`, borderRadius: 5, padding: '1px 6px', whiteSpace: 'nowrap', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-              }}>{qShort(e.label, 16)}</div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid #E4E8EE', borderRadius: 12,
+          background: 'radial-gradient(#E7EBF1 1.1px, transparent 1.1px) 0 0 / 24px 24px, linear-gradient(#FCFCFD, #F6F8FB)' }}>
+          {/* The canvas is a fixed-pixel coordinate space (node boxes + arrow anchors
+              are laid out in px), so its text must NOT ride the global text-size
+              control — at 130/150% the labels would outgrow their boxes and every
+              arrow endpoint would misalign. Pin --fs to 1 here so the map always
+              renders like the 100% view at any global setting; the readable, scalable
+              copy of each question stays in the left list, the editor, and Preview.
+              (Need the whole map bigger? Browser zoom scales it uniformly and keeps
+              the drag maths correct.) */}
+          <div ref={innerRef} onPointerMove={onCanvasMove} onPointerUp={onCanvasUp}
+            style={{ '--fs': 1, position: 'relative', width, height, minHeight: '100%', touchAction: 'none', cursor: connect ? 'crosshair' : 'default',
+              userSelect: 'none', WebkitUserSelect: 'none', MozUserSelect: 'none' }}>
+
+            {/* ghost intake band label */}
+            {base.length > 0 && (
+              <div style={{ position: 'absolute', left: PAD, top: 6, fontSize: 'calc(9.5px * var(--fs))', fontWeight: 700,
+                letterSpacing: '.5px', textTransform: 'uppercase', color: '#9AA3AE', zIndex: 1 }}>Base questions · asked first in every department · not editable here</div>
+            )}
+            {/* ghost base nodes — read-only wording; the LAST one carries the handle
+                that picks which department question the intake flows into. */}
+            {ghostPos.map(({ q, x, y }, i) => (
+              <div key={q.id} onClick={() => onPick(q)} title={`${q.text_en} — base question; wording only`} style={{
+                position: 'absolute', left: x, top: y, width: QG.W, height: QG.H, zIndex: 2, cursor: 'pointer',
+                background: '#F3F5F8', border: '1.5px dashed #C6CDD8', borderRadius: 10, padding: '6px 9px', overflow: 'visible',
+                display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <span style={{ fontSize: 'calc(10.5px * var(--fs))', fontWeight: 600, lineHeight: 1.2, color: 'var(--text-light)',
+                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{q.text_en || q.id}</span>
+                {i === ghostPos.length - 1 && dag.length > 0 && (
+                  <div onPointerDown={onBaseHandleDown} title="Drag onto a department card to choose the first department question" style={{
+                    position: 'absolute', left: '50%', bottom: -11, transform: 'translateX(-50%)', width: 22, height: 22,
+                    borderRadius: '50%', background: '#8C97A6', border: '2.5px solid #fff', cursor: 'crosshair', zIndex: 9,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 800, lineHeight: 1,
+                    boxShadow: '0 2px 5px rgba(20,40,80,0.22)' }}>↓</div>
+                )}
+              </div>
             ))}
-            {layout.nodes.map(({ q, x, y, reached }) => {
+
+            {/* cards (below the arrows so arrowheads read clearly on the card edges) */}
+            {dag.map(q => {
+              const p = pos[q.id]; if (!p) return null;
               const urg = qTopUrgency(q);
-              const branchCount = (q.next_rules || []).length;
               const bad = (health[q.id] || []).some(iss => iss.level === 'error');
-              const accent = urg === 'RED' ? 'var(--red)' : urg === 'AMBER' ? 'var(--amber)' : 'var(--secondary)';
+              const isReached = reached.has(q.id);
+              const isEntry = q.id === entryId;
+              const accent = bad ? 'var(--red)' : urg === 'RED' ? 'var(--red)' : urg === 'AMBER' ? 'var(--amber)' : isEntry ? 'var(--primary)' : 'var(--secondary)';
+              const isOver = connect && connect.over === q.id;
+              const dragging = drag.current?.id === q.id;
               return (
-                <div key={q.id} onClick={() => onPick(q)} title={q.text_en} style={{
-                  position: 'absolute', left: x, top: y, width: NW, height: NH, cursor: 'pointer', zIndex: 2,
-                  background: '#fff', borderRadius: 9, padding: '8px 10px', overflow: 'hidden',
-                  border: bad ? '1.5px solid var(--red)' : reached ? '1px solid #DCE0E7' : '1.5px dashed #C7A94F',
-                  borderLeft: `4px solid ${bad ? 'var(--red)' : reached ? accent : '#C7A94F'}`,
-                  opacity: reached ? 1 : 0.62, boxShadow: '0 1px 4px rgba(20,40,80,0.07)',
-                  display: 'flex', flexDirection: 'column', gap: 5,
+                <div key={q.id} onPointerDown={e => onCardDown(e, q)} title={q.text_en} style={{
+                  position: 'absolute', left: p.x, top: p.y, width: NW, minHeight: NH, zIndex: dragging ? 8 : 2,
+                  cursor: dragging ? 'grabbing' : 'grab', background: '#fff', borderRadius: 12, padding: '10px 12px 12px', overflow: 'visible', touchAction: 'none',
+                  border: isOver ? '2px solid var(--secondary)' : bad ? '1.5px solid var(--red)' : '1px solid #E1E6EC',
+                  borderTop: `3px solid ${accent}`,
+                  opacity: isReached ? 1 : 0.82,
+                  boxShadow: dragging ? '0 10px 26px rgba(20,40,80,0.20)' : '0 1px 3px rgba(20,40,80,0.08), 0 6px 14px -8px rgba(20,40,80,0.12)',
                 }}>
-                  <span style={{
-                    fontSize: 'calc(11.5px * var(--fs))', fontWeight: 600, lineHeight: 1.25, color: 'var(--text)',
-                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                  }}>{q.text_en || q.id}</span>
-                  <span style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={qBadge('#F0F0F0', 'var(--text)')}>{Q_TYPE_LABELS[q.q_type] || q.q_type}</span>
-                    {urg && <span style={qBadge(urg === 'RED' ? 'var(--red)' : 'var(--amber)', urg === 'RED' ? '#fff' : 'var(--amber-on)')}>{urg === 'RED' ? '🔴' : '🟡'}</span>}
-                    {branchCount > 0 && <span style={qBadge('#E8F0FE', 'var(--secondary)')}>{branchCount} branch{branchCount === 1 ? '' : 'es'}</span>}
-                    {!reached && <span style={qBadge('#FBF0D8', '#8A6D1F')}>unreached</span>}
+                  {isEntry && <span style={{ position: 'absolute', top: -10, left: 10, fontSize: 'calc(9px * var(--fs))', fontWeight: 800, letterSpacing: '.4px',
+                    color: '#fff', background: 'var(--primary)', borderRadius: 5, padding: '1px 6px' }}>START</span>}
+                  <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 600, lineHeight: 1.3, color: 'var(--text)',
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{q.text_en || q.id}</span>
+                  <span style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', marginTop: 7 }}>
+                    <span style={qBadge('#EEF1F5', 'var(--text-light)')}>{Q_TYPE_LABELS[q.q_type] || q.q_type}</span>
+                    {urg && <span style={qBadge(urg === 'RED' ? 'var(--red)' : 'var(--amber)', urg === 'RED' ? '#fff' : 'var(--amber-on)')}>{urg === 'RED' ? '🔴' : '🟡'} {urg}</span>}
+                    {!isReached && <span style={qBadge('#FBF0D8', '#8A6D1F')}>unreached</span>}
                   </span>
+                  {/* connect handle */}
+                  <div onPointerDown={e => onHandleDown(e, q)} title="Drag onto another card to connect" style={{
+                    position: 'absolute', left: '50%', bottom: -11, transform: 'translateX(-50%)', width: 22, height: 22,
+                    borderRadius: '50%', background: 'var(--secondary)', border: '2.5px solid #fff', cursor: 'crosshair', zIndex: 9,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 800, lineHeight: 1,
+                    boxShadow: '0 2px 5px rgba(20,40,80,0.25)' }}>↓</div>
                 </div>
               );
             })}
-            <div style={{
-              position: 'absolute', left: layout.endPos.x, top: layout.endPos.y, width: NW, height: NH,
-              background: '#EAF7EF', border: '1px solid #BFE6CD', borderLeft: '4px solid var(--green)', borderRadius: 9, padding: '8px 10px',
-              display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2, zIndex: 2,
-            }}>
-              <span style={{ fontSize: 'calc(11.5px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>✓ End → Vitals</span>
+
+            {/* End node */}
+            <div style={{ position: 'absolute', left: endPos.x, top: endPos.y, width: NW, height: NH,
+              background: connect && connect.over === QF_END ? '#D6F0E1' : '#EEF9F2',
+              border: connect && connect.over === QF_END ? '2px solid var(--green)' : '1px solid #C4E6D2',
+              borderTop: '3px solid var(--green)', borderRadius: 12, padding: '10px 12px',
+              display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, zIndex: 2,
+              boxShadow: '0 1px 3px rgba(20,40,80,0.06)' }}>
+              <span style={{ fontSize: 'calc(12px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>✓ End → Vitals</span>
               <span style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>patient continues to vitals</span>
             </div>
+
+            {/* arrows — drawn ABOVE the cards so they are always clearly visible */}
+            <svg width={width} height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 4, overflow: 'visible' }}>
+              <defs>
+                <marker id="qfe-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
+                </marker>
+              </defs>
+              {allEdges.map((e, i) => (
+                <g key={i}>
+                  <path d={curveEP(e.a, e.b)} fill="none" stroke={edgeColor(e)}
+                    strokeWidth={e.kind === 'default' ? 1.8 : 2.6}
+                    strokeDasharray={e.kind === 'default' ? '6 4' : undefined} markerEnd="url(#qfe-arrow)" />
+                  <path d={curveEP(e.a, e.b)} fill="none" stroke="transparent" strokeWidth="16"
+                    style={{ pointerEvents: busy ? 'none' : 'stroke', cursor: 'pointer' }}
+                    onClick={ev => setEdgeMenu({ from: e.from, ruleKey: e.ruleKey, label: e.kind === 'default' ? 'default' : e.label, cx: ev.clientX, cy: ev.clientY })} />
+                </g>
+              ))}
+              {/* read-only ghost connectors (intake chain → START) */}
+              {ghostEdges.map((e, i) => (
+                <path key={'g' + i} d={curveEP(e.a, e.b)} fill="none" stroke="#B7C0CC" strokeWidth="1.6"
+                  strokeDasharray="2 4" markerEnd="url(#qfe-arrow)" />
+              ))}
+              {connect && (() => {
+                let a;
+                if (connect.from === QF_BASE) {
+                  const g = ghostPos[ghostPos.length - 1];
+                  a = { x: g.x + QG.W / 2, y: g.y + QG.H, nx: 0, ny: 1 };
+                } else {
+                  const s = boxOf(connect.from); if (!s) return null;
+                  a = border(s.x + HW, s.y + HH, connect.x, connect.y);
+                }
+                return <path d={`M ${a.x} ${a.y} C ${a.x + a.nx * 40} ${a.y + a.ny * 40} ${connect.x} ${connect.y} ${connect.x} ${connect.y}`}
+                  fill="none" stroke="var(--secondary)" strokeWidth="2.6" strokeDasharray="5 4" markerEnd="url(#qfe-arrow)" />;
+              })()}
+            </svg>
+
+            {/* branch labels (above the arrows) */}
+            {allEdges.filter(e => e.kind === 'branch' && e.label).map((e, i) => (
+              <div key={i} style={{ position: 'absolute', left: e.mid.x, top: e.mid.y, transform: 'translate(-50%, -50%)',
+                pointerEvents: 'none', zIndex: 5, fontSize: 'calc(10px * var(--fs))', fontWeight: 700, color: edgeColor(e),
+                background: '#fff', border: `1.5px solid ${edgeColor(e)}`, borderRadius: 20, padding: '1px 8px', whiteSpace: 'nowrap',
+                boxShadow: '0 1px 3px rgba(20,40,80,0.12)' }}>{qShort(e.label, 16)}</div>
+            ))}
+
+            {/* condition chooser popup */}
+            {cond && (() => {
+              const src = byId[cond.from]; const opts = qAnswerOptions(src);
+              return (
+                <>
+                  <div style={qPopupBackdrop} onPointerDown={() => setCond(null)} />
+                  <div style={qPopup(cond.cx, cond.cy, opts.length + 3)} onPointerDown={e => e.stopPropagation()}>
+                    <button type="button" style={{ ...qPopupBtn, fontWeight: 700, color: 'var(--primary)' }} onClick={() => applyAny(cond.from, cond.to)}>
+                      Any answer <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>— always go here</span>
+                    </button>
+                    <div style={qPopupSep}>or only when they answer</div>
+                    {opts.map((o, i) => (
+                      <button key={i} type="button" style={qPopupBtn} onClick={() => applyBranch(cond.from, cond.to, o.value)}>{o.label_en || o.value}</button>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* edge delete popup */}
+            {edgeMenu && (
+              <>
+                <div style={qPopupBackdrop} onPointerDown={() => setEdgeMenu(null)} />
+                <div style={qPopup(edgeMenu.cx, edgeMenu.cy, 2)} onPointerDown={e => e.stopPropagation()}>
+                  <div style={qPopupTitle}>{edgeMenu.label === 'default' ? 'Default connection' : `Branch: ${qShort(edgeMenu.label, 20)}`}</div>
+                  <button type="button" style={{ ...qPopupBtn, color: 'var(--red)' }} onClick={() => deleteEdge(edgeMenu.from, edgeMenu.ruleKey)}>Remove this connection</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
-      <p style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>Click any question to edit it. Base intake questions run first (in order) and are not shown here — this maps the department’s branching only.</p>
     </div>
   );
 }
+// A popup anchored to the pointer in VIEWPORT space (position: fixed) so it is always
+// visible no matter how far the canvas is scrolled. Opens upward from the click by
+// default, flipping downward only when there isn't room above. Clamped on-screen.
+function qPopup(cx, cy, rows) {
+  const w = 232;
+  const h = Math.min(rows * 34 + 12, 340);
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const left = Math.max(8, Math.min(cx, vw - w - 8));
+  let top = cy - h - 10;
+  if (top < 8) top = Math.min(cy + 12, vh - h - 8);
+  return { position: 'fixed', left, top, width: w, maxHeight: 340, overflowY: 'auto',
+    background: '#fff', border: '1px solid #D7DDE5', borderRadius: 11,
+    boxShadow: '0 10px 30px rgba(20,40,80,0.20)', zIndex: 60, display: 'flex', flexDirection: 'column' };
+}
+const qPopupTitle = { fontSize: 'calc(11px * var(--fs))', fontWeight: 700, color: 'var(--primary)', padding: '9px 11px', background: '#F5F7FA', borderBottom: '1px solid #EEE' };
+const qPopupSep = { fontSize: 'calc(9.5px * var(--fs))', fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', color: '#9AA3AE', padding: '6px 11px 2px' };
+const qPopupBtn = { textAlign: 'left', background: 'none', border: 'none', padding: '9px 11px', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', color: 'var(--text)' };
+// Invisible full-screen catcher so a click anywhere outside a popup dismisses it.
+const qPopupBackdrop = { position: 'fixed', inset: 0, zIndex: 59, background: 'transparent' };
 
 function QuestionsManager({ depts = [], initialDept = null }) {
   // initialDept lets a ticket deep-link jump straight to the right department.
@@ -1668,9 +2228,8 @@ function QuestionsManager({ depts = [], initialDept = null }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [preview, setPreview] = useState(null); // null = off; else { currentId, path, triage }
   const [showMap, setShowMap] = useState(false); // read-only flow-map view
-  const [showBulk, setShowBulk] = useState(false); // "add several" paste-a-list view
-  const [bulkText, setBulkText] = useState('');
-  const [bulkType, setBulkType] = useState('FREE_TEXT');
+  const [savedNew, setSavedNew] = useState(null); // { text, linkedAfter } after adding a question
+  const [baseOpen, setBaseOpen] = useState(false); // collapse the fixed shared-intake list
   const [hasDraft, setHasDraft] = useState(false); // department has unpublished edits
   const [publishing, setPublishing] = useState(false);
   const { confirm, dialog } = useConfirm();
@@ -1693,15 +2252,42 @@ function QuestionsManager({ depts = [], initialDept = null }) {
     } catch { setQuestions([]); setHasDraft(false); }
   }
 
+  // Persist a single field change made on the flow canvas (a moved card, or a new /
+  // removed connection) straight to the draft, then refresh so the map redraws from
+  // the saved model. `silent` skips the toast for high-frequency saves (dragging).
+  async function persistNode(id, fields, opts = {}) {
+    try {
+      await api.updateQuestion(id, fields);
+      await loadQuestions();
+      if (!opts.silent) toast('Flow updated.', 'success');
+    } catch (err) { toast('Could not save: ' + err.message, 'error'); }
+  }
+
   async function handlePublish() {
-    if (!(await confirm({
-      title: `Publish ${depts.find(d => d.code === dept)?.name || dept} questionnaire?`,
-      message: 'Your changes go live for the next patient in this department. This replaces the currently published questions.',
-      confirmLabel: 'Publish',
+    // Guard against shipping a broken flow: list the questions whose branching is
+    // incomplete (a dangling target, an unreachable question, a dead end) so a patient
+    // can't get stuck. The admin can still override, but only after being shown exactly
+    // what's wrong and where.
+    const problems = [];
+    for (const q of questions) {
+      for (const iss of (health[q.id] || [])) {
+        if (iss.level === 'error') problems.push(`• “${qShort(q.text_en || q.id, 32)}” — ${iss.msg}`);
+      }
+    }
+    if (problems.length) {
+      if (!(await confirm({
+        title: `${problems.length} flow problem${problems.length === 1 ? '' : 's'} — go live anyway?`,
+        message: `These may leave a patient stuck mid-interview:\n\n${problems.slice(0, 6).join('\n')}${problems.length > 6 ? `\n…and ${problems.length - 6} more` : ''}\n\nFix them on the Map first, or go live anyway.`,
+        confirmLabel: 'Go live anyway', danger: true,
+      }))) return;
+    } else if (!(await confirm({
+      title: `Go live with ${depts.find(d => d.code === dept)?.name || dept}?`,
+      message: 'Your changes replace what patients see from the next patient onward.',
+      confirmLabel: 'Go live',
     }))) return;
     setPublishing(true);
-    try { await api.publishQuestions(dept); await loadQuestions(); toast('Published — changes are now live.', 'success'); }
-    catch (err) { toast('Publish failed: ' + err.message, 'error'); }
+    try { await api.publishQuestions(dept); await loadQuestions(); toast('Live — changes are now in patient intake.', 'success'); }
+    catch (err) { toast('Go-live failed: ' + err.message, 'error'); }
     finally { setPublishing(false); }
   }
   async function handleDiscard() {
@@ -1711,7 +2297,7 @@ function QuestionsManager({ depts = [], initialDept = null }) {
       confirmLabel: 'Discard', danger: true,
     }))) return;
     setPublishing(true);
-    try { await api.discardDraft(dept); setEditing(null); setPreview(null); setShowMap(false); setShowBulk(false); await loadQuestions(); toast('Draft discarded.', 'success'); }
+    try { await api.discardDraft(dept); setEditing(null); setPreview(null); setShowMap(false); await loadQuestions(); toast('Draft discarded.', 'success'); }
     catch (err) { toast('Discard failed: ' + err.message, 'error'); }
     finally { setPublishing(false); }
   }
@@ -1719,17 +2305,38 @@ function QuestionsManager({ depts = [], initialDept = null }) {
   const isNew = editing && !questions.find(q => q.id === editing.id);
   const health = qComputeHealth(questions);
   const totalIssues = Object.values(health).reduce((n, arr) => n + arr.length, 0);
+  const errorCount = Object.values(health).reduce((n, arr) => n + arr.filter(x => x.level === 'error').length, 0);
   const baseQs = questions.filter(q => q.is_base);
   const dagQs = questions.filter(q => !q.is_base);
-  const targetQuestions = dagQs.filter(q => q.q_type !== 'TERMINAL' && q.id !== editing?.id);
+  // First question carrying a flow issue — the flow-check chip jumps here so "review
+  // it" points somewhere concrete rather than being a vague warning.
+  const firstIssueId = [...dagQs, ...baseQs].find(q => (health[q.id] || []).length)?.id;
+  // Preview only makes sense on a coherent flow — block it until the map is clean.
+  const previewBlocked = !dagQs.length || totalIssues > 0;
+  // Clicking the flow-check chip spells out exactly what's unfinished and where,
+  // then scrolls to the first offending question so it can be fixed.
+  async function showIssues() {
+    const lines = [];
+    for (const q of [...dagQs, ...baseQs]) {
+      for (const iss of (health[q.id] || [])) {
+        lines.push(`${iss.level === 'error' ? '⛔' : '⚠️'}  “${qShort(q.text_en || q.id, 40)}”\n      ${iss.msg}`);
+      }
+    }
+    await confirm({
+      title: `${totalIssues} thing${totalIssues === 1 ? '' : 's'} to fix in the flow`,
+      message: `${lines.join('\n\n')}\n\nFix these on the Map — connect the question, or point every answer somewhere.`,
+      confirmLabel: 'Got it',
+    });
+    // Stay where they are (usually the Map) so they can fix it right away.
+  }
 
   function startNew() {
     const maxSort = questions.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
     setEditing({ ...EMPTY_Q, department: dept, sort_order: maxSort + 1 });
-    setPreview(null); setShowMap(false); setShowBulk(false); setShowAdvanced(false); setError(''); setSuccess('');
+    setPreview(null); setShowMap(false); setSavedNew(null); setShowAdvanced(false); setError(''); setSuccess('');
   }
   function startEdit(q) {
-    setPreview(null); setShowMap(false); setShowBulk(false);
+    setPreview(null); setShowMap(false); setSavedNew(null);
     setEditing({ ...EMPTY_Q, ...q, triage_flag: q.triage_flag || '', triage_answer: q.triage_answer || '',
       answer_triage: { ...qUrgencyMap(q) },
       next_default: q.next_default || '', next_rules: q.next_rules || [], options_json: q.options_json || null });
@@ -1747,20 +2354,8 @@ function QuestionsManager({ depts = [], initialDept = null }) {
     return isOpen ? top : null;
   }
 
-  // per-answer branch (writes editing.next_rules) and urgency (writes triage_*)
-  function branchValueFor(ans) {
-    const rule = (editing.next_rules || []).find(r => r.if_answer === ans);
-    if (!rule) return '__DEFAULT__';
-    return (rule.go_to == null || rule.go_to === '') ? '__END__' : rule.go_to;
-  }
-  function setBranchFor(ans, picked) {
-    setEditing(prev => {
-      const rules = (prev.next_rules || []).filter(r => r.if_answer !== ans);
-      if (picked === '__END__') rules.push({ if_answer: ans, go_to: null });
-      else if (picked !== '__DEFAULT__') rules.push({ if_answer: ans, go_to: picked });
-      return { ...prev, next_rules: rules };
-    });
-  }
+  // per-answer urgency (writes triage_*). Branch routing (next_rules / next_default)
+  // is authored on the flow canvas, not here — see QFlowEditor.
   function urgencyFor(ans) { return (editing.answer_triage || {})[ans] || ''; }
   function setUrgencyFor(ans, flag) {
     setEditing(prev => {
@@ -1811,41 +2406,8 @@ function QuestionsManager({ depts = [], initialDept = null }) {
   function startPreview() {
     const entry = [...dagQs].filter(q => q.q_type !== 'TERMINAL')
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))[0];
-    setEditing(null); setShowMap(false); setShowBulk(false);
+    setEditing(null); setShowMap(false); setSavedNew(null);
     setPreview({ currentId: entry ? entry.id : null, path: [], triage: '' });
-  }
-  // "Add several" — paste one question per line; create them all pre-chained in
-  // order, and continue the existing flow into the first of the batch. Engine and
-  // API are untouched; this just scripts the same create/link calls a human would.
-  function startBulk() {
-    setEditing(null); setPreview(null); setShowMap(false);
-    setBulkText(''); setBulkType('FREE_TEXT'); setError(''); setSuccess(''); setShowBulk(true);
-  }
-  async function handleBulkCreate() {
-    const lines = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
-    if (!lines.length) { setError('Type at least one question, one per line.'); return; }
-    setError(''); setSuccess(''); setSaving(true);
-    try {
-      const maxSort = questions.reduce((m, q) => Math.max(m, q.sort_order || 0), 0);
-      const prevEnd = openChainEnd();
-      // Create bottom-up so each question already knows the id of the one after it.
-      let nextId = null;
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const created = await api.createQuestion({
-          department: dept, text_en: lines[i], text_hi: null, text_te: null,
-          q_type: bulkType, options_json: null, required: true,
-          triage_flag: null, triage_answer: null, answer_triage: null,
-          next_default: nextId, next_rules: null,
-          sort_order: maxSort + 1 + i, is_base: false,
-        });
-        nextId = created.id;
-      }
-      if (prevEnd && nextId) await api.updateQuestion(prevEnd.id, { next_default: nextId });
-      setShowBulk(false);
-      await loadQuestions();
-      toast(`Added ${lines.length} question${lines.length === 1 ? '' : 's'}${prevEnd ? `, continuing after “${qShort(prevEnd.text_en, 24)}”` : ''}.`, 'success');
-    } catch (err) { setError(err.message); }
-    finally { setSaving(false); }
   }
   function previewAnswer(node, opt) {
     const flag = qUrgencyMap(node)[opt.value] || '';
@@ -1895,12 +2457,15 @@ function QuestionsManager({ depts = [], initialDept = null }) {
             try { await api.updateQuestion(prevEnd.id, { next_default: created.id }); linkedAfter = prevEnd.text_en; } catch { /* leave unlinked; flow-check flags it */ }
           }
         }
-        setSuccess(linkedAfter ? `Question added — continues after “${qShort(linkedAfter, 24)}”` : 'Question added');
         await loadQuestions();
-        if (created) setEditing({ ...EMPTY_Q, ...created, next_rules: created.next_rules || [] });
+        // Land on a clear "saved" screen with next steps, instead of silently sitting
+        // on the same form (which left the admin unsure the save happened).
+        toast('Question saved.', 'success');
+        setEditing(null);
+        setSavedNew({ text: created?.text_en || payload.text_en, linkedAfter });
       } else {
         await api.updateQuestion(editing.id, payload);
-        setSuccess('Saved');
+        toast('Changes saved.', 'success');
         loadQuestions();
       }
     } catch (err) { setError(err.message); }
@@ -1980,10 +2545,6 @@ function QuestionsManager({ depts = [], initialDept = null }) {
                       <option value="AMBER">🟡 Amber</option>
                       <option value="RED">🔴 Red</option>
                     </select>
-                    <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>→ then ask</span>
-                    <div style={{ flex: '1 1 170px' }}>
-                      <QTargetPicker mode="branch" value={branchValueFor(opt.value)} targets={targetQuestions} onChange={v => setBranchFor(opt.value, v)} />
-                    </div>
                   </div>
                 )}
               </div>
@@ -1992,29 +2553,26 @@ function QuestionsManager({ depts = [], initialDept = null }) {
           </div>
         )}
 
-        <div>
-          <label style={qLbl}>{showBranch ? 'If no branch above matches, go to' : 'After this question, go to'}</label>
-          <QTargetPicker mode="default" value={editing.next_default || ''} targets={targetQuestions} onChange={v => setEditing(prev => ({ ...prev, next_default: v }))} />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: '#EEF3F8', border: '1px solid #D5E0EC', borderRadius: 8, padding: '10px 12px' }}>
+          <span style={{ fontSize: 'calc(16px * var(--fs))', lineHeight: 1 }}><QGraphIcon size={16} /></span>
+          <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--primary)' }}>Connections are drawn on the Map.</strong> Save this question, then open <strong>Map</strong> and drag from its ⚬ handle onto the next question to set where the flow goes{showBranch ? ' — and pick which answer that arrow is for' : ''}. An unconnected question simply ends the interview (patient continues to vitals).
+          </div>
         </div>
 
         <div>
           <button type="button" onClick={() => setShowAdvanced(s => !s)} style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))', padding: 0 }}>{showAdvanced ? '▾' : '▸'} Advanced</button>
           {showAdvanced && (
-            <div style={{ ...qPanel, marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ flex: '1 1 200px' }}>
-                <label style={qLbl}>Question ID (auto-generated)</label>
-                <input className="input" value={editing.id} disabled={!isNew} placeholder="(made from the text on save)" onChange={e => setEditing(prev => ({ ...prev, id: e.target.value }))} />
-              </div>
-              <div style={{ width: 100 }}>
-                <label style={qLbl}>Order</label>
-                <input className="input" type="number" value={editing.sort_order} onChange={e => setEditing(prev => ({ ...prev, sort_order: parseInt(e.target.value) || 0 }))} />
-              </div>
-              <div style={{ width: 120 }}>
-                <label style={qLbl}>Required</label>
-                <select className="input" value={editing.required ? 'true' : 'false'} onChange={e => setEditing(prev => ({ ...prev, required: e.target.value === 'true' }))}>
-                  <option value="true">Yes</option><option value="false">No</option>
-                </select>
-              </div>
+            <div style={{ ...qPanel, marginTop: 6 }}>
+              <label style={qLbl}>Question ID</label>
+              <input className="input" value={editing.id} disabled={!isNew}
+                placeholder="(made from the text on save)"
+                onChange={e => setEditing(prev => ({ ...prev, id: e.target.value }))} />
+              <p style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)', marginTop: 6, lineHeight: 1.5 }}>
+                Internal reference — auto-made from the question text when you save. Handy for support and data exports.
+                {isNew ? ' You can override it now; it can’t be changed once saved.' : ' Fixed once the question exists.'}
+                {' '}Question order and where the flow goes are set visually on the <strong>Map</strong>.
+              </p>
             </div>
           )}
         </div>
@@ -2029,43 +2587,26 @@ function QuestionsManager({ depts = [], initialDept = null }) {
     );
   }
 
-  function renderBulkAdd() {
-    const lines = bulkText.split('\n').map(s => s.trim()).filter(Boolean);
-    const prevEnd = openChainEnd();
+  // After a question is added: a clear confirmation with the obvious next steps,
+  // so the admin isn't left staring at the same form wondering if it saved.
+  function renderSaved() {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Add several questions</h3>
-          <button type="button" onClick={() => setShowBulk(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
-        </div>
-        <p style={{ fontSize: 'calc(12.5px * var(--fs))', color: 'var(--text-light)', lineHeight: 1.5 }}>
-          Type one question per line. They’re created in order and automatically chained
-          — each one continues to the next{prevEnd ? <>, starting right after “<strong>{qShort(prevEnd.text_en, 34)}</strong>”</> : ' (the first becomes the department’s starting question)'}.
-          Add branching (Yes → go here) afterwards on any question that needs it.
-        </p>
-        <div style={{ width: 200 }}>
-          <label style={qLbl}>Answer type for all</label>
-          <select className="input" value={bulkType} onChange={e => setBulkType(e.target.value)}>
-            <option value="FREE_TEXT">Free text</option>
-            <option value="BOOLEAN">Yes / No</option>
-            <option value="NUMERIC">Number</option>
-          </select>
-        </div>
+      <div style={{ maxWidth: 460, margin: '48px auto 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, textAlign: 'center' }}>
+        <div style={{ width: 54, height: 54, borderRadius: '50%', background: '#EAF7EF', color: 'var(--green)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(26px * var(--fs))', fontWeight: 700 }}>✓</div>
         <div>
-          <label style={qLbl}>Questions (one per line)</label>
-          <textarea className="input" rows={9} value={bulkText} onChange={e => setBulkText(e.target.value)}
-            placeholder={"Do you have a fever?\nHow many days have you had it?\nAre you taking any medication for it?"}
-            style={{ resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
+          <h3 style={{ fontSize: 'calc(17px * var(--fs))', color: 'var(--primary)', margin: '0 0 6px' }}>Question saved</h3>
+          <p style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)', margin: 0, lineHeight: 1.5 }}>
+            “{qShort(savedNew.text, 52)}” was added{savedNew.linkedAfter ? <> and continues after “{qShort(savedNew.linkedAfter, 24)}”</> : ''}.
+            It’s saved as a draft — open <strong>Map</strong> to connect where it leads.
+          </p>
         </div>
-        {error && <p style={qErr}>{error}</p>}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button type="button" className="btn btn-primary" style={{ width: 'auto', padding: '0 16px', minHeight: 38 }}
-            disabled={saving || !lines.length} onClick={handleBulkCreate}>
-            {saving ? 'Adding…' : `Add ${lines.length || ''} question${lines.length === 1 ? '' : 's'}`.trim()}
-          </button>
-          <button type="button" className="btn btn-outline" style={{ width: 'auto', padding: '0 14px', minHeight: 38 }} onClick={() => setShowBulk(false)}>Cancel</button>
-          <span style={{ fontSize: 'calc(11px * var(--fs))', color: 'var(--text-light)' }}>You can edit each one’s wording, type and branches after.</span>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button className="btn btn-primary" style={{ width: 'auto', padding: '0 18px', minHeight: 40 }} onClick={startNew}>+ Add another question</button>
+          <button className="btn btn-outline" style={{ width: 'auto', padding: '0 16px', minHeight: 40, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={() => { setSavedNew(null); setEditing(null); setPreview(null); setShowMap(true); }}><QGraphIcon /> Open the Map</button>
         </div>
+        <button type="button" onClick={() => setSavedNew(null)} style={{ background: 'none', border: 'none', color: 'var(--text-light)', cursor: 'pointer', fontSize: 'calc(12px * var(--fs))' }}>Done for now</button>
       </div>
     );
   }
@@ -2079,7 +2620,6 @@ function QuestionsManager({ depts = [], initialDept = null }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <h3 style={{ fontSize: 'calc(16px * var(--fs))', color: 'var(--primary)', flex: 1 }}>Preview flow — {depts.find(d => d.code === dept)?.name || dept}</h3>
           <button type="button" onClick={startPreview} style={qMiniBtn}>Restart</button>
-          <button type="button" onClick={() => setPreview(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'calc(18px * var(--fs))' }}>✕</button>
         </div>
         <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', display: 'flex', alignItems: 'center', gap: 6 }}>
           Running urgency: {preview.triage ? urg(preview.triage) : <span style={{ color: 'var(--green)' }}>none yet</span>}
@@ -2122,71 +2662,96 @@ function QuestionsManager({ depts = [], initialDept = null }) {
   }
 
   return (
-    <div style={{ display: 'flex', gap: 16 }}>
+    <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 172px)', minHeight: 440 }}>
       {dialog}{toastView}
-      <div style={{ width: 400, flexShrink: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+      {/* LEFT — dept picker, toolbar, status; the question list scrolls on its own */}
+      <div style={{ width: 384, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 10, flexShrink: 0 }}>
           <select className="input" style={{ width: '100%' }} value={dept} onChange={e => setDept(e.target.value)}>
             {depts.filter(d => d.is_active).map(d => <option key={d.code} value={d.code}>{d.name}</option>)}
           </select>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 14px' }} onClick={startNew}>+ Add question</button>
-            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startBulk} title="Paste a list of questions and add them all at once, already chained in order">+ Add several</button>
-            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px' }} onClick={startPreview} disabled={!dagQs.length} title="Walk the branching as a patient would">▶ Preview</button>
-            <button className="btn btn-outline" style={{ fontSize: 'calc(13px * var(--fs))', minHeight: 36, width: 'auto', padding: '0 12px', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => { setEditing(null); setPreview(null); setShowBulk(false); setShowMap(true); }} disabled={!dagQs.length} title="See the whole branching flow as a diagram"><QGraphIcon /> Map</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" style={qToolBtn} onClick={startNew}>+ Add question</button>
+            <button className="btn btn-outline" style={{ ...qToolBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderColor: showMap ? 'var(--secondary)' : undefined, background: showMap ? '#EAF1F8' : undefined }}
+              onClick={() => { setEditing(null); setPreview(null); setSavedNew(null); setShowMap(true); }} title="Arrange and connect the department questions"><QGraphIcon /> Map</button>
+            <button className="btn btn-outline" style={{ ...qToolBtn, opacity: previewBlocked ? 0.55 : 1, cursor: previewBlocked ? 'not-allowed' : 'pointer' }}
+              title={previewBlocked ? (!dagQs.length ? 'Add department questions first' : 'Finish mapping first — resolve the flow-check issues below') : 'Walk the branching as a patient would'}
+              onClick={() => { if (previewBlocked) { toast(!dagQs.length ? 'Add department questions first.' : 'Finish mapping — resolve the flow-check issues before previewing.', 'info'); return; } startPreview(); }}>▶ Preview</button>
           </div>
         </div>
 
-        {hasDraft ? (
-          <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, background: '#FDF3E2', border: '1px solid #F0D9A8' }}>
-            <div style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--amber-on)', fontWeight: 600, marginBottom: 6 }}>
-              ● Unpublished changes — patients still see the last published version.
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button className="btn btn-primary" style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 14px' }}
-                disabled={publishing} onClick={handlePublish}>{publishing ? 'Publishing…' : 'Publish'}</button>
-              <button className="btn btn-outline" style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 32, width: 'auto', padding: '0 12px' }}
-                disabled={publishing} onClick={handleDiscard}>Discard changes</button>
-            </div>
+        {/* One combined status strip: save state on the left, flow-check on the right.
+            Auto-save is silent; the only action is Go live. The flow-check side is a
+            button that scrolls to the first flagged question. */}
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'stretch', marginBottom: 10, borderRadius: 10, overflow: 'hidden',
+          border: '1px solid #E4E8EE', fontSize: 'calc(11.5px * var(--fs))' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', flex: 1, minWidth: 0,
+            background: hasDraft ? '#FFF8EC' : '#F6FBF7' }}>
+            {hasDraft ? <>
+              <span style={{ color: 'var(--amber-on)', fontWeight: 600, whiteSpace: 'nowrap' }}>● Draft saved</span>
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-primary" style={{ minHeight: 26, width: 'auto', padding: '0 11px', fontSize: 'calc(11px * var(--fs))' }}
+                disabled={publishing} onClick={handlePublish}>{publishing ? '…' : 'Go live'}</button>
+              <button type="button" title="Discard the draft, revert to what patients see now" disabled={publishing} onClick={handleDiscard}
+                style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: 'calc(11px * var(--fs))', padding: 0 }}>Revert</button>
+            </> : <span style={{ color: 'var(--green)', fontWeight: 600 }}>✓ Live · edits auto-save</span>}
           </div>
-        ) : (
-          <div style={{ fontSize: 'calc(11px * var(--fs))', marginBottom: 8, padding: '5px 10px', borderRadius: 8, background: '#EAF7EF', color: 'var(--green)' }}>
-            ✓ Published — no unpublished changes. Edits are saved as a draft and go live when you Publish.
-          </div>
-        )}
-
-        <div style={{ fontSize: 'calc(12px * var(--fs))', marginBottom: 8, padding: '6px 10px', borderRadius: 8,
-          background: totalIssues ? '#FDF3E2' : '#EAF7EF', color: totalIssues ? 'var(--amber-on)' : 'var(--green)' }}>
-          {totalIssues ? `⚠ Flow check: ${totalIssues} thing${totalIssues === 1 ? '' : 's'} to review below` : '✓ Flow check: no issues'}
+          <button type="button" onClick={totalIssues ? showIssues : undefined} title={totalIssues ? 'See exactly what needs fixing' : 'The flow has no problems'}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 11px', border: 'none', borderLeft: '1px solid #E4E8EE',
+              background: totalIssues ? '#FDF3E2' : '#EAF7EF', color: totalIssues ? 'var(--amber-on)' : 'var(--green)', fontWeight: 600,
+              cursor: totalIssues ? 'pointer' : 'default', fontSize: 'calc(11.5px * var(--fs))', whiteSpace: 'nowrap' }}>
+            {totalIssues ? `⚠ ${totalIssues} to fix ›` : '✓ Flow OK'}
+          </button>
         </div>
 
-        <div style={{ maxHeight: 'calc(100vh - 250px)', overflowY: 'auto', paddingRight: 6 }}>
-          {baseQs.length > 0 && <p style={qSectionLabel}>Shared intake · reorder with ↑ ↓</p>}
-          {baseQs.map((q, i) => (
-            <QRow key={q.id} q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)}
-              reorder={<>
-                <button type="button" title="Move up" disabled={i === 0} onClick={e => { e.stopPropagation(); moveBase(i, -1); }} style={qArrowBtn(i === 0)}>↑</button>
-                <button type="button" title="Move down" disabled={i === baseQs.length - 1} onClick={e => { e.stopPropagation(); moveBase(i, 1); }} style={qArrowBtn(i === baseQs.length - 1)}>↓</button>
-              </>} />
-          ))}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 6 }}>
+          {baseQs.length > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              <button type="button" onClick={() => setBaseOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                background: '#F6F7FA', border: '1px solid #E4E8EE', borderRadius: 9, padding: '8px 11px', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ color: 'var(--text-light)', fontSize: 'calc(11px * var(--fs))', transition: 'transform .15s', transform: baseOpen ? 'rotate(90deg)' : 'none' }}>▸</span>
+                <span style={{ fontWeight: 700, fontSize: 'calc(12px * var(--fs))', color: 'var(--text)' }}>Base questions</span>
+                <span style={{ fontSize: 'calc(10.5px * var(--fs))', color: 'var(--text-light)' }}>{baseQs.length} · runs first, every department</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 'calc(10px * var(--fs))', color: 'var(--text-light)' }}>{baseOpen ? 'hide' : 'edit'}</span>
+              </button>
+              {baseOpen && <div style={{ padding: '6px 2px 2px' }}>
+                <p style={{ ...qSectionLabel, marginTop: 2 }}>reorder with ↑ ↓ · wording only</p>
+                {baseQs.map((q, i) => (
+                  <QRow key={q.id} q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)}
+                    reorder={<>
+                      <button type="button" title="Move up" disabled={i === 0} onClick={e => { e.stopPropagation(); moveBase(i, -1); }} style={qArrowBtn(i === 0)}>↑</button>
+                      <button type="button" title="Move down" disabled={i === baseQs.length - 1} onClick={e => { e.stopPropagation(); moveBase(i, 1); }} style={qArrowBtn(i === baseQs.length - 1)}>↓</button>
+                    </>} />
+                ))}
+              </div>}
+            </div>
+          )}
           {dagQs.length > 0 && <p style={{ ...qSectionLabel, marginTop: 12 }}>Department questions · branching</p>}
           {dagQs.map(q => (
-            <QRow key={q.id} q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)} />
+            <div key={q.id} id={'qrow-' + q.id}>
+              <QRow q={q} selected={editing?.id === q.id} issues={health[q.id] || []} onClick={() => startEdit(q)} />
+            </div>
           ))}
-          {questions.length === 0 && <p style={{ color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', padding: 8 }}>No questions yet. Click “+ Add question”.</p>}
+          {dagQs.length === 0 && <p style={{ color: 'var(--text-light)', fontSize: 'calc(12px * var(--fs))', padding: 8 }}>No department questions yet. Click “+ Add question”.</p>}
         </div>
       </div>
 
-      <div style={{ flex: 1, minWidth: 0, background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-        {showMap ? <QFlowMap questions={questions} deptName={depts.find(d => d.code === dept)?.name || dept} health={health} onPick={startEdit} onClose={() => setShowMap(false)} />
-          : showBulk ? renderBulkAdd()
-          : preview ? renderPreview()
-          : !editing ? <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click “+ Add question”.</p>
-          : editing.is_base ? renderBaseEditor() : renderDagEditor()}
+      {/* RIGHT — map fills the height with its own scroll; the editor form scrolls too */}
+      <div style={{ flex: 1, minWidth: 0, height: '100%', background: '#fff', borderRadius: 12, padding: showMap ? 16 : 20,
+        boxShadow: '0 1px 4px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+        {showMap ? <QFlowEditor questions={questions} deptName={depts.find(d => d.code === dept)?.name || dept} health={health} onPick={startEdit} onClose={() => setShowMap(false)} persist={persistNode} />
+          : <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {preview ? renderPreview()
+                : savedNew ? renderSaved()
+                : !editing ? <p style={{ color: 'var(--text-light)', textAlign: 'center', marginTop: 40 }}>Select a question to edit, or click “+ Add question”.</p>
+                : editing.is_base ? renderBaseEditor() : renderDagEditor()}
+            </div>}
       </div>
     </div>
   );
 }
+const qToolBtn = { flex: 1, fontSize: 'calc(12.5px * var(--fs))', minHeight: 38, width: 'auto', padding: '0 6px', whiteSpace: 'nowrap' };
 
 
 // Doctor-raised tickets about the AI summaries / questionnaires. The doctor flags a
@@ -2243,11 +2808,8 @@ function TicketsManager({ onOpenQuestionnaire }) {
       {toastView}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <h2 style={{ fontSize: 'calc(18px * var(--fs))', color: 'var(--primary)', marginRight: 8 }}>Tickets from doctors</h2>
-        {[['open', 'Open'], ['triaged', 'Triaged'], ['resolved', 'Resolved'], ['all', 'All']].map(([id, label]) => (
-          <button key={id} onClick={() => setFilter(id)}
-            className={`btn ${filter === id ? 'btn-primary' : 'btn-outline'}`}
-            style={{ width: 'auto', padding: '0 12px', minHeight: 32, fontSize: 'calc(12px * var(--fs))' }}>{label}</button>
-        ))}
+        <SegTabs ariaLabel="Filter tickets by status" value={filter} onChange={setFilter}
+          options={[['open', 'Open'], ['triaged', 'Triaged'], ['resolved', 'Resolved'], ['all', 'All']]} />
       </div>
 
       <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)', marginBottom: 12 }}>
@@ -2974,7 +3536,6 @@ function AnalyticsDashboard() {
   if (loading) return <p style={{ textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>Loading analytics...</p>;
   if (!data) return <p style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>Failed to load analytics</p>;
 
-  const cardStyle = { background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: '1 1 160px', minWidth: 160 };
   const thStyle = { padding: '8px 12px', textAlign: 'left', fontSize: 'calc(12px * var(--fs))', background: 'var(--primary)', color: '#fff' };
   const tdStyle = { padding: '8px 12px', fontSize: 'calc(13px * var(--fs))', borderBottom: '1px solid #F0F0F0' };
   // Minutes → "9 min" for short spans, rolling over to "6h 33m" once past an hour
@@ -2989,50 +3550,37 @@ function AnalyticsDashboard() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Period:</span>
-        {[6, 12, 24, 48, 168].map(h => (
-          <button key={h} className={`btn ${hours === h ? 'btn-primary' : 'btn-outline'}`}
-            style={{ fontSize: 'calc(12px * var(--fs))', minHeight: 30, width: 'auto', padding: '0 12px' }}
-            onClick={() => setHours(h)}>
-            {h <= 24 ? `${h}h` : `${h / 24}d`}
-          </button>
-        ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)' }}>Period</span>
+        <SegTabs ariaLabel="Analytics period" value={hours} onChange={setHours}
+          options={[6, 12, 24, 48, 168].map(h => [h, h <= 24 ? `${h}h` : `${h / 24}d`])} />
       </div>
 
       {/* Throughput funnel — one row, one vocabulary, used identically across the
           whole HIS dashboard: Registered → Ready → Started → Completed, then the
           live "Waiting now" gauge and the two timing averages. Each label carries
-          its exact definition as a hover title. */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <div style={cardStyle}>
-          <p title="Patients who got past the QR scan into registration" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Registered</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--primary)' }}>{data.registered ?? data.total_sessions}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="Finished the AI pre-consult (questionnaire, vitals, documents, summary) — waiting for a doctor" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Ready</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--green)' }}>{data.completed ?? data.completed_count}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="A doctor has opened the visit — consultation started" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Started</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.consulted ?? '—'}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="Doctor finished the consultation (Save & Generate QR / prescription issued)" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Completed</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{data.dispatched ?? '—'}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="Ready patients not yet picked up by a doctor (live)" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Waiting now</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: (data.waiting ?? 0) > 0 ? 'var(--amber)' : 'var(--text-light)' }}>{data.waiting ?? '—'}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="Average time from arrival (registration) to a doctor opening the visit" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg wait · arrival→started</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_wait_minutes)}</p>
-        </div>
-        <div style={cardStyle}>
-          <p title="Average end-to-end time from arrival (registration) to a completed consultation" style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Avg total · arrival→completed</p>
-          <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--secondary)' }}>{fmtMin(data.avg_total_minutes)}</p>
-        </div>
+          its exact definition as a hover title. Numbers are one consistent ink;
+          "Waiting now" is the only tile that lights up (amber dot) and only when
+          there are patients actually waiting. */}
+      <div>
+        <h3 style={ANALYTICS_H}>Throughput</h3>
+        <StatStrip items={[
+          { label: 'Registered', value: data.registered ?? data.total_sessions,
+            hint: 'Patients who got past the QR scan into registration' },
+          { label: 'Ready', value: data.completed ?? data.completed_count,
+            hint: 'Finished the AI pre-consult (questionnaire, vitals, documents, summary) — waiting for a doctor' },
+          { label: 'Started', value: data.consulted ?? '—',
+            hint: 'A doctor has opened the visit — consultation started' },
+          { label: 'Completed', value: data.dispatched ?? '—',
+            hint: 'Doctor finished the consultation (Save & Generate QR / prescription issued)' },
+          { label: 'Waiting now', value: data.waiting ?? '—',
+            dot: (data.waiting ?? 0) > 0 ? 'var(--amber)' : undefined,
+            hint: 'Ready patients not yet picked up by a doctor (live)' },
+          { label: 'Avg wait', value: fmtMin(data.avg_wait_minutes), sub: 'arrival → started',
+            hint: 'Average time from arrival (registration) to a doctor opening the visit' },
+          { label: 'Avg total', value: fmtMin(data.avg_total_minutes), sub: 'arrival → completed',
+            hint: 'Average end-to-end time from arrival (registration) to a completed consultation' },
+        ]} />
       </div>
 
       {/* Triage mix — safety + staffing signal. Always render RED→AMBER→GREEN in
@@ -3042,24 +3590,46 @@ function AnalyticsDashboard() {
       {(() => {
         const byLevel = Object.fromEntries((data.by_triage || []).map(t => [t.level, t.count]));
         const TRIAGE = [
-          ['RED', 'Severe · RED', 'var(--red)'],
-          ['AMBER', 'Moderate · AMBER', 'var(--amber-text)'],
-          ['GREEN', 'Mild · GREEN', 'var(--green)'],
+          ['RED', 'Severe', 'var(--red)'],
+          ['AMBER', 'Moderate', 'var(--amber)'],
+          ['GREEN', 'Mild', 'var(--green)'],
+          ['NONE', 'Untriaged', 'var(--text-light)'],
         ];
+        const rows = TRIAGE.map(([key, label, color]) => ({ key, label, color, value: byLevel[key] || 0 }));
+        const total = rows.reduce((a, r) => a + r.value, 0);
+        const segments = rows.filter(r => r.key !== 'NONE' || r.value > 0)
+          .map(r => ({ label: r.label, value: r.value, color: r.color }));
         return (
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {TRIAGE.map(([key, label, color]) => (
-              <div key={key} style={cardStyle}>
-                <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>{label}</p>
-                <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color }}>{byLevel[key] || 0}</p>
-              </div>
-            ))}
-            {byLevel.NONE > 0 && (
-              <div style={cardStyle}>
-                <p style={{ fontSize: 'calc(12px * var(--fs))', color: 'var(--text-light)' }}>Untriaged</p>
-                <p style={{ fontSize: 'calc(28px * var(--fs))', fontWeight: 700, color: 'var(--text-light)' }}>{byLevel.NONE}</p>
-              </div>
-            )}
+          <div>
+            <h3 style={ANALYTICS_H}>Triage mix</h3>
+            {/* Composition of one whole → a donut earns its place here (unlike the
+                throughput funnel). Ring on the left, an exact count/share table on
+                the right so the numbers stay first-class, not buried in a chart. */}
+            <div style={{ background: '#fff', border: '1px solid #E6EBF0', borderRadius: 12, padding: 18,
+              display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'center' }}>
+              <Donut segments={segments} />
+              <table style={{ borderCollapse: 'collapse', flex: '1 1 260px', minWidth: 240 }}>
+                <thead><tr>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', fontSize: 'calc(11px * var(--fs))', textTransform: 'uppercase', letterSpacing: 0.3, color: 'var(--text-light)', borderBottom: '1px solid #EDF1F5' }}>Severity</th>
+                  <th style={{ textAlign: 'right', padding: '6px 10px', fontSize: 'calc(11px * var(--fs))', textTransform: 'uppercase', letterSpacing: 0.3, color: 'var(--text-light)', borderBottom: '1px solid #EDF1F5' }}>Count</th>
+                  <th style={{ textAlign: 'right', padding: '6px 10px', fontSize: 'calc(11px * var(--fs))', textTransform: 'uppercase', letterSpacing: 0.3, color: 'var(--text-light)', borderBottom: '1px solid #EDF1F5' }}>Share</th>
+                </tr></thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.key}>
+                      <td style={{ padding: '8px 10px', fontSize: 'calc(13px * var(--fs))', borderBottom: '1px solid #F4F6F9' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: '50%', background: r.color, flex: '0 0 auto' }} />
+                          {r.label}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontSize: 'calc(14px * var(--fs))', fontWeight: 700, color: 'var(--text)', textAlign: 'right', borderBottom: '1px solid #F4F6F9' }}>{r.value}</td>
+                      <td style={{ padding: '8px 10px', fontSize: 'calc(13px * var(--fs))', color: 'var(--text-light)', textAlign: 'right', borderBottom: '1px solid #F4F6F9' }}>{total > 0 ? Math.round(r.value / total * 100) : 0}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         );
       })()}

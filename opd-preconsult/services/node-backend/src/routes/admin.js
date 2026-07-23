@@ -431,7 +431,7 @@ router.post('/questions', ...adminOnly, async (req, res) => {
 // Columns the editor may update — anything else in the body is ignored.
 const EDITABLE_COLS = new Set(['department', 'text_en', 'text_hi', 'text_te', 'q_type',
   'options_json', 'required', 'triage_flag', 'triage_answer', 'answer_triage', 'next_default',
-  'next_rules', 'sort_order', 'is_base', 'is_active', 'fhir_mapping']);
+  'next_rules', 'sort_order', 'is_base', 'is_active', 'fhir_mapping', 'pos_x', 'pos_y']);
 
 // Update question (in the department's draft)
 router.put('/questions/:id', ...adminOnly, async (req, res) => {

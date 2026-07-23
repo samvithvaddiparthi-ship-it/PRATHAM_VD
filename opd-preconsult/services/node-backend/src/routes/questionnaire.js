@@ -2,6 +2,7 @@ const { Router } = require('express');
 const pool = require('../models/db');
 const { authMiddleware, requireSessionOwnership } = require('../middleware/auth');
 const { flagForAnswer } = require('../utils/triage');
+const { resolveNext } = require('../utils/dagResolve');
 
 const router = Router();
 
@@ -244,20 +245,5 @@ router.get('/answers/:session_id', authMiddleware, requireSessionOwnership('sess
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-function resolveNext(node, answerRaw, answerStructured) {
-  const answerVal = (answerStructured?.value || answerRaw || '').toString().toLowerCase();
-
-  // Check conditional rules first
-  if (node.next_rules && Array.isArray(node.next_rules)) {
-    for (const rule of node.next_rules) {
-      if (rule.if_answer && rule.if_answer.toLowerCase() === answerVal && rule.go_to) {
-        return rule.go_to;
-      }
-    }
-  }
-
-  return node.next_default || null;
-}
 
 module.exports = router;

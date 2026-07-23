@@ -149,26 +149,53 @@ body.has-a11y-bar .screen { padding-top: 2px; }
 
 .input {
   width: 100%;
-  min-height: calc(48px * var(--fs, 1));
-  padding: 12px 16px;
-  border: 2px solid var(--border);
-  border-radius: 12px;
-  font-size: calc(16px * var(--fs, 1));
+  min-height: calc(48px * var(--fs, 1));   /* kept for the patient app's touch targets */
+  padding: 11px 15px;
+  border: 1px solid var(--border);         /* 1px (was 2px): far cleaner, still --border
+                                              #929292 = 3.11:1 on white, meets SC 1.4.11 */
+  border-radius: 10px;
+  font-size: calc(15.5px * var(--fs, 1));
   font-family: inherit;
-  transition: border-color 0.2s;
+  color: var(--text);
+  background-color: #fff;
+  box-shadow: 0 1px 2px rgba(20, 40, 80, 0.045);   /* subtle depth — reads as a soft field */
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
-/* A field already carries a 2px border. Recolouring that border AND drawing the
-   global outline 2px outside it renders as two concentric rings with a white gap
-   — which is what it looked like. Opt inputs out of the outline and give them one
-   ring instead: the border itself is the indicator (--secondary is 4.94:1 against
-   the card, clearing SC 1.4.11's 3:1 floor) with a soft halo bleeding outward, so
-   there is no second hard edge. The halo is decorative; the border carries it. */
+.input::placeholder { color: var(--text-light); opacity: 1; }
+.input:hover:not(:focus):not(:disabled) { border-color: #6f7676; }
+.input:disabled { background-color: #F5F7FA; color: var(--text-light); cursor: not-allowed; }
+/* One focus ring (border + soft halo), never two concentric rings — see note kept
+   from before: --secondary is 4.94:1 on the card, clearing SC 1.4.11's 3:1 floor. */
 .input:focus,
 .input:focus-visible {
   outline: none;
   border-color: var(--secondary);
-  box-shadow: 0 0 0 3px rgba(41, 120, 154, 0.22);
+  box-shadow: 0 0 0 3px rgba(41, 120, 154, 0.18);
 }
+/* Replace the browser's default (ugly, OS-dependent) select arrow with a clean,
+   theme-coloured chevron so every <select class="input"> matches the text fields. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 40px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23687273' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+}
+/* HIS is a desktop admin surface, not a patient touch device, so its fields are
+   slimmed down — the 48px touch target is a patient-app requirement, not an admin
+   one. This keeps the accessible sizing where it matters and gives the admin the
+   trim, modern inputs it should have. */
+.his-shell .input {
+  min-height: 38px;
+  padding: 7px 12px;
+  font-size: calc(13.5px * var(--fs, 1));
+  border-radius: 9px;
+}
+.his-shell select.input { padding-right: 34px; background-position: right 11px center; }
+.his-shell textarea.input { min-height: 76px; }
 
 .progress-dots {
   display: flex;

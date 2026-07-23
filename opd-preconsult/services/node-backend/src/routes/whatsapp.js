@@ -2,6 +2,7 @@ const { Router } = require('express');
 const twilio = require('twilio');
 const pool = require('../models/db');
 const { flagForAnswer } = require('../utils/triage');
+const { resolveNext } = require('../utils/dagResolve');
 
 const router = Router();
 
@@ -284,17 +285,6 @@ async function getNextQuestion(sessionId, department) {
   return nodes[currentId];
 }
 
-function resolveNext(node, answerRaw, answerStructured) {
-  const answerVal = (answerStructured?.value || answerRaw || '').toString().toLowerCase();
-  if (node.next_rules && Array.isArray(node.next_rules)) {
-    for (const rule of node.next_rules) {
-      if (rule.if_answer && rule.if_answer.toLowerCase() === answerVal && rule.go_to) {
-        return rule.go_to;
-      }
-    }
-  }
-  return node.next_default || null;
-}
 
 function escapeXml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

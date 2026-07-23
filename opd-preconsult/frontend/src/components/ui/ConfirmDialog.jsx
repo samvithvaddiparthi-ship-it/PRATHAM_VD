@@ -68,7 +68,7 @@ export function ConfirmDialog({
         {icon && <div aria-hidden="true" style={{ fontSize: 'calc(34px * var(--fs, 1))', marginBottom: 8 }}>{icon}</div>}
         <h3 id={titleId} style={{ color: danger ? 'var(--red)' : 'var(--primary)', marginBottom: 12, fontSize: 'calc(18px * var(--fs, 1))' }}>{title}</h3>
         {message && (
-          <p id={messageId} style={{ fontSize: 'calc(14px * var(--fs, 1))', lineHeight: 1.55, marginBottom: 18, color: 'var(--text)' }}>{message}</p>
+          <p id={messageId} style={{ fontSize: 'calc(14px * var(--fs, 1))', lineHeight: 1.55, marginBottom: 18, color: 'var(--text)', whiteSpace: 'pre-line' }}>{message}</p>
         )}
 
         {acknowledge && (
