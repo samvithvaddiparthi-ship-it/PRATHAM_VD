@@ -1849,10 +1849,16 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
   }, [questions]);
 
   const innerRef = useRef(null);
+  const scrollRef = useRef(null);
   const drag = useRef(null);
   const [connect, setConnect] = useState(null);
   const [cond, setCond] = useState(null);
   const [edgeMenu, setEdgeMenu] = useState(null);
+  // Canvas zoom (map area only), bounded. The diagram is scaled with a CSS transform;
+  // pointer→canvas maths divide by this so drag/connect stay accurate (see toCanvas).
+  const [zoom, setZoom] = useState(1);
+  const ZOOM_MIN = 0.5, ZOOM_MAX = 1.5;
+  const zoomBy = (d) => setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z + d) * 10) / 10)));
 
   const maxY = Math.max(PAD + bandH, ...dag.map(q => (pos[q.id]?.y ?? 0)));
   const maxX = Math.max(PAD, ...dag.map(q => (pos[q.id]?.x ?? 0)));
@@ -1928,7 +1934,9 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
     if (x >= endPos.x && x <= endPos.x + NW && y >= endPos.y && y <= endPos.y + NH) return QF_END;
     return null;
   }
-  const toCanvas = e => { const r = innerRef.current.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  // Divide by zoom: getBoundingClientRect returns the SCALED rect, so screen-space
+  // deltas must be scaled back into the canvas's own (unscaled) coordinate system.
+  const toCanvas = e => { const r = innerRef.current.getBoundingClientRect(); return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom }; };
 
   function onCardDown(e, q) {
     if (e.button !== 0) return;
@@ -2012,6 +2020,25 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
   }
 
   const busy = connect || drag.current;
+  const qZoomBtn = (dis) => ({ width: 28, height: 28, border: 'none', background: 'transparent', borderRadius: 7,
+    cursor: dis ? 'default' : 'pointer', opacity: dis ? 0.35 : 1, fontSize: 'calc(16px * var(--fs))', lineHeight: 1,
+    color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' });
+
+  // Trackpad pinch-zoom: a two-finger pinch arrives as a `wheel` event with ctrlKey
+  // set. React's onWheel is passive (can't preventDefault to stop the page/canvas from
+  // scrolling), so attach a native non-passive listener. A plain two-finger scroll has
+  // no ctrlKey and falls through to normal panning.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z - e.deltaY * 0.01) * 100) / 100)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [dag.length]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -2030,18 +2057,21 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
           No department questions yet — add some with “+ Add question”, then wire them here.
         </div>
       ) : (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid #E4E8EE', borderRadius: 12,
+        <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflow: 'auto', border: '1px solid #E4E8EE', borderRadius: 12,
           background: 'radial-gradient(#E7EBF1 1.1px, transparent 1.1px) 0 0 / 24px 24px, linear-gradient(#FCFCFD, #F6F8FB)' }}>
+          {/* Sizer reserves scroll space for the scaled canvas (transform doesn't
+              change layout size, so the scrollbars would be wrong without this). */}
+          <div style={{ width: width * zoom, height: height * zoom }}>
           {/* The canvas is a fixed-pixel coordinate space (node boxes + arrow anchors
               are laid out in px), so its text must NOT ride the global text-size
               control — at 130/150% the labels would outgrow their boxes and every
               arrow endpoint would misalign. Pin --fs to 1 here so the map always
-              renders like the 100% view at any global setting; the readable, scalable
-              copy of each question stays in the left list, the editor, and Preview.
-              (Need the whole map bigger? Browser zoom scales it uniformly and keeps
-              the drag maths correct.) */}
+              renders at a stable size; the zoom control below scales the whole
+              diagram uniformly (and toCanvas divides by zoom to keep drag accurate). */}
           <div ref={innerRef} onPointerMove={onCanvasMove} onPointerUp={onCanvasUp}
-            style={{ '--fs': 1, position: 'relative', width, height, minHeight: '100%', touchAction: 'none', cursor: connect ? 'crosshair' : 'default',
+            style={{ '--fs': 1, position: 'relative', width, height, transform: `scale(${zoom})`, transformOrigin: 'top left',
+              touchAction: 'none', cursor: connect ? 'crosshair' : 'default',
               userSelect: 'none', WebkitUserSelect: 'none', MozUserSelect: 'none' }}>
 
             {/* ghost intake band label */}
@@ -2161,37 +2191,48 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
                 boxShadow: '0 1px 3px rgba(20,40,80,0.12)' }}>{qShort(e.label, 16)}</div>
             ))}
 
-            {/* condition chooser popup */}
-            {cond && (() => {
-              const src = byId[cond.from]; const opts = qAnswerOptions(src);
-              return (
-                <>
-                  <div style={qPopupBackdrop} onPointerDown={() => setCond(null)} />
-                  <div style={qPopup(cond.cx, cond.cy, opts.length + 3)} onPointerDown={e => e.stopPropagation()}>
-                    <button type="button" style={{ ...qPopupBtn, fontWeight: 700, color: 'var(--primary)' }} onClick={() => applyAny(cond.from, cond.to)}>
-                      Any answer <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>— always go here</span>
-                    </button>
-                    <div style={qPopupSep}>or only when they answer</div>
-                    {opts.map((o, i) => (
-                      <button key={i} type="button" style={qPopupBtn} onClick={() => applyBranch(cond.from, cond.to, o.value)}>{o.label_en || o.value}</button>
-                    ))}
-                  </div>
-                </>
-              );
-            })()}
+          </div>{/* innerRef — scaled canvas */}
+          </div>{/* sizer */}
+        </div>{/* scroll viewport */}
 
-            {/* edge delete popup */}
-            {edgeMenu && (
-              <>
-                <div style={qPopupBackdrop} onPointerDown={() => setEdgeMenu(null)} />
-                <div style={qPopup(edgeMenu.cx, edgeMenu.cy, 2)} onPointerDown={e => e.stopPropagation()}>
-                  <div style={qPopupTitle}>{edgeMenu.label === 'default' ? 'Default connection' : `Branch: ${qShort(edgeMenu.label, 20)}`}</div>
-                  <button type="button" style={{ ...qPopupBtn, color: 'var(--red)' }} onClick={() => deleteEdge(edgeMenu.from, edgeMenu.ruleKey)}>Remove this connection</button>
-                </div>
-              </>
-            )}
+          {/* Zoom control — floats over the canvas (map area only), does not scroll with it. */}
+          <div style={{ position: 'absolute', right: 14, bottom: 14, display: 'flex', alignItems: 'center', gap: 2,
+            background: '#fff', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 2px 8px rgba(20,40,80,0.14)', padding: 3, zIndex: 6 }}>
+            <button type="button" onClick={() => zoomBy(-0.1)} disabled={zoom <= ZOOM_MIN} title="Zoom out" aria-label="Zoom out" style={qZoomBtn(zoom <= ZOOM_MIN)}>−</button>
+            <button type="button" onClick={() => setZoom(1)} title="Reset zoom to 100%" aria-label="Reset zoom"
+              style={{ ...qZoomBtn(false), width: 'auto', minWidth: 42, padding: '0 8px', fontSize: 'calc(11px * var(--fs))', fontWeight: 600, color: 'var(--text-light)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(zoom * 100)}%</button>
+            <button type="button" onClick={() => zoomBy(0.1)} disabled={zoom >= ZOOM_MAX} title="Zoom in" aria-label="Zoom in" style={qZoomBtn(zoom >= ZOOM_MAX)}>+</button>
           </div>
         </div>
+      )}
+
+      {/* Interaction popups live OUTSIDE the scaled canvas: their position:fixed must
+          anchor to the viewport, but a transformed ancestor would re-anchor and scale them. */}
+      {cond && (() => {
+        const src = byId[cond.from]; const opts = qAnswerOptions(src);
+        return (
+          <>
+            <div style={qPopupBackdrop} onPointerDown={() => setCond(null)} />
+            <div style={qPopup(cond.cx, cond.cy, opts.length + 3)} onPointerDown={e => e.stopPropagation()}>
+              <button type="button" style={{ ...qPopupBtn, fontWeight: 700, color: 'var(--primary)' }} onClick={() => applyAny(cond.from, cond.to)}>
+                Any answer <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>— always go here</span>
+              </button>
+              <div style={qPopupSep}>or only when they answer</div>
+              {opts.map((o, i) => (
+                <button key={i} type="button" style={qPopupBtn} onClick={() => applyBranch(cond.from, cond.to, o.value)}>{o.label_en || o.value}</button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
+      {edgeMenu && (
+        <>
+          <div style={qPopupBackdrop} onPointerDown={() => setEdgeMenu(null)} />
+          <div style={qPopup(edgeMenu.cx, edgeMenu.cy, 2)} onPointerDown={e => e.stopPropagation()}>
+            <div style={qPopupTitle}>{edgeMenu.label === 'default' ? 'Default connection' : `Branch: ${qShort(edgeMenu.label, 20)}`}</div>
+            <button type="button" style={{ ...qPopupBtn, color: 'var(--red)' }} onClick={() => deleteEdge(edgeMenu.from, edgeMenu.ruleKey)}>Remove this connection</button>
+          </div>
+        </>
       )}
     </div>
   );
