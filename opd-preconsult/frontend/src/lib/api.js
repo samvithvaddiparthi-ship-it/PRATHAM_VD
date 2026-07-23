@@ -171,6 +171,11 @@ export const api = {
   // Admin (HIS dashboard)
   adminLogin: (passcode, adminName) => apiFetch('/api/admin/login', { method: 'POST', body: JSON.stringify({ passcode, admin_name: adminName }) }),
 
+  // Nursing station (nurse / help-desk / social worker) — live RED-triage board
+  staffLogin: (passcode, staffName) => apiFetch('/api/staff/login', { method: 'POST', body: JSON.stringify({ passcode, staff_name: staffName }) }),
+  staffAlerts: () => apiFetch('/api/staff/alerts'),
+  staffAck: (sessionId) => apiFetch(`/api/staff/alerts/${sessionId}/ack`, { method: 'POST' }),
+
   // Doctor
   doctorLogin: (phone, pin) => apiFetch('/api/doctor/login', { method: 'POST', body: JSON.stringify({ phone, pin }) }),
   doctorQueue: () => apiFetch('/api/doctor/queue'),

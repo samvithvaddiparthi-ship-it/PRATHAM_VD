@@ -9,7 +9,9 @@ const clients = new Set();
 // SSE endpoint for nursing station alerts.
 // §8e — EventSource can't send an Authorization header, so the clinician JWT is
 // passed as ?token=<jwt> (the same short-lived login token used everywhere else)
-// and verified here. Only doctor/admin roles may subscribe to the RED-triage feed.
+// and verified here. doctor/admin and the nursing station (staff) may subscribe to
+// the RED-triage feed. The payload is PHI-free by design (session_id + department +
+// triage), so the station resolves nothing sensitive over the stream itself.
 router.get('/stream', (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(401).json({ error: 'No token provided' });
@@ -19,7 +21,7 @@ router.get('/stream', (req, res) => {
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
-  if (!sd || !['doctor', 'admin'].includes(sd.role)) {
+  if (!sd || !['doctor', 'admin', 'staff'].includes(sd.role)) {
     return res.status(403).json({ error: 'Forbidden: insufficient role' });
   }
 

@@ -60,6 +60,7 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/doctor', require('./routes/doctor'));
 app.use('/api/protocol', require('./routes/protocol'));
 app.use('/api/alerts', require('./routes/alerts'));
+app.use('/api/staff', require('./routes/staff'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/prescription', require('./routes/prescription'));
 app.use('/api/followup', require('./routes/followup'));
