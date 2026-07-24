@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useId } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useId } from 'react';
 import { api, setToken } from '../../lib/api';
 import { formatPhoneDisplay } from '../../lib/phone';
 import PasswordInput from '../../components/PasswordInput';
@@ -1851,6 +1851,10 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
   const innerRef = useRef(null);
   const scrollRef = useRef(null);
   const drag = useRef(null);
+  // Pending zoom-to-cursor anchor: set synchronously in the wheel/button handlers,
+  // consumed in a layout effect after the zoom re-render adjusts the scroll offset so
+  // the recorded canvas point stays under the same screen pixel (see useLayoutEffect).
+  const zoomAnchor = useRef(null);
   const [connect, setConnect] = useState(null);
   const [cond, setCond] = useState(null);
   const [edgeMenu, setEdgeMenu] = useState(null);
@@ -2034,11 +2038,32 @@ function QFlowEditor({ questions, deptName, health, onPick, onClose, persist }) 
     const onWheel = (e) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z - e.deltaY * 0.01) * 100) / 100)));
+      // Read the pointer + scroll state ONCE, in screen space, before the state update.
+      const rect = el.getBoundingClientRect();
+      const px = e.clientX - rect.left, py = e.clientY - rect.top;
+      const sl = el.scrollLeft, st = el.scrollTop;
+      setZoom(z0 => {
+        const z1 = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((z0 - e.deltaY * 0.01) * 100) / 100));
+        if (z1 === z0) return z0;
+        // Canvas point (unscaled) currently under the pointer — pin it there post-rescale.
+        zoomAnchor.current = { cx: (sl + px) / z0, cy: (st + py) / z0, px, py, z: z1 };
+        return z1;
+      });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [dag.length]);
+
+  // Zoom-to-cursor: after a zoom change that carried an anchor, shift the scroll offset
+  // so the recorded canvas point (cx,cy) lands back under the same viewport pixel (px,py).
+  // Runs before paint, so the sizer has already resized and there is no visible jump.
+  useLayoutEffect(() => {
+    const a = zoomAnchor.current, el = scrollRef.current;
+    if (!a || !el) return;
+    zoomAnchor.current = null;
+    el.scrollLeft = a.cx * a.z - a.px;
+    el.scrollTop = a.cy * a.z - a.py;
+  }, [zoom]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
